@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onto.example/schemas/ontology.schema.json",
+  "title": "Ontology, JSON form (spec-01)",
+  "description": "Structural schema. Semantic rules (references resolve, no collisions, no cycles) are checked by loading the document, not by this schema.",
+  "type": "object",
+  "required": ["format", "namespace", "decls"],
+  "additionalProperties": false,
+  "properties": {
+    "format": { "const": "onto.ontology/1" },
+    "namespace": { "$ref": "#/$defs/path" },
+    "header": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "rev": { "$ref": "#/$defs/token" },
+        "src": { "$ref": "#/$defs/token" },
+        "card": { "$ref": "#/$defs/card" },
+        "cards": { "enum": ["stated", "inferred", "assumed"] },
+        "rel": { "$ref": "#/$defs/counts" }
+      }
+    },
+    "uses": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "$ref": "#/$defs/path" }
+    },
+    "decls": { "type": "array", "items": { "$ref": "#/$defs/decl" } },
+    "ids": {
+      "description": "Identity sidecar: element path (spec-01 table) → stable source identifier.",
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    }
+  },
+  "$defs": {
+    "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+    "verb": { "type": "string", "pattern": "^[a-z][A-Za-z0-9_]*$" },
+    "path": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)*$" },
+    "relationPath": {
+      "description": "A path, or `S.verb.T` (full paths) for a binary relation.",
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)*(\\.[a-z][A-Za-z0-9_]*\\.[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)*)?$"
+    },
+    "attrPath": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$" },
+    "token": { "type": "string", "pattern": "^[^\\s{},=]+$" },
+    "doc": { "type": "string", "minLength": 1, "pattern": "^[^\\n\\r]*$" },
+    "card": { "enum": ["1", "?", "+", "*"] },
+    "counts": { "type": "string", "pattern": "^[?1*+]:[?1*+]$" },
+    "ann": {
+      "description": "Annotations: token values, `true` for flags. `context` and `ctx` are full paths.",
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "properties": {
+        "id": { "enum": ["key", "narrow", "broad", "none"] },
+        "privacy": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\+[A-Za-z_][A-Za-z0-9_]*)*$" },
+        "cards": { "enum": ["stated", "inferred", "assumed"] },
+        "context": { "$ref": "#/$defs/path" },
+        "subjectRole": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "objectRole": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "ctx": { "$ref": "#/$defs/path" }
+      },
+      "additionalProperties": { "anyOf": [{ "$ref": "#/$defs/token" }, { "const": true }] }
+    },
+    "type": {
+      "oneOf": [
+        {
+          "type": "object", "required": ["builtin"], "additionalProperties": false,
+          "properties": { "builtin": { "enum": ["Text", "Integer", "Number", "Boolean", "Date", "DateTime", "Duration", "Amount", "Percent"] } }
+        },
+        {
+          "description": "Declared type or entity (reference); with `attr`, reuse of that attribute's type.",
+          "type": "object", "required": ["path"], "additionalProperties": false,
+          "properties": { "path": { "$ref": "#/$defs/relationPath" }, "attr": { "$ref": "#/$defs/attrPath" } }
+        },
+        {
+          "type": "object", "required": ["values", "open"], "additionalProperties": false,
+          "properties": { "values": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/name" } }, "open": { "type": "boolean" } }
+        },
+        {
+          "description": "Categorical with unknown vocabulary (`...`).",
+          "type": "object", "required": ["unknown"], "additionalProperties": false,
+          "properties": { "unknown": { "const": true } }
+        }
+      ]
+    },
+    "dep": {
+      "oneOf": [
+        { "type": "object", "required": ["local"], "additionalProperties": false, "properties": { "local": { "$ref": "#/$defs/name" } } },
+        { "type": "object", "required": ["input"], "additionalProperties": false, "properties": { "input": { "$ref": "#/$defs/name" } } },
+        { "type": "object", "required": ["path", "attr"], "additionalProperties": false, "properties": { "path": { "$ref": "#/$defs/path" }, "attr": { "$ref": "#/$defs/attrPath" } } },
+        { "type": "object", "required": ["ellipsis"], "additionalProperties": false, "properties": { "ellipsis": { "const": true } } }
+      ]
+    },
+    "attr": {
+      "type": "object",
+      "required": ["name", "card"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/name" },
+        "card": { "$ref": "#/$defs/card" },
+        "derived": { "const": true },
+        "type": { "$ref": "#/$defs/type" },
+        "deps": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/dep" } },
+        "ann": { "$ref": "#/$defs/ann" },
+        "doc": { "$ref": "#/$defs/doc" }
+      }
+    },
+    "attrs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/attr" } },
+    "decl": {
+      "oneOf": [
+        {
+          "type": "object", "required": ["kind", "path"], "additionalProperties": false,
+          "not": { "required": ["def", "fields"] },
+          "properties": {
+            "kind": { "const": "type" }, "path": { "$ref": "#/$defs/path" },
+            "def": { "$ref": "#/$defs/type" }, "fields": { "$ref": "#/$defs/attrs" },
+            "ann": { "$ref": "#/$defs/ann" }, "doc": { "$ref": "#/$defs/doc" }
+          }
+        },
+        {
+          "type": "object", "required": ["kind", "path"], "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "entity" }, "path": { "$ref": "#/$defs/path" }, "base": { "$ref": "#/$defs/path" },
+            "attrs": { "$ref": "#/$defs/attrs" }, "ann": { "$ref": "#/$defs/ann" }, "doc": { "$ref": "#/$defs/doc" }
+          }
+        },
+        {
+          "type": "object", "required": ["kind", "path", "subject"], "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "facet" }, "path": { "$ref": "#/$defs/path" }, "subject": { "$ref": "#/$defs/path" },
+            "attrs": { "$ref": "#/$defs/attrs" }, "ann": { "$ref": "#/$defs/ann" }, "doc": { "$ref": "#/$defs/doc" }
+          }
+        },
+        {
+          "type": "object", "required": ["kind", "path", "participants"], "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "relation" }, "path": { "$ref": "#/$defs/relationPath" },
+            "participants": {
+              "type": "array", "minItems": 2,
+              "items": {
+                "type": "object", "required": ["role", "card", "type"], "additionalProperties": false,
+                "properties": { "role": { "$ref": "#/$defs/name" }, "card": { "$ref": "#/$defs/card" }, "type": { "$ref": "#/$defs/path" } }
+              }
+            },
+            "arrow": {
+              "description": "Present for binary shorthand relations; then `path` is `S.verb.T`.",
+              "type": "object", "required": ["verb", "counts"], "additionalProperties": false,
+              "properties": { "verb": { "$ref": "#/$defs/verb" }, "inverse": { "$ref": "#/$defs/verb" }, "counts": { "$ref": "#/$defs/counts" } }
+            },
+            "attrs": { "$ref": "#/$defs/attrs" }, "ann": { "$ref": "#/$defs/ann" }, "doc": { "$ref": "#/$defs/doc" }
+          }
+        },
+        {
+          "description": "Domain: `path` is the ontology namespace + one name.",
+          "type": "object", "required": ["kind", "path"], "additionalProperties": false,
+          "properties": { "kind": { "const": "domain" }, "path": { "$ref": "#/$defs/path" }, "doc": { "$ref": "#/$defs/doc" } }
+        },
+        {
+          "description": "Value mapping between two vocabulary types; `match` reads \"to is <match> than from\".",
+          "type": "object", "required": ["kind", "path", "from", "to", "lines"], "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "map" }, "path": { "$ref": "#/$defs/path" },
+            "from": { "$ref": "#/$defs/path" }, "to": { "$ref": "#/$defs/path" },
+            "lines": {
+              "type": "array",
+              "items": {
+                "type": "object", "required": ["from", "match", "to"], "additionalProperties": false,
+                "properties": {
+                  "from": { "$ref": "#/$defs/name" }, "match": { "enum": ["exact", "broader", "narrower", "related"] },
+                  "to": { "$ref": "#/$defs/name" }, "doc": { "$ref": "#/$defs/doc" }
+                }
+              }
+            },
+            "ann": { "$ref": "#/$defs/ann" }, "doc": { "$ref": "#/$defs/doc" }
+          }
+        },
+        {
+          "type": "object", "required": ["kind", "path", "lines"], "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "view" }, "path": { "$ref": "#/$defs/path" }, "doc": { "$ref": "#/$defs/doc" },
+            "lines": {
+              "type": "array",
+              "items": {
+                "description": "A selected element; a binary relation `S.verb.T` is selected by its relation path.",
+                "type": "object", "required": ["path"], "additionalProperties": false,
+                "properties": {
+                  "path": { "$ref": "#/$defs/relationPath" },
+                  "facets": { "anyOf": [{ "const": "*" }, { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/name" } }] },
+                  "member": { "$ref": "#/$defs/attrPath" }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

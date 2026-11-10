@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onto.example/schemas/observations.schema.json",
+  "title": "Observations, JSON form (spec-02)",
+  "description": "Structural schema for the log form (claims + retractions) and the state form (retractions empty, `conflict` flags). Typing against the ontology is checked by loading the document.",
+  "type": "object",
+  "required": ["format", "obs", "sources", "instances", "claims", "retractions"],
+  "additionalProperties": false,
+  "properties": {
+    "format": { "const": "onto.observations/1" },
+    "obs": {
+      "type": "object",
+      "required": ["ontology"],
+      "additionalProperties": false,
+      "properties": {
+        "ontology": { "$ref": "#/$defs/path" },
+        "rev": { "$ref": "#/$defs/token" },
+        "src": { "$ref": "#/$defs/token" },
+        "at": { "$ref": "#/$defs/time" },
+        "by": { "$ref": "#/$defs/token" },
+        "conf": { "$ref": "#/$defs/token" },
+        "scope": { "anyOf": [{ "$ref": "#/$defs/token" }, { "type": "null" }] }
+      }
+    },
+    "sources": {
+      "description": "Source alias → provenance token.",
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/handle" },
+      "additionalProperties": { "$ref": "#/$defs/token" }
+    },
+    "instances": {
+      "description": "Handle → most specific known type (entity or relation path).",
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/handle" },
+      "additionalProperties": {
+        "type": "object", "required": ["type"], "additionalProperties": false,
+        "properties": { "type": { "$ref": "#/$defs/typePath" } }
+      }
+    },
+    "claims": { "type": "array", "items": { "$ref": "#/$defs/claim" } },
+    "retractions": { "type": "array", "items": { "$ref": "#/$defs/claim" } }
+  },
+  "$defs": {
+    "handle": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+    "path": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)*$" },
+    "typePath": {
+      "description": "A path, or `S.verb.T` (full paths) for a binary relation.",
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)*(\\.[a-z][A-Za-z0-9_]*\\.[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)*)?$"
+    },
+    "attrPath": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$" },
+    "token": { "type": "string", "pattern": "^[^\\s{},=]+$" },
+    "time": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}(:\\d{2}(\\.\\d+)?)?(Z|[+-]\\d{2}:\\d{2})?)?$" },
+    "interval": { "type": "string", "pattern": "^(\\d{4}-\\d{2}-\\d{2}[^.]*)?(\\.\\.(\\d{4}-\\d{2}-\\d{2}[^.]*)?)?$", "minLength": 1 },
+    "ref": {
+      "type": "object", "required": ["ref"], "additionalProperties": false,
+      "properties": { "ref": { "$ref": "#/$defs/handle" } }
+    },
+    "member": {
+      "description": "Concrete value: string (text, vocabulary value, date, ISO duration, or canonical decimal for numbers), boolean or reference. The ontology type decides how a string is read.",
+      "anyOf": [{ "type": "string" }, { "type": "boolean" }, { "$ref": "#/$defs/ref" }]
+    },
+    "value": {
+      "anyOf": [
+        { "$ref": "#/$defs/member" },
+        { "description": "`null`: confirmed absence of a single value.", "type": "null" },
+        {
+          "description": "`?`: not known.",
+          "type": "object", "required": ["unknown"], "additionalProperties": false,
+          "properties": { "unknown": { "const": true } }
+        },
+        {
+          "description": "Collection membership: complete, or incomplete with `partial`.",
+          "type": "object", "required": ["set"], "additionalProperties": false,
+          "properties": { "set": { "type": "array", "items": { "$ref": "#/$defs/member" } }, "partial": { "const": true } }
+        }
+      ]
+    },
+    "claim": {
+      "type": "object",
+      "required": ["n"],
+      "additionalProperties": false,
+      "oneOf": [
+        { "required": ["s", "exists"] },
+        { "required": ["s", "facet"] },
+        { "required": ["s", "p"] },
+        { "required": ["rel", "roles"] }
+      ],
+      "properties": {
+        "n": { "type": "integer", "minimum": 0 },
+        "s": { "$ref": "#/$defs/handle" },
+        "exists": { "const": true },
+        "facet": { "$ref": "#/$defs/handle" },
+        "p": { "$ref": "#/$defs/attrPath" },
+        "v": { "$ref": "#/$defs/value" },
+        "rel": { "$ref": "#/$defs/typePath" },
+        "roles": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/handle" },
+          "additionalProperties": { "anyOf": [{ "$ref": "#/$defs/handle" }, { "const": "?" }] }
+        },
+        "src": { "$ref": "#/$defs/token" },
+        "at": { "$ref": "#/$defs/time" },
+        "valid": { "$ref": "#/$defs/interval" },
+        "ctx": { "description": "Context instance of a claim on a contextual facet (`ctx` facet annotation).", "$ref": "#/$defs/handle" },
+        "conf": { "type": "number", "minimum": 0, "maximum": 1 },
+        "by": { "$ref": "#/$defs/token" },
+        "of": { "$ref": "#/$defs/token" },
+        "cur": { "$ref": "#/$defs/token" },
+        "unit": { "$ref": "#/$defs/token" },
+        "period": { "$ref": "#/$defs/token" },
+        "scale": { "$ref": "#/$defs/token" },
+        "conflict": { "const": true }
+      }
+    }
+  }
+}
