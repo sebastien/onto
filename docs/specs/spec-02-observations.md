@@ -76,6 +76,7 @@ Doc strings (`--`) are not used in observations.
 @at <date-or-datetime>
 @ctx <handle> | @ctx none
 @scope <token>
+@implicit <handle> [<handle> ...]
 ```
 
 - `@obs` is required and comes first. It names the ontology namespace and sets
@@ -88,6 +89,8 @@ Doc strings (`--`) are not used in observations.
   ([Contexts](#contexts)); `@ctx none` clears it. It does not apply to other claims.
 - `@scope token` declares that handles are stable within that scope (e.g. one
   source system). Without it, handles are local to the document.
+- `@implicit` lists [implicit instances](#implicit-instances). The state form
+  writes it; it is ignored on input (recomputed).
 
 Defaults set by directives apply until the next directive of the same kind.
 
@@ -102,7 +105,11 @@ Defaults set by directives apply until the next directive of the same kind.
 - A reference through a base type uses the same handle. Retyping a handle to an
   incompatible type is an error; retyping to a specialisation refines it.
 - Handles are transport identities, not business keys. Matching instances across
-  documents requires a shared `@scope`.
+  documents requires a shared `@scope`. Within a scope, [identity
+  links](#identity-links) and the referentials of
+  [spec-05](spec-05-identities.md) decide which handles are the same instance.
+- A handle may be referenced before any existence claim names it: it is then an
+  [implicit instance](#implicit-instances), not an error.
 
 ## Statements
 
@@ -115,6 +122,7 @@ Defaults set by directives apply until the next directive of the same kind.
 | `h.Facet.Attr Value` | Facet attribute value; implies the facet applies |
 | `[r:] s verb o` | Binary relation instance `r` (inverse verbs accepted) |
 | `r.Attr Value` / `r.Role h` | Relation attribute / participant |
+| `a = b` / `a != b` | Identity link: same instance, `a` canonical / different instances ([below](#identity-links)) |
 | `- statement` | Retraction (see below) |
 
 ### Record form
@@ -198,6 +206,7 @@ annotations; dates and intervals are tokens.
 | `conf` | Confidence, `0..1` |
 | `by` | Agent or process that produced the claim |
 | `of` | Source whose claims a retraction withdraws |
+| `approved` | Who approved a held retraction: a person or process token, or `confirm:<n>` ([spec-04](spec-04-mapping.md#approval)) |
 | `cur`, `unit`, `period`, `scale` | Local measurement qualifiers on the value |
 | `conflict` | Flag written by the state form; ignored on input (recomputed) |
 
@@ -281,14 +290,35 @@ its own `src` and `at`.
 - A retraction with `ctx` withdraws claims in that context only; one on a
   contextual facet requires it. `- h` also withdraws claims whose context is `h`.
 - By default a retraction withdraws claims made by the **same source** with `at`
-  at or before the retraction's `at`. `{of=d7}` withdraws another source's claims;
-  this is for curators and correcting agents, and keeps the retracting `src`.
+  at or before the retraction's `at`. When the retraction carries `by`, it
+  withdraws only claims with the same `by` as well: a re-run binding or mapping
+  withdraws its own output, never what another process reported for the same
+  source. `{of=d7}` withdraws another source's claims; this is for curators and
+  correcting agents, and keeps the retracting `src`.
 - A retraction means "this claim should not have been made". It does not mean the
   value is false, absent or ended:
   - fact stopped being true → claim with `valid=..end`;
   - confirmed absence → `null` / `[]`;
   - corrected value → a new claim (which supersedes within the same source).
 - Retracting a claim that does not exist is a warning, not an error.
+
+## Identity links
+
+`a = b` claims that handles `a` and `b` name the same instance, `a` being the
+canonical handle; `a != b` that they name different instances. Links are claims:
+they carry metadata, accumulate and are withdrawn by retraction (`- a = b`).
+Their resolution (groups, canonical handles, identity conflicts) is defined by
+[spec-05](spec-05-identities.md#resolution). Both handles are typed, as anywhere
+else (`c1:Company = c9:Company` when first mentioned), with compatible types; a
+link from a handle to itself is an error.
+
+## Implicit instances
+
+A handle that is referenced (a reference value, a relation participant or a
+`ctx`) but has no surviving existence claim, from any source, is **implicit**:
+the data mentions it before, or without, describing it. It is valid. The state
+form lists implicit handles in `@implicit`; the mark is recomputed, never read,
+and disappears once an existence claim arrives.
 
 ## Validation
 
@@ -302,6 +332,14 @@ Against the ontology (and optionally a view):
   collections incomplete.
 - Unknown elements are errors. In lenient mode they are kept as **gaps** with
   their raw text, for review and ontology evolution.
+
+Every processor has two modes. **Strict** (the default; offline processing)
+turns anything doubtful into an error or a request for approval and writes
+nothing until it is resolved. **Lenient** (online processing) keeps going,
+reports warnings and holds back only what could erase data. The
+[run modes](spec-04-mapping.md#run-modes) of bindings and mappings and the
+identity conflicts of [spec-05](spec-05-identities.md#resolution) use the same
+two modes.
 - With a view: report which selected attributes, facets and relations are
   supplied, unknown, absent or missing (coverage).
 
@@ -314,15 +352,20 @@ emitted when the source, time or context (of contextual claims) changes; metadat
 equal to the current defaults is omitted.
 
 **State form** (comparison, diff): retractions applied, superseded claims
-removed, conflicts kept and marked `{conflict}`.
+removed, conflicts kept and marked `{conflict}`, identity links applied (claims
+on and references to aliases reported on the canonical handle), implicit
+instances listed.
 
-1. `@obs`, then `@src` alias declarations sorted by alias, then `@scope`.
+1. `@obs`, then `@src` alias declarations sorted by alias, then `@scope`, then
+   `@implicit` with its handles sorted.
 2. Entity records in record form, sorted by `(type path, handle)`. Facets in the
    header sorted. Body lines sorted by attribute path, then context, then value.
 3. Binary relation lines sorted by `(subject handle, verb, object handle)`, always
    in the forward direction. Named instances keep their handles; their attribute
    lines follow, sorted.
 4. n-ary relation records sorted by `(relation path, handle)`, body as entities.
+   Then identity links, `=` before `!=`, sorted by `(a, b)`; a `!=` link puts the
+   smaller handle first.
 5. Collections are sorted by encoded value.
 6. Metadata keys follow the table order. The formatter sets `@src` and `@at` to
    the most frequent source and time among the claims; claims with other values
@@ -370,7 +413,9 @@ excerpt of the [example](#example):
 
 - `obs` holds the `@obs` arguments (strings) plus `ontology` and `scope` (`null`
   when handles are document-local). `sources` maps aliases to provenance tokens.
-  `instances` maps each handle to its most specific known type.
+  `instances` maps each handle to its most specific known type, plus
+  `"implicit": true` for [implicit instances](#implicit-instances) in the state
+  form (ignored on input).
 - Values (`v`), read through the ontology type:
 
   | Value | JSON |
@@ -388,10 +433,12 @@ excerpt of the [example](#example):
 - Claim kinds: existence `"exists": true`; facet applicability `"facet"`; attribute
   value `"p"` (attribute path, as in the text form) and `"v"`; relation `"rel"` and
   `"roles"` (role → handle, `"?"` for an unknown participant), with `"s"` only for
-  named instances. Types and relation paths are fully qualified.
+  named instances; identity links `"same": [a, b]` (`a = b`) and
+  `"distinct": [a, b]` (`a != b`), without `"s"`. Types and relation paths are
+  fully qualified.
 - Metadata members are those of [Metadata](#metadata), already resolved against
   the `@obs`/`@src`/`@at`/`@ctx` defaults: `src`, `at`, `valid`, `ctx` (a handle),
-  `by`, `of`, the qualifiers (strings) and `conf` (a JSON number in `0..1`).
+  `by`, `of`, `approved`, the qualifiers (strings) and `conf` (a JSON number in `0..1`).
 - `n` is the 1-based ordinal of the statement in the document. Each line-form
   statement, record header and record body line counts once; directives,
   comments and blank lines do not. `n` orders claims with equal `at`. Claims

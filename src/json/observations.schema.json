@@ -34,7 +34,10 @@
       "propertyNames": { "$ref": "#/$defs/handle" },
       "additionalProperties": {
         "type": "object", "required": ["type"], "additionalProperties": false,
-        "properties": { "type": { "$ref": "#/$defs/typePath" } }
+        "properties": {
+          "type": { "$ref": "#/$defs/typePath" },
+          "implicit": { "description": "Referenced without a surviving existence claim. Written by the state form; ignored on input (recomputed).", "const": true }
+        }
       }
     },
     "claims": { "type": "array", "items": { "$ref": "#/$defs/claim" } },
@@ -42,6 +45,7 @@
   },
   "$defs": {
     "handle": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+    "handlePair": { "type": "array", "prefixItems": [{ "$ref": "#/$defs/handle" }, { "$ref": "#/$defs/handle" }], "minItems": 2, "maxItems": 2 },
     "path": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)*$" },
     "typePath": {
       "description": "A path, or `S.verb.T` (full paths) for a binary relation.",
@@ -84,10 +88,12 @@
         { "required": ["s", "exists"] },
         { "required": ["s", "facet"] },
         { "required": ["s", "p"] },
-        { "required": ["rel", "roles"] }
+        { "required": ["rel", "roles"] },
+        { "required": ["same"], "not": { "required": ["s"] } },
+        { "required": ["distinct"], "not": { "required": ["s"] } }
       ],
       "properties": {
-        "n": { "type": "integer", "minimum": 0 },
+        "n": { "type": "integer", "minimum": 1 },
         "s": { "$ref": "#/$defs/handle" },
         "exists": { "const": true },
         "facet": { "$ref": "#/$defs/handle" },
@@ -99,6 +105,8 @@
           "propertyNames": { "$ref": "#/$defs/handle" },
           "additionalProperties": { "anyOf": [{ "$ref": "#/$defs/handle" }, { "const": "?" }] }
         },
+        "same": { "description": "Identity link `a = b`: the same instance, `a` canonical (spec-05).", "$ref": "#/$defs/handlePair" },
+        "distinct": { "description": "Identity link `a != b`: different instances (spec-05).", "$ref": "#/$defs/handlePair" },
         "src": { "$ref": "#/$defs/token" },
         "at": { "$ref": "#/$defs/time" },
         "valid": { "$ref": "#/$defs/interval" },
@@ -106,6 +114,7 @@
         "conf": { "type": "number", "minimum": 0, "maximum": 1 },
         "by": { "$ref": "#/$defs/token" },
         "of": { "$ref": "#/$defs/token" },
+        "approved": { "description": "Who approved a held retraction (spec-04).", "$ref": "#/$defs/token" },
         "cur": { "$ref": "#/$defs/token" },
         "unit": { "$ref": "#/$defs/token" },
         "period": { "$ref": "#/$defs/token" },

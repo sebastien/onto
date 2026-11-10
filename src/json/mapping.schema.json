@@ -49,6 +49,20 @@
             },
             "null": {
               "$ref": "#/$defs/nullMode"
+            },
+            "complete": {
+              "enum": [
+                "document",
+                "record",
+                "none"
+              ]
+            },
+            "retract": {
+              "$ref": "#/$defs/percent"
+            },
+            "confirm": {
+              "type": "integer",
+              "minimum": 1
             }
           }
         },
@@ -93,6 +107,9 @@
               },
               "ctx": {
                 "$ref": "#/$defs/expr"
+              },
+              "deleted": {
+                "$ref": "#/$defs/when"
               },
               "doc": {
                 "$ref": "#/$defs/doc"
@@ -145,8 +162,18 @@
             "scope": {
               "$ref": "#/$defs/token"
             },
+            "referential": {
+              "$ref": "#/$defs/path"
+            },
             "candidates": {
               "type": "boolean"
+            },
+            "retract": {
+              "$ref": "#/$defs/percent"
+            },
+            "confirm": {
+              "type": "integer",
+              "minimum": 1
             }
           }
         },
@@ -237,9 +264,6 @@
               },
               "target": {
                 "$ref": "#/$defs/path"
-              },
-              "match": {
-                "$ref": "#/$defs/name"
               },
               "when": {
                 "$ref": "#/$defs/when"
@@ -634,7 +658,8 @@
               "enum": [
                 "valid",
                 "at",
-                "src"
+                "src",
+                "codec"
               ]
             }
           }
@@ -849,6 +874,10 @@
       "items": {
         "$ref": "#/$defs/function"
       }
+    },
+    "percent": {
+      "type": "string",
+      "pattern": "^(100|[1-9]?[0-9])%$"
     }
   }
 }
