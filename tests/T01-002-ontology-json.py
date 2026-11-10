@@ -1,4 +1,4 @@
-"""Module: json.test — JSON form of ontologies: export, strict import and round trips (spec-01)."""
+"""Module: ontology JSON tests — export, strict import and round trips (spec-01)."""
 
 from __future__ import annotations
 

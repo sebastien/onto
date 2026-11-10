@@ -1,4 +1,4 @@
-"""Module: observations.test — spec-02 parsing, typing and source-scoped reconciliation."""
+"""Module: observations round-trip tests — parsing, typing and reconciliation (spec-02)."""
 
 from __future__ import annotations
 
@@ -420,10 +420,11 @@ def testJsonCollectionsAcceptUnorderedMembership():
 	assert observationsFromJson(MODEL, data).claims[-1]["v"]["set"] == ["2", "1"]
 
 
-def testJsonMustNotSilentlyDropUnusedInstanceRegistry():
+def testJsonPreservesUnusedInstanceRegistryWithoutInventingExistence():
 	data = observationsToJson(state("@obs A\np:Person\n- p\n"))
-	with pytest.raises(FormatError, match="instance registry"):
-		observationsFromJson(MODEL, data)
+	loaded = observationsFromJson(MODEL, data)
+	assert observationsToJson(loaded) == data
+	assert loaded.claims == loaded.retractions == []
 
 
 @pytest.mark.parametrize("form", ["log", "state"])

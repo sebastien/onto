@@ -1,4 +1,4 @@
-"""Module: ontology.test — parsing, validation and normal form of ontologies (spec-01)."""
+"""Module: ontology parsing tests — parsing, validation and normal form (spec-01)."""
 
 from __future__ import annotations
 

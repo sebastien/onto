@@ -76,6 +76,7 @@ Doc strings (`--`) are not used in observations.
 @at <date-or-datetime>
 @ctx <handle> | @ctx none
 @scope <token>
+@type <handle> <Type-or-S.verb.T>
 @implicit <handle> [<handle> ...]
 ```
 
@@ -89,6 +90,8 @@ Doc strings (`--`) are not used in observations.
   ([Contexts](#contexts)); `@ctx none` clears it. It does not apply to other claims.
 - `@scope token` declares that handles are stable within that scope (e.g. one
   source system). Without it, handles are local to the document.
+- `@type h T` records the type of a handle without making an observation claim
+  ([type-only declarations](#type-only-declarations)).
 - `@implicit` lists [implicit instances](#implicit-instances). The state form
   writes it; it is ignored on input (recomputed).
 
@@ -110,6 +113,33 @@ Defaults set by directives apply until the next directive of the same kind.
   [spec-05](spec-05-identities.md) decide which handles are the same instance.
 - A handle may be referenced before any existence claim names it: it is then an
   [implicit instance](#implicit-instances), not an error.
+
+### Type-only declarations
+
+```text
+@type p Person
+@type scenario Planning/Scenario
+@type r Household.hasMember.Person
+```
+
+`@type` populates the instance type registry. It asserts neither existence nor
+facets nor relation endpoints, carries no statement metadata, changes no metadata
+defaults, and consumes no statement ordinal. It takes exactly a handle and an
+instance type: an entity, an association, or a binary relation's canonical
+`S.verb.T` path. Names and both binary endpoints resolve using the ontology
+namespace and aliases, just as ordinary typed mentions do.
+
+Declarations may appear after `@obs` anywhere outside record bodies; they are
+available throughout the document. Compatible specialisation refines a type.
+Invalid declarations—unknown or incompatible types, or malformed syntax—are
+errors in both modes. A later ordinary statement can assert existence, but the
+declaration itself does not. Retractions withdraw claims, not registry types.
+
+Normal forms emit `@type` only when ordinary typed mentions or defining named
+links cannot preserve the registry: for unused handles, context-only handles and
+named binary handles without a defining link. This retains type information after
+retraction without inventing existence. `@implicit` remains a separate,
+recomputed display marker; declaring a type does not itself make a handle implicit.
 
 ## Statements
 
@@ -343,6 +373,16 @@ two modes.
 - With a view: report which selected attributes, facets and relations are
   supplied, unknown, absent or missing (coverage).
 
+Lenient observation loading retains semantically invalid statements as **gaps**,
+with their raw source, location, effective metadata defaults and diagnostics.
+A statement is atomic: none of a gap's expanded claims or retractions is applied.
+Other valid statements continue to be processed. Syntax, header and directive
+errors remain fatal, rather than guessing how they affect subsequent statements.
+Gaps are review material, not evidence of a value, absence or removal.
+Gap-bearing results use the JSON form for interchange. Text normal-form printers
+must not silently discard gaps or emit them as active statements: printing fails
+until the gaps have been reviewed and removed or explicitly reprocessed.
+
 ## Normal forms
 
 **Log form** (audit, replay): all statements including retractions and superseded
@@ -357,15 +397,19 @@ on and references to aliases reported on the canonical handle), implicit
 instances listed.
 
 1. `@obs`, then `@src` alias declarations sorted by alias, then `@scope`, then
-   `@implicit` with its handles sorted.
+   necessary `@type` declarations sorted by handle, then `@implicit` with its
+   handles sorted. Log form uses the same registry-only type prelude.
 2. Entity records in record form, sorted by `(type path, handle)`. Facets in the
    header sorted. Body lines sorted by attribute path, then context, then value.
+   Order-sensitive multi-valued slots use rule 9 instead of value order.
 3. Binary relation lines sorted by `(subject handle, verb, object handle)`, always
    in the forward direction. Named instances keep their handles; their attribute
    lines follow, sorted.
 4. n-ary relation records sorted by `(relation path, handle)`, body as entities.
-   Then identity links, `=` before `!=`, sorted by `(a, b)`; a `!=` link puts the
-   smaller handle first.
+   Then identity links in log order (`at`, then statement ordinal), preserving
+   their original endpoints and metadata. Do not sort links by operator or handles:
+   their order determines canonical handles (spec-05). A `!=` link puts the
+   smaller handle first; this does not change the link's position.
 5. Collections are sorted by encoded value.
 6. Metadata keys follow the table order. The formatter sets `@src` and `@at` to
    the most frequent source and time among the claims; claims with other values
@@ -374,7 +418,13 @@ instances listed.
    claims print as bare `h {...}` lines, and facet claims whose metadata differs
    from the header as `h[F] {...}` lines, after the record body.
 8. `ctx` is always explicit (`IncomeTreatment.IsIncluded true {ctx=s1}`, one line
-   per context; contextual facets as `h[F] {ctx=a1}` lines); there is no `@ctx`.
+    per context; contextual facets as `h[F] {ctx=a1}` lines); there is no `@ctx`.
+9. When a multi-valued slot retains a source's complete collection and later
+   claims (members, incomplete collections or unknowns), keep all claims on that
+   slot in log order (`at`, then statement ordinal). Value-sorting could put later additions
+   before the complete collection and discard them on replay. Keep each claim's
+   metadata; do not invent an aggregate claim. Other slots retain value order,
+   and members inside each collection remain sorted by encoded value.
 
 ## JSON form
 
@@ -416,6 +466,8 @@ excerpt of the [example](#example):
   `instances` maps each handle to its most specific known type, plus
   `"implicit": true` for [implicit instances](#implicit-instances) in the state
   form (ignored on input).
+  Type-only declarations use this existing registry; they introduce no JSON
+  claim or additional member. The text round trip preserves even unused types.
 - Values (`v`), read through the ontology type:
 
   | Value | JSON |
@@ -439,6 +491,14 @@ excerpt of the [example](#example):
 - Metadata members are those of [Metadata](#metadata), already resolved against
   the `@obs`/`@src`/`@at`/`@ctx` defaults: `src`, `at`, `valid`, `ctx` (a handle),
   `by`, `of`, `approved`, the qualifiers (strings) and `conf` (a JSON number in `0..1`).
+- An optional `gaps` array retains unapplied statements from lenient loading;
+  it is omitted when empty. Each gap has `n`, `raw` (the original physical line),
+  `text` (line-form statement without metadata, with a record-body subject expanded),
+  `loc: {file, line}`, `meta` (effective metadata as text tokens), and
+  `diagnostics: [{code, message}]`. An optional `ctx` records the active `@ctx`
+  default separately from any explicit `meta.ctx`. Gap-bearing JSON requires
+  lenient loading; gap statements are revalidated but never promoted silently to
+  claims. The raw source and original locations remain available for review.
 - `n` is the 1-based ordinal of the statement in the document. Each line-form
   statement, record header and record body line counts once; directives,
   comments and blank lines do not. `n` orders claims with equal `at`. Claims

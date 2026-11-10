@@ -156,6 +156,11 @@ Resolution applies the links of a state to its handles:
    canonical handle. Their slots then supersede and conflict as spec-02
    describes; the log keeps the original handles.
 
+The state form preserves identity links in log order (`at`, then statement
+ordinal), with their original endpoints and metadata. Sorting or rewriting those
+links could change canonical choices or provenance; canonicalised links, if
+needed, are a separate derived representation, not a replacement for the claims.
+
 An **identity conflict** is:
 
 - an `a != b` between handles that `=` links would join;

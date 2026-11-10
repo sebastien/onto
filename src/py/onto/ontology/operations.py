@@ -1,0 +1,423 @@
+"""Module: ontology.operations — operations for the ontology format."""
+
+from __future__ import annotations
+
+from typing import (
+	Any,
+)
+from ..text import (
+	Annotations,
+	Diagnostics,
+	FormatError,
+	Loc,
+	Source,
+	annotation,
+	isName,
+	lastSegment,
+)
+from .formatter import (
+	_toJson,
+	normaliseOntology,
+	printOntology,
+)
+from .model import (
+	ANNOTATION_PLACES,
+	Attr,
+	Decl,
+	IDENTIFIERS,
+	MULTI,
+	Model,
+	Ontology,
+	STATUSES,
+	TypeExpr,
+	ViewLine,
+	_typeKey,
+	isAssociation,
+	isSymmetric,
+)
+from .parser import (
+	_fromJson,
+	parseOntology,
+)
+
+# -----------------------------------------------------------------------------
+#
+# DEFINITIONS
+#
+# -----------------------------------------------------------------------------
+
+
+class Operator:
+	"""Operations sharing an ontology; functions remain available for one-off calls."""
+
+	def __init__(self, ontology: Ontology):
+		self.ontology = ontology
+
+	def validate(self) -> Ontology:
+		"""Validate the current ontology, rebuilding lookups if the AST changed."""
+		return validateOntology(self.ontology)
+
+	def normalise(self) -> Ontology:
+		"""Return the canonical AST without replacing the context's ontology."""
+		return normaliseOntology(self.ontology)
+
+	def print(self) -> str:
+		"""Print canonical ontology text."""
+		return printOntology(self.normalise())
+
+	def toJson(self, ids: dict[str, str] | None = None) -> dict[str, Any]:
+		"""Export the ontology with its optional identity sidecar."""
+		return ontologyToJson(self.ontology, ids)
+
+
+# -----------------------------------------------------------------------------
+#
+# OPERATIONS
+#
+# -----------------------------------------------------------------------------
+
+
+# Function: viewRelations
+# The binary relations a view line `S.verb` (forward or inverse) or `S.verb.T` selects, or None.
+def viewRelations(model: Model, line: ViewLine) -> list[Decl] | None:
+	if "." in line.path:
+		decl = model.get(line.path)
+		return [decl] if decl and decl.arrow else []
+	if not line.member or not line.member[0].islower():
+		return None
+	return [decl for decl, _ in model.verbs(line.path, line.member)]
+
+
+# Function: placesOf
+# Where annotations of `item` (a declaration or an attribute) may apply, for `ANNOTATION_PLACES`.
+def placesOf(item: Decl | Attr) -> set[str]:
+	if isinstance(item, Attr):
+		places = {"attribute"}
+		if item.derived:
+			places.add("derived")
+		if item.type and item.type.values is not None:
+			places.add("vocabulary")
+		return places
+	places = {item.kind}
+	if item.kind == "type" and item.definition and item.definition.values is not None:
+		places.add("vocabulary")
+	if item.arrow:
+		places.add("binary")
+	return places
+
+
+def _checkAnnotations(model: Model, ann: Annotations, places: set[str], loc: Loc | None, diag: Diagnostics) -> None:
+	for key, value in ann:
+		allowed = ANNOTATION_PLACES.get(key, set())
+		if key not in ANNOTATION_PLACES:
+			diag.error("annotation", f"Unknown annotation '{key}'", loc)
+		elif allowed is not None and not allowed & places:
+			diag.error("annotation", f"'{key}' applies to {' or '.join(sorted(allowed))}, not here", loc)
+		elif key == "kind" and value not in ("event", "state"):
+			diag.error("annotation", "kind must be event or state", loc)
+		elif key in ("status", "cards") and value not in STATUSES:
+			diag.error("annotation", f"{key} must be stated, inferred or assumed", loc)
+		elif key == "scale" and value not in ("1", "100", "?"):
+			diag.error("annotation", "scale must be 1, 100 or ?", loc)
+		elif key == "deps" and value != "candidate":
+			diag.error("annotation", "deps must be candidate", loc)
+		elif key == "elided" and not (isinstance(value, str) and value.isdigit()):
+			diag.error("annotation", "elided must be a count", loc)
+		elif key in ("key", "ordered") and value is not True:
+			diag.error("annotation", f"{key} is a flag", loc)
+		elif key == "id" and value not in IDENTIFIERS:
+			diag.error("annotation", f"id must be {', '.join(IDENTIFIERS)}", loc)
+		elif key in ("subjectRole", "objectRole") and not (isinstance(value, str) and isName(value)):
+			diag.error("annotation", f"{key} must name a role", loc)
+		elif key == "privacy":
+			names = value.split("+") if isinstance(value, str) else []
+			if not names or not all(isName(name) for name in names) or len(set(names)) != len(names):
+				diag.error("annotation", "privacy must be distinct audience names joined with +", loc)
+		elif key == "context" and not isAssociation(model.get(value if isinstance(value, str) else None)):
+			diag.error("reference", f"context must name an n-ary relation: '{value}'", loc)
+		elif key == "ctx":
+			target = model.get(value if isinstance(value, str) else None)
+			if not target or (target.kind != "entity" and not isAssociation(target)):
+				diag.error("reference", f"ctx must name an entity or an n-ary relation: '{value}'", loc)
+
+
+def _typeCycle(model: Model, type: TypeExpr | None) -> bool:
+	"""True when following aliases and attribute reuse from `type` comes back to a visited type."""
+	seen: set[str] = set()
+	while type and type.path:
+		key = _typeKey(type)
+		if key in seen:
+			return True
+		seen.add(key)
+		if type.attr:
+			attr = model.lookup(type.path, type.attr)
+			type = attr.type if attr else None
+		else:
+			decl = model.get(type.path)
+			type = decl.definition if decl and decl.kind == "type" else None
+	return False
+
+
+def _checkType(model: Model, type: TypeExpr | None, ann: Annotations, loc: Loc | None, what: str, diag: Diagnostics) -> None:
+	for conflict in model.resolveType(type, ann).conflicts:
+		diag.error("qualifier", f"{what}: {conflict}", loc)
+	if not type or type.builtin or type.values is not None or type.unknown:
+		return
+	if _typeCycle(model, type):
+		diag.error("cycle", f"{what}: type alias or attribute reuse cycle through '{_typeKey(type)}'", loc)
+		return
+	decl = model.get(type.path)
+	if not decl:
+		diag.error("reference", f"{what}: unknown '{type.path}'", loc)
+	elif type.attr:
+		if not model.lookup(type.path, type.attr):
+			diag.error("reference", f"{what}: unknown attribute '{type.path}.{type.attr}'", loc)
+	elif decl.kind not in ("type", "entity") and not isAssociation(decl):
+		kind = "binary relation" if decl.arrow else decl.kind
+		diag.error("reference", f"{what}: '{type.path}' is a {kind}, not a type, entity or association", loc)
+
+
+def _checkAttrs(model: Model, owner: Decl, attrs: list[Attr], localNames, diag: Diagnostics) -> None:
+	names: set[str] = set()
+	for attr in attrs:
+		if attr.name in names:
+			diag.error("duplicate", f"Duplicate attribute '{owner.path}.{attr.name}'", attr.loc)
+		names.add(attr.name)
+		_checkType(model, attr.type, attr.ann, attr.loc, f"{owner.path}.{attr.name}", diag)
+		_checkAnnotations(model, attr.ann, placesOf(attr), attr.loc, diag)
+		for dep in attr.deps or []:
+			if dep.local and dep.local not in localNames():
+				diag.error("reference", f"Unknown dependency '{dep.local}' of '{owner.path}.{attr.name}'", attr.loc)
+			if dep.path and not model.lookup(dep.path, dep.attr):
+				diag.error("reference", f"Unknown dependency '{dep.path}.{dep.attr}'", attr.loc)
+
+
+def _validateMap(model: Model, decl: Decl, diag: Diagnostics) -> None:
+	def vocabulary(path: str) -> set[str] | None:
+		target = model.get(path)
+		resolved = model.resolveType(TypeExpr(path=path)) if target and target.kind == "type" else None
+		if not resolved or resolved.kind != "vocab":
+			diag.error("reference", f"Map '{decl.path}': '{path}' is not a vocabulary type", decl.loc)
+			return None
+		return set(resolved.values or [])
+
+	fromValues, toValues = vocabulary(decl.mapFrom), vocabulary(decl.mapTo)
+	pairs: set[tuple[str, str]] = set()
+	for line in decl.mapLines:
+		if fromValues is not None and line.fromValue not in fromValues:
+			diag.error("reference", f"Unknown value '{line.fromValue}' of '{decl.mapFrom}'", line.loc)
+		if toValues is not None and line.toValue not in toValues:
+			diag.error("reference", f"Unknown value '{line.toValue}' of '{decl.mapTo}'", line.loc)
+		pair = (line.fromValue, line.toValue)
+		if pair in pairs:
+			diag.error("duplicate", f"Duplicate map line '{line.fromValue} {line.toValue}'", line.loc)
+		pairs.add(pair)
+
+
+def _validateViewLine(model: Model, line: ViewLine, diag: Diagnostics) -> None:
+	relations = viewRelations(model, line)
+	if relations is not None:
+		if not relations or line.facets is not None:
+			name = line.path + (f".{line.member}" if line.member else "")
+			diag.error("reference", f"View selects unknown binary relation '{name}'", line.loc)
+		return
+	decl = model.get(line.path)
+	if not decl:
+		diag.error("reference", f"View selects unknown '{line.path}'", line.loc)
+		return
+	if decl.kind == "view" and (line.facets is not None or line.member):
+		diag.error("reference", f"View '{line.path}' is selected whole: no facets or members", line.loc)
+		return
+	if line.facets:
+		if decl.kind != "entity" and not isAssociation(decl):
+			diag.error("reference", f"Facets selected on '{line.path}', which is not an entity or association", line.loc)
+			return
+		if line.facets != "*":
+			facets = model.facets(line.path)
+			for name in line.facets:
+				if name not in facets:
+					diag.error("reference", f"Unknown facet '{name}' on '{line.path}'", line.loc)
+	if line.member and not model.lookup(line.path, line.member):
+		diag.error("reference", f"View selects unknown '{line.path}.{line.member}'", line.loc)
+	if decl.kind not in ("entity", "relation", "view"):
+		diag.error("reference", f"View cannot select {decl.kind} '{line.path}'", line.loc)
+
+
+def _validateRelation(model: Model, decl: Decl, diag: Diagnostics) -> None:
+	if len(decl.participants) < 2:
+		diag.error("relation", f"Relation '{decl.path}' needs at least two participants", decl.loc)
+	roles: set[str] = set()
+	for participant in decl.participants:
+		target = model.get(participant.type)
+		if not target or (target.kind != "entity" and not isAssociation(target)):
+			diag.error("reference", f"Participant of '{decl.path}' is not an entity or association: '{participant.type}'", decl.loc)
+		if participant.role in roles:
+			diag.error("duplicate", f"Duplicate role '{participant.role}' in '{decl.path}'", decl.loc)
+		roles.add(participant.role)
+	for attr in decl.attrs:
+		if attr.name in roles:
+			diag.error("collision", f"Attribute '{attr.name}' collides with a role of '{decl.path}'", attr.loc)
+	context = model.get(annotation(decl.ann, "context"))
+	contextRoles = {item.role: item for item in context.participants} if context else {}
+	for index, key in enumerate(("subjectRole", "objectRole")):
+		role = annotation(decl.ann, key)
+		if role is None:
+			continue
+		participant = contextRoles.get(role)
+		if not decl.arrow or not participant or not model.isA(decl.participants[index].type, participant.type):
+			diag.error("reference", f"{key} '{role}' must select a compatible role on the relation context", decl.loc)
+	subjectRole, objectRole = annotation(decl.ann, "subjectRole"), annotation(decl.ann, "objectRole")
+	if subjectRole is not None and subjectRole == objectRole:
+		shared = contextRoles.get(subjectRole)
+		if not shared or shared.card not in MULTI:
+			diag.error("reference", "A role selected for both subject and object must be multi-valued", decl.loc)
+	_checkAttrs(model, decl, decl.attrs, lambda: roles | {attr.name for attr in decl.attrs}, diag)
+
+
+def _checkViewCycles(model: Model, diag: Diagnostics) -> None:
+	# NOTE: A view including itself, directly or through other views, selects nothing definite: an error.
+	def includes(view: Decl) -> list[str]:
+		return [line.path for line in view.viewLines if (target := model.get(line.path)) and target.kind == "view"]
+
+	for view in (decl for decl in model.ontology.decls if decl.kind == "view"):
+		pending, seen = includes(view), set()
+		while pending:
+			path = pending.pop()
+			if path == view.path:
+				diag.error("cycle", f"View '{view.path}' includes itself", view.loc)
+				break
+			if path not in seen:
+				seen.add(path)
+				pending += includes(model.index[path])
+
+
+def _validate(model: Model, diag: Diagnostics) -> None:
+	ontology = model.ontology
+	for decl in ontology.decls:
+		_checkAnnotations(model, decl.ann, placesOf(decl), decl.loc, diag)
+		if decl.kind == "type":
+			_checkType(model, decl.definition, decl.ann, decl.loc, decl.path, diag)
+			if decl.fields is not None:
+				fieldNames = {item.name for item in decl.fields}
+				_checkAttrs(model, decl, decl.fields, lambda names=fieldNames: names, diag)
+		elif decl.kind == "entity":
+			if decl.base:
+				base = model.get(decl.base)
+				if not base or base.kind != "entity":
+					diag.error("reference", f"Base of '{decl.path}' is not an entity: '{decl.base}'", decl.loc)
+				elif decl.path in model.lineage(decl.base):
+					diag.error("cycle", f"Specialisation cycle through '{decl.path}'", decl.loc)
+				else:
+					inherited = model.entityAttrs(decl.base)
+					for attr in decl.attrs:
+						if attr.name in inherited:
+							diag.error("duplicate", f"'{decl.path}.{attr.name}' redeclares an inherited attribute", attr.loc)
+			_checkAttrs(model, decl, decl.attrs, lambda path=decl.path: set(model.entityAttrs(path)), diag)
+			# NOTE: Facets of a base apply here too, so their names must not equal this entity's attributes.
+			for attr in decl.attrs:
+				facet = model.facets(decl.path).get(attr.name)
+				if facet and facet.subject != decl.path:
+					diag.error("collision", f"'{decl.path}.{attr.name}' collides with inherited facet '{facet.path}'", attr.loc)
+		elif decl.kind == "facet":
+			subject = model.get(decl.subject)
+			if not subject or (subject.kind != "entity" and not isAssociation(subject)):
+				diag.error("reference", f"Facet subject is not an entity or association: '{decl.subject}'", decl.loc)
+				continue
+			name = lastSegment(decl.path)
+			if name in model.ownNames(decl.subject):
+				diag.error("collision", f"Facet '{name}' collides with an attribute or role of '{decl.subject}'", decl.loc)
+			clash = [
+				other
+				for path in model.lineage(decl.subject)
+				for other in model.facetsOf(path)
+				if other is not decl and lastSegment(other.path) == name
+			]
+			if clash:
+				diag.error("collision", f"Facet name '{name}' is used twice on '{decl.subject}'", decl.loc)
+			_checkAttrs(
+				model, decl, decl.attrs,
+				lambda facet=decl: {attr.name for attr in facet.attrs} | model.ownNames(facet.subject), diag,
+			)
+		elif decl.kind == "relation":
+			_validateRelation(model, decl, diag)
+		elif decl.kind == "view":
+			for line in decl.viewLines:
+				_validateViewLine(model, line, diag)
+		elif decl.kind == "map":
+			_validateMap(model, decl, diag)
+	_checkViewCycles(model, diag)
+	# NOTE: A verb read from an entity must identify one relation for any compatible object type.
+	uses: list[tuple[str, str, str, Decl]] = []
+	for decl in ontology.decls:
+		if decl.kind != "relation" or not decl.arrow:
+			continue
+		subject, obj = decl.participants[0].type, decl.participants[1].type
+		uses.append((subject, decl.arrow.verb, obj, decl))
+		if decl.arrow.inverse and not isSymmetric(decl):
+			uses.append((obj, decl.arrow.inverse, subject, decl))
+
+	def related(a: str, b: str) -> bool:
+		return model.isA(a, b) or model.isA(b, a)
+
+	for i, (fromA, verbA, toA, declA) in enumerate(uses):
+		for fromB, verbB, toB, declB in uses[i + 1 :]:
+			if verbA == verbB and related(fromA, fromB) and related(toA, toB):
+				diag.error(
+					"collision",
+					f"Verb '{verbA}' is ambiguous from '{fromA}' to '{toA}' ('{declA.path}', '{declB.path}')",
+					declB.loc,
+				)
+
+
+# Function: validateOntology
+# Checks references, names and structure of `ontology`; raises `FormatError` on errors.
+def validateOntology(ontology: Ontology) -> Ontology:
+	diag = Diagnostics(list(ontology.diagnostics))
+	_validate(Model(ontology), diag)
+	ontology.diagnostics = diag.check()
+	return ontology
+
+
+# Function: loadOntology
+# Parses and validates `sources`.
+def loadOntology(sources: list[Source]) -> Ontology:
+	return validateOntology(parseOntology(sources))
+
+
+# Function: formatOntology
+# Normal-form text of `sources`.
+def formatOntology(sources: list[Source]) -> str:
+	return printOntology(normaliseOntology(loadOntology(sources)))
+
+
+# Function: ontologyToJson
+# The JSON form of `ontology`, with the identity sidecar `ids` when given.
+def ontologyToJson(ontology: Ontology, ids: dict[str, str] | None = None) -> dict[str, Any]:
+	return _toJson(normaliseOntology(ontology), ids if ids is not None else ontology.ids)
+
+
+# Function: ontologyFromJson
+# Loads the JSON form through its normal-form text; data that does not round-trip is rejected.
+def ontologyFromJson(data: Any, name: str = "ontology.json") -> Ontology:
+	loc = Loc(name, 0)
+
+	def fail(message: str) -> FormatError:
+		diag = Diagnostics()
+		diag.error("json", message, loc)
+		return FormatError(diag.items)
+
+	try:
+		read = _fromJson(data)
+		normal = normaliseOntology(read)
+		text = printOntology(normal)
+		expected = _toJson(normal, None)
+	except ValueError as error:
+		raise fail(f"Invalid ontology JSON: {error}") from error
+	ontology = loadOntology([Source(name, text)])
+	if _toJson(normaliseOntology(ontology), None) != expected:
+		raise fail("Ontology JSON does not round-trip through its text form")
+	ontology.ids = read.ids
+	return ontology
+
+
+# EOF

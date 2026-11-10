@@ -21,7 +21,7 @@ where = ["src/py"]
 include = ["onto*"]
 
 [tool.pytest.ini_options]
-python_files = ["*.test.py"]
+python_files = ["T*.py"]
 addopts = "--import-mode=importlib"
 testpaths = ["tests"]
 pythonpath = ["src/py"]
