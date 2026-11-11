@@ -17,6 +17,20 @@ markers, `by`-scoped retractions and `approved` metadata are implemented. Overla
 (spec-05), the identity sidecar file, `OntologyDiff`, the CLI and a JavaScript backend are not
 implemented yet.
 
+## Integrations
+
+Integrations connect onto to other libraries. They live under
+`src/py/onto/integrations/` and are optional: onto never imports them, and each
+one loads its library only when it is itself imported.
+
+- **hexa** ([spec-06](docs/specs/spec-06-hexa.md), specified, not implemented):
+  compiles bindings and mappings into [hexa](../hexa/README.md) shape pipelines,
+  which run them with journaled effects, replay, failure policies and a gap
+  ledger. It covers reading documents into source observations, mappings between
+  ontologies, re-running both, and writing documents back. In onto,
+  "binding" means a document-to-ontology correspondence; in hexa it means a
+  language binding.
+
 ## Layout
 
 The `ontology/` and `observations/` packages under `src/py/onto/` each contain

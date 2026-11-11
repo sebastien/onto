@@ -10,7 +10,9 @@ Imports and projections are both mappings; they differ only in direction.
 The mapping is data. Only extraction (fetching documents) and a small set of
 named functions are code. Functions are specified by signature and examples so
 that independent implementations (for example JavaScript and Python) behave
-identically.
+identically. [spec-06](spec-06-hexa.md) defines one execution model, which
+compiles bindings and mappings into [hexa](../../../hexa/README.md) programs; this spec stays
+authoritative for what they mean.
 
 ## Concepts
 
@@ -27,7 +29,7 @@ identically.
 | Function | A named, pure, typed value transformation: built-in, `@fn` or `@map` |
 | Function library | A namespace of `@fn` declarations shared by bindings and mappings (`.fn`) |
 | Inventory | The list of a document format's field paths, produced by extraction |
-| Codec | The formats learned for each field of a document format, used to read and write it (`.codec`) |
+| Formats | The value formats learned for each field of a document format, used to read and write it (`.formats`) |
 | Referential | The identity policies giving target instances their handles ([spec-05](spec-05-identities.md)) |
 | Run | One execution of a binding over a set of documents, or of a mapping over a state |
 | Coverage | The derived report of which elements are mapped, how, and which are not |
@@ -280,7 +282,7 @@ Reading the sheet back recovers each trade's instrument from `Isin`, which
 `Finance` declares `{key}` for instruments. `Value`, `Name` and `AssetClass`
 cannot be read back into a trade: the projection reports them as lossy
 ([Reversal](#reversal)). Dates and numbers are written in the formats the
-sheet's [codec](#codecs) has learned.
+sheet's [formats file](#formats) has learned.
 
 ## Lexical rules
 
@@ -302,7 +304,7 @@ expr     := term (" ?? " term)*
 term     := path | literal | call | meta
 call     := Path "(" [expr (", " expr)*] ")"
 literal  := JSON string | number | "true" | "false" | "null" | "?"
-meta     := "$valid" | "$at" | "$src" | "$codec"
+meta     := "$valid" | "$at" | "$src" | "$format"
 ```
 
 | Form | Meaning |
@@ -317,7 +319,7 @@ meta     := "$valid" | "$at" | "$src" | "$codec"
 | `x ?? y` | `x` when it is present, otherwise `y` |
 | `F(x, y)` | A function call |
 | `$valid`, `$at`, `$src` | Metadata of the scope instance's existence claim (mappings) |
-| `$codec` | The format the [codec](#codecs) chose for the field read by the line's first path (bindings) |
+| `$format` | The format the [formats file](#formats) chose for the field read by the line's first path (bindings) |
 
 - A bare name is a path; a name followed by `(` is a call. A JSON string is a
   literal, except as a path segment after `.` or as the whole expression of a
@@ -352,7 +354,7 @@ In a binding, document scalars are read with the
 [observations value encoding](spec-02-observations.md#values) of the target type:
 JSON numbers or decimal text for numbers, ISO 8601 text for dates, `true`/`false`
 for booleans, names for vocabulary values. Anything else needs a function, such
-as `date(payableDate, "YYYYMMDD")`, or `date(payableDate, $codec)` to use the
+as `date(payableDate, "YYYYMMDD")`, or `date(payableDate, $format)` to use the
 format learned from the documents themselves.
 
 ### Qualifier conversion
@@ -580,7 +582,7 @@ A reference to an instance with no existence claim yet is kept; the instance is
 - `g` is an inverse of `f` when `f(g(y)) = y` for every `y` that `f` produces:
   writing a value back and reading it again gives the same value. It need not
   restore the original spelling (`number("5.50")` is `5.5`, written back as
-  `5.50` only through the [codec](#codecs)). A conformance run checks this on
+  `5.50` only through the [formats file](#formats)). A conformance run checks this on
   every example: applying the inverse to the result, then the function, gives
   the result again.
 
@@ -730,16 +732,16 @@ Each value is spelled in two steps:
    unchanged. Unchanged values thus round-trip exactly, including what the
    line's functions drop: whitespace removed by `trim`, trailing zeros, a time
    of day, member order.
-2. **Codec.** Otherwise the value is encoded with the format the field's
-   [codec](#codecs) chose, then by the line's inverse functions; without a
-   codec entry, in its observations encoding.
+2. **Format.** Otherwise the value is encoded with the format the field's
+   [formats](#formats) entry chose, then by the line's inverse functions;
+   without an entry, in its observations encoding.
 
-### Codecs
+### Formats
 
-A codec records, for each field of a document format, the formats its values
-were seen in, so that new values are written as the system writes them. It
-lives in a file next to the binding, named after it (`exchange.bind` →
-`exchange.codec`), because it changes with the documents read, not with the
+A formats file records, for each field of a document format, the formats its
+values were seen in, so that new values are written as the system writes them.
+It lives next to the binding, named after it (`exchange.bind` →
+`exchange.formats`), because it changes with the documents read, not with the
 binding.
 
 ```text
@@ -755,14 +757,14 @@ instruments[*].name	trim	trim 380; padded 35
 - Formats are date and date-time patterns (as in `date(a, format)`),
   `decimals:N` (fixed decimal places), `case:upper` or `case:lower`, `trim` or
   `padded`, and `sep:<text>` for a collection written in one field. How a format
-  is detected is up to implementations; the codec file is the shared contract:
+  is detected is up to implementations; the formats file is the shared contract:
   given the same file, two implementations read and write alike.
 - Each binding run counts the formats of the values it reads. A field whose
   values come in several formats is reported. The chosen format is the most
   frequent one, unless pinned; when that changes, the run asks for approval in
   strict mode and switches with a warning in lenient mode
   ([Run modes](#run-modes)).
-- `$codec` in a binding line reads with the chosen format, then with the other
+- `$format` in a binding line reads with the chosen format, then with the other
   formats seen; a value matching none is a gap.
 
 ## Re-running
@@ -845,7 +847,7 @@ Runs are **strict** (the default; offline and batch processing) or **lenient**
 | Retraction ceiling exceeded | Waits for approval | Writes claims, holds retractions until approved or confirmed, warns |
 | Empty input under `complete=document` | Error | Warns; no retractions |
 | Older snapshot | Error | Adds new claims only; warns |
-| A field's chosen codec format changes | Waits for approval | Switches; warns |
+| A field's chosen format changes | Waits for approval | Switches; warns |
 | Identity conflict ([spec-05](spec-05-identities.md#resolution)) | Waits for approval | Keeps the instances apart; warns |
 | Unknown element in an input | Error | Gap; warns |
 
@@ -930,7 +932,7 @@ only the exceptions: `id=`, `??`, `date(...)`, references and exclusions. The
 default binding is regenerated, and compared with the edited one, when the
 source format changes.
 
-The **ledger** is the coverage as a table, sorted by source path:
+The **coverage table** lists the coverage, sorted by source path:
 
 ```text
 source	target	status	note
@@ -972,7 +974,7 @@ Warnings:
   fields absent from the inventory;
 - mixed provenance, gaps, stale slots, held retractions, implicit instances and
   lossy lines (in the run report);
-- fields whose values come in several formats, and codec format changes;
+- fields whose values come in several formats, and chosen format changes;
 - the conditions of [Run modes](#run-modes), which are errors or wait for
   approval in strict mode.
 
@@ -1049,7 +1051,7 @@ A function library:
 - Bindings use `"ontology"` instead of `from`/`to`, scopes with `"type"` and a
   `"path"` expression, `"id"`, `"valid"` and `"ctx"` expressions, an optional
   `"deleted"` condition (the form of `when`), and optional `"at"` and
-  `"columns"`. `{"meta": "codec"}` is `$codec`.
+  `"columns"`. `{"meta": "format"}` is `$format`.
 - Header keys are strings, except `candidates` (a boolean) and `confirm` (an
   integer); `retract` is written as in the text (`"20%"`).
 - Absent optional members are omitted, never `null`.
