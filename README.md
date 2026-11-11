@@ -65,6 +65,16 @@ again = ontologyFromJson(data)                 # strict: rejects anything that d
 `normaliseOntology` and `printOntology` expose the individual stages;
 `Model` answers lookups (lineage, facets, attributes, resolved types).
 
+The top-level `onto` exports are the recommended API. Feature packages also
+retain grammar constants, lexical helpers and low-level printers as compatibility
+exports; package-private `_name` helpers may be shared between feature modules.
+Stateless functions remain available alongside context-retaining operators.
+
+`printOntology` renders an already normalized ontology; `OntologyOperator.print`
+normalizes first. Observation log printing takes a typed log, while state
+printing takes a reconciled state. Neither text printer accepts unresolved gaps;
+use JSON to preserve those review records.
+
 For repeated operations with one context:
 
 ```python
@@ -253,6 +263,8 @@ Where spec-01 leaves room, the implementation decides:
 make test
 ```
 
-The tests use pytest (`tests/T{spec}-{number}-{feature}-{name}.py`), run through `uv`; set `PYTEST` to use
-another runner. The complete example of spec-01 and its JSON excerpt are loaded
+The tests use pytest (`tests/T{spec}-{number}-{feature}-{name}.py`), run through
+`uv` with the project's development dependencies; set `PYTEST` to use another
+runner. `jsonschema` is test-only; onto retains no runtime dependencies.
+The complete example of spec-01 and its JSON excerpt are loaded
 from the specification itself, so the spec and the implementation stay in step.

@@ -1,4 +1,4 @@
-"""Module: ontology.model — model for the ontology format."""
+"""Module: ontology.model — declarations, grammar tables and semantic ontology lookups."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from dataclasses import (
 )
 from ..text import (
 	Annotations,
+	Diagnostic,
 	Loc,
 	annotation,
 	lastSegment,
@@ -19,6 +20,79 @@ from ..text import (
 # DEFINITIONS
 #
 # -----------------------------------------------------------------------------
+
+
+ONTOLOGY_FORMAT = "onto.ontology/1"
+BUILTINS = ("Text", "Integer", "Number", "Boolean", "Date", "DateTime", "Duration", "Amount", "Percent")
+
+# NOTE: Where each annotation applies (None: anywhere); the key order is the normal-form order.
+ANNOTATION_PLACES: dict[str, set[str] | None] = {
+	"key": {"attribute"},
+	"id": {"attribute"},
+	"privacy": {"attribute"},
+	"kind": {"relation"},
+	"context": {"binary"},
+	"subjectRole": {"binary"},
+	"objectRole": {"binary"},
+	"ctx": {"facet"},
+	"ordered": {"vocabulary"},
+	"cur": {"type", "attribute"},
+	"unit": {"type", "attribute"},
+	"period": {"type", "attribute"},
+	"scale": {"type", "attribute"},
+	"status": None,
+	"cards": {"attribute"},
+	"deps": {"derived"},
+	"rule": {"derived", "map"},
+	"src": None,
+	"check": None,
+	"elided": {"vocabulary"},
+}
+ANNOTATION_KEYS = list(ANNOTATION_PLACES)
+HEADER_KEYS = ["rev", "src", "card", "cards", "rel"]
+HEADER_DEFAULTS = {"card": "?", "cards": "stated", "rel": "*:*"}
+IDENTIFIERS = ("key", "narrow", "broad", "none")
+MATCHES = ("exact", "broader", "narrower", "related")
+QUALIFIERS = ("cur", "unit", "period", "scale")
+CARDS = ("1", "?", "+", "*")
+STATUSES = ("stated", "inferred", "assumed")
+PATH_KEYS = ("context", "ctx")
+MULTI = ("+", "*")
+SECTIONS = {"domain": 0, "type": 1, "entity": 2, "facet": 2, "relation": 3, "map": 4, "view": 5}
+
+# NOTE: Members of each declaration kind beyond `kind` and `path`: (required, optional).
+DECL_MEMBERS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+	"type": ((), ("def", "fields", "ann", "doc")),
+	"entity": ((), ("base", "attrs", "ann", "doc")),
+	"facet": (("subject",), ("attrs", "ann", "doc")),
+	"relation": (("participants",), ("arrow", "attrs", "ann", "doc")),
+	"domain": ((), ("doc",)),
+	"map": (("from", "to", "lines"), ("ann", "doc")),
+	"view": (("lines",), ("doc",)),
+}
+
+RE_COUNTS = re.compile(r"[?1*+]:[?1*+]")
+RE_ONTOLOGY = re.compile(r"@ontology\s+(\S+)(.*)")
+RE_USE = re.compile(r"@use\s+(\S+)\s+as\s+(\S+)")
+RE_VIEW = re.compile(r"@view\s+(\S+)")
+RE_DOMAIN = re.compile(r"@domain\s+(\S+)")
+RE_MAP = re.compile(r"@map\s+(\S+)\s+(\S+)\s+->\s+(\S+)")
+RE_MAP_LINE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s+([a-z]+)\s+([A-Za-z_][A-Za-z0-9_]*)")
+RE_TYPE_DECL = re.compile(r"([^\s=(]+)\s*=\s*(.*)")
+RE_FACET_DECL = re.compile(r"(\S+)\s+of\s+(\S+)")
+RE_ARROW_DECL = re.compile(
+	r"(\S+)\s+-([A-Za-z_][A-Za-z0-9_]*)(?:/([A-Za-z_][A-Za-z0-9_]*))?->\s+(\S+)(?:\s+(\S+))?"
+)
+RE_RELATION_DECL = re.compile(r"([^\s(]+)\((.*)\)")
+RE_PARTICIPANT = re.compile(r"(?:([A-Za-z_][A-Za-z0-9_]*)\s*:\s*)?(?:([1?+*])\s+)?(\S+)")
+RE_ENTITY_DECL = re.compile(r"(\S+)(?:\s+<\s+(\S+))?")
+RE_ATTRIBUTE = re.compile(r"(?:([1?+*])\s+)?(?:(~)\s+)?([A-Za-z_][A-Za-z0-9_]*)(?:\s+(.*))?")
+RE_ATTR_PATH = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
+RE_INPUT = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*")
+RE_VIEW_ARROW = re.compile(r"([A-Za-z_][A-Za-z0-9_/]*)\.([a-z][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_/]*)")
+RE_VIEW_LINE = re.compile(
+	r"([A-Za-z_][A-Za-z0-9_/]*)(?:\[([^\]]*)\])?(?:\.([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?))?"
+)
 
 
 @dataclass(slots=True)
@@ -127,7 +201,7 @@ class Ontology:
 	header: list[tuple[str, str]] = field(default_factory=list)
 	uses: list[tuple[str, str]] = field(default_factory=list)
 	decls: list[Decl] = field(default_factory=list)
-	diagnostics: list = field(default_factory=list)
+	diagnostics: list[Diagnostic] = field(default_factory=list)
 	ids: dict[str, str] | None = None
 
 
@@ -143,6 +217,24 @@ class ResolvedType:
 	ordered: bool = False
 	qualifiers: dict[str, str] = field(default_factory=dict)
 	conflicts: list[str] = field(default_factory=list)
+
+
+# -----------------------------------------------------------------------------
+#
+# UTILITIES
+#
+# -----------------------------------------------------------------------------
+
+
+def _typeKey(type: TypeExpr) -> str:
+	return f"{type.path}.{type.attr}" if type.attr else str(type.path)
+
+
+# -----------------------------------------------------------------------------
+#
+# OPERATIONS
+#
+# -----------------------------------------------------------------------------
 
 
 class Model:
@@ -161,6 +253,7 @@ class Model:
 		self._looking: set[str] = set()
 
 	def get(self, path: str | None) -> Decl | None:
+		"""Find declaration `path`, or return None when absent."""
 		return self.index.get(path) if path else None
 
 	def lineage(self, path: str) -> list[str]:
@@ -178,6 +271,7 @@ class Model:
 		return chain
 
 	def isA(self, path: str, ancestor: str) -> bool:
+		"""Whether `path` is `ancestor` or specializes it."""
 		return ancestor in self.lineage(path)
 
 	def entityAttrs(self, path: str) -> dict[str, Attr]:
@@ -198,6 +292,7 @@ class Model:
 		return set()
 
 	def facetsOf(self, path: str) -> list[Decl]:
+		"""Return facets declared directly on `path`."""
 		return self.facetsBySubject.get(path, [])
 
 	def facets(self, path: str) -> dict[str, Decl]:
@@ -350,170 +445,30 @@ class Model:
 		return found
 
 
-ONTOLOGY_FORMAT = "onto.ontology/1"
-
-
-BUILTINS = ("Text", "Integer", "Number", "Boolean", "Date", "DateTime", "Duration", "Amount", "Percent")
-
-
-# NOTE: Where each annotation applies (None: anywhere); the key order is the normal-form order.
-ANNOTATION_PLACES: dict[str, set[str] | None] = {
-	"key": {"attribute"},
-	"id": {"attribute"},
-	"privacy": {"attribute"},
-	"kind": {"relation"},
-	"context": {"binary"},
-	"subjectRole": {"binary"},
-	"objectRole": {"binary"},
-	"ctx": {"facet"},
-	"ordered": {"vocabulary"},
-	"cur": {"type", "attribute"},
-	"unit": {"type", "attribute"},
-	"period": {"type", "attribute"},
-	"scale": {"type", "attribute"},
-	"status": None,
-	"cards": {"attribute"},
-	"deps": {"derived"},
-	"rule": {"derived", "map"},
-	"src": None,
-	"check": None,
-	"elided": {"vocabulary"},
-}
-
-
-ANNOTATION_KEYS = list(ANNOTATION_PLACES)
-
-
-HEADER_KEYS = ["rev", "src", "card", "cards", "rel"]
-
-
-HEADER_DEFAULTS = {"card": "?", "cards": "stated", "rel": "*:*"}
-
-
-IDENTIFIERS = ("key", "narrow", "broad", "none")
-
-
-MATCHES = ("exact", "broader", "narrower", "related")
-
-
-QUALIFIERS = ("cur", "unit", "period", "scale")
-
-
-CARDS = ("1", "?", "+", "*")
-
-
-STATUSES = ("stated", "inferred", "assumed")
-
-
-PATH_KEYS = ("context", "ctx")
-
-
-MULTI = ("+", "*")
-
-
-SECTIONS = {"domain": 0, "type": 1, "entity": 2, "facet": 2, "relation": 3, "map": 4, "view": 5}
-
-
-# NOTE: Members of each declaration kind beyond `kind` and `path`: (required, optional).
-DECL_MEMBERS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
-	"type": ((), ("def", "fields", "ann", "doc")),
-	"entity": ((), ("base", "attrs", "ann", "doc")),
-	"facet": (("subject",), ("attrs", "ann", "doc")),
-	"relation": (("participants",), ("arrow", "attrs", "ann", "doc")),
-	"domain": ((), ("doc",)),
-	"map": (("from", "to", "lines"), ("ann", "doc")),
-	"view": (("lines",), ("doc",)),
-}
-
-
-RE_COUNTS = re.compile(r"[?1*+]:[?1*+]")
-
-
-RE_ONTOLOGY = re.compile(r"@ontology\s+(\S+)(.*)")
-
-
-RE_USE = re.compile(r"@use\s+(\S+)\s+as\s+(\S+)")
-
-
-RE_VIEW = re.compile(r"@view\s+(\S+)")
-
-
-RE_DOMAIN = re.compile(r"@domain\s+(\S+)")
-
-
-RE_MAP = re.compile(r"@map\s+(\S+)\s+(\S+)\s+->\s+(\S+)")
-
-
-RE_MAP_LINE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s+([a-z]+)\s+([A-Za-z_][A-Za-z0-9_]*)")
-
-
-RE_TYPE_DECL = re.compile(r"([^\s=(]+)\s*=\s*(.*)")
-
-
-RE_FACET_DECL = re.compile(r"(\S+)\s+of\s+(\S+)")
-
-
-RE_ARROW_DECL = re.compile(
-	r"(\S+)\s+-([A-Za-z_][A-Za-z0-9_]*)(?:/([A-Za-z_][A-Za-z0-9_]*))?->\s+(\S+)(?:\s+(\S+))?"
-)
-
-
-RE_RELATION_DECL = re.compile(r"([^\s(]+)\((.*)\)")
-
-
-RE_PARTICIPANT = re.compile(r"(?:([A-Za-z_][A-Za-z0-9_]*)\s*:\s*)?(?:([1?+*])\s+)?(\S+)")
-
-
-RE_ENTITY_DECL = re.compile(r"(\S+)(?:\s+<\s+(\S+))?")
-
-
-RE_ATTRIBUTE = re.compile(r"(?:([1?+*])\s+)?(?:(~)\s+)?([A-Za-z_][A-Za-z0-9_]*)(?:\s+(.*))?")
-
-
-RE_ATTR_PATH = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
-
-
-RE_INPUT = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*")
-
-
-RE_VIEW_ARROW = re.compile(r"([A-Za-z_][A-Za-z0-9_/]*)\.([a-z][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_/]*)")
-
-
-RE_VIEW_LINE = re.compile(
-	r"([A-Za-z_][A-Za-z0-9_/]*)(?:\[([^\]]*)\])?(?:\.([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?))?"
-)
-
 # -----------------------------------------------------------------------------
 #
-# OPERATIONS
+# HIGH-LEVEL API
 #
 # -----------------------------------------------------------------------------
 
 
-# Function: arrowPath
-# The path of a binary relation, `S.verb.T`.
 def arrowPath(subject: str, verb: str, obj: str) -> str:
+	"""Return the binary relation path `subject.verb.obj`."""
 	return f"{subject}.{verb}.{obj}"
 
 
-# Function: isAssociation
-# True for an n-ary relation: it has identity and may be a participant.
 def isAssociation(decl: Decl | None) -> bool:
+	"""Whether `decl` is an identity-bearing n-ary relation, usable as a participant."""
 	return decl is not None and decl.kind == "relation" and decl.arrow is None
 
 
-# Function: isSymmetric
-# True when a binary relation reads the same in both directions.
 def isSymmetric(decl: Decl) -> bool:
+	"""Whether binary relation `decl` reads the same in both directions."""
 	return (
 		decl.arrow is not None
 		and decl.arrow.inverse == decl.arrow.verb
 		and decl.participants[0].type == decl.participants[1].type
 	)
-
-
-def _typeKey(type: TypeExpr) -> str:
-	return f"{type.path}.{type.attr}" if type.attr else str(type.path)
 
 
 # EOF

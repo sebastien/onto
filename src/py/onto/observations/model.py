@@ -1,4 +1,4 @@
-"""Module: observations.model — model for the observations format."""
+"""Module: observations.model — parsed statements, typed claims and shared value semantics."""
 
 from __future__ import annotations
 
@@ -41,6 +41,22 @@ from ..text import (
 
 
 type Claim = dict[str, Any]
+
+
+OBSERVATIONS_FORMAT = "onto.observations/1"
+HEADER_KEYS = ("rev", "src", "at", "by", "conf")
+META_KEYS = ("src", "at", "valid", "ctx", "conf", "by", "of", "approved", *QUALIFIERS, "conflict")
+HANDLE = r"[A-Za-z_][A-Za-z0-9_]*"
+PATH = rf"{HANDLE}(?:/{HANDLE})*"
+REF = rf"{HANDLE}(?::{PATH})?"
+RE_REF = re.compile(rf"({HANDLE})(?::({PATH}))?")
+RE_HEADER = re.compile(rf"({HANDLE})(?::({PATH}))?(?:\[([^\]]*)\])?")
+RE_VALUE = re.compile(rf"({REF})\.({HANDLE}(?:\.{HANDLE})*)(?:\s+(.+))?")
+RE_LINK = re.compile(rf"(?:({HANDLE}):\s+)?({REF})\s+([a-z][A-Za-z0-9_]*)\s+({REF}|\?)")
+RE_IDENTITY = re.compile(rf"({REF})\s+(!=|=)\s+({REF})")
+RE_DECIMAL = re.compile(r"([+-]?)(\d*(?:\.\d*)?)(?:[eE]([+-]?\d+))?", re.ASCII)
+RE_TIME = re.compile(r"\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?)?", re.ASCII)
+RE_DURATION = re.compile(r"P(?=\d|T\d)(?:\d+Y)?(?:\d+M)?(?:\d+W)?(?:\d+D)?(?:T(?=\d)(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?)?", re.ASCII)
 
 
 @dataclass(slots=True)
@@ -111,71 +127,11 @@ class Observations:
 	gaps: list[Gap] = field(default_factory=list)
 
 
-OBSERVATIONS_FORMAT = "onto.observations/1"
-
-
-HEADER_KEYS = ("rev", "src", "at", "by", "conf")
-
-
-META_KEYS = ("src", "at", "valid", "ctx", "conf", "by", "of", "approved", *QUALIFIERS, "conflict")
-
-
-HANDLE = r"[A-Za-z_][A-Za-z0-9_]*"
-
-
-PATH = rf"{HANDLE}(?:/{HANDLE})*"
-
-
-REF = rf"{HANDLE}(?::{PATH})?"
-
-
-RE_REF = re.compile(rf"({HANDLE})(?::({PATH}))?")
-
-
-RE_HEADER = re.compile(rf"({HANDLE})(?::({PATH}))?(?:\[([^\]]*)\])?")
-
-
-RE_VALUE = re.compile(rf"({REF})\.({HANDLE}(?:\.{HANDLE})*)(?:\s+(.+))?")
-
-
-RE_LINK = re.compile(rf"(?:({HANDLE}):\s+)?({REF})\s+([a-z][A-Za-z0-9_]*)\s+({REF}|\?)")
-
-
-RE_IDENTITY = re.compile(rf"({REF})\s+(!=|=)\s+({REF})")
-
-
-RE_DECIMAL = re.compile(r"([+-]?)(\d*(?:\.\d*)?)(?:[eE]([+-]?\d+))?", re.ASCII)
-
-
-RE_TIME = re.compile(r"\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?)?", re.ASCII)
-
-
-RE_DURATION = re.compile(r"P(?=\d|T\d)(?:\d+Y)?(?:\d+M)?(?:\d+W)?(?:\d+D)?(?:T(?=\d)(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?)?", re.ASCII)
-
 # -----------------------------------------------------------------------------
 #
-# OPERATIONS
+# UTILITIES
 #
 # -----------------------------------------------------------------------------
-
-
-def canonicalNumber(text: str) -> str:
-	"""Canonical decimal spelling without binary floating point or decimal-context rounding."""
-	match = RE_DECIMAL.fullmatch(text)
-	if not match or not any(char.isdigit() for char in match[2]):
-		raise ValueError(f"Invalid decimal '{text}'")
-	try:
-		Decimal(text)
-	except DecimalException as error:
-		raise ValueError(f"Decimal exponent is outside the supported range: '{text}'") from error
-	sign, mantissa, exponent = match.groups()
-	whole, _, fraction = mantissa.partition(".")
-	whole = whole.lstrip("0") or "0"
-	fraction = fraction.rstrip("0")
-	if whole == "0" and not fraction:
-		return "0"
-	value = ("-" if sign == "-" else "") + whole + (f".{fraction}" if fraction else "")
-	return value + (f"e{int(exponent)}" if exponent and int(exponent) else "")
 
 
 def _time(text: str) -> Fraction:
@@ -189,17 +145,6 @@ def _time(text: str) -> Fraction:
 	if offset := value.utcoffset():
 		seconds -= offset.days * 86400 + offset.seconds
 	return seconds
-
-
-def parseInterval(text: str) -> tuple[Fraction | None, Fraction | None]:
-	"""Parse a point or open/closed interval; reject impossible dates and reversed bounds."""
-	parts = text.split("..") if ".." in text else [text, text]
-	if len(parts) != 2 or not any(parts):
-		raise ValueError(f"Invalid interval '{text}'")
-	start, end = (_time(part) if part else None for part in parts)
-	if start and end and start > end:
-		raise ValueError(f"Reversed interval '{text}'")
-	return start, end
 
 
 def _valueKey(value: Any) -> str:
@@ -250,6 +195,43 @@ def _markImplicit(instances: dict[str, dict[str, str | bool]], claims: list[Clai
 				referenced.add(member["ref"])
 	implicit = referenced - explicit
 	return {handle: {"type": instance["type"], **({"implicit": True} if handle in implicit else {})} for handle, instance in instances.items()}
+
+
+# -----------------------------------------------------------------------------
+#
+# HIGH-LEVEL API
+#
+# -----------------------------------------------------------------------------
+
+
+def canonicalNumber(text: str) -> str:
+	"""Canonical decimal spelling without binary floating point or decimal-context rounding."""
+	match = RE_DECIMAL.fullmatch(text)
+	if not match or not any(char.isdigit() for char in match[2]):
+		raise ValueError(f"Invalid decimal '{text}'")
+	try:
+		Decimal(text)
+	except DecimalException as error:
+		raise ValueError(f"Decimal exponent is outside the supported range: '{text}'") from error
+	sign, mantissa, exponent = match.groups()
+	whole, _, fraction = mantissa.partition(".")
+	whole = whole.lstrip("0") or "0"
+	fraction = fraction.rstrip("0")
+	if whole == "0" and not fraction:
+		return "0"
+	value = ("-" if sign == "-" else "") + whole + (f".{fraction}" if fraction else "")
+	return value + (f"e{int(exponent)}" if exponent and int(exponent) else "")
+
+
+def parseInterval(text: str) -> tuple[Fraction | None, Fraction | None]:
+	"""Parse a point or open/closed interval; reject impossible dates and reversed bounds."""
+	parts = text.split("..") if ".." in text else [text, text]
+	if len(parts) != 2 or not any(parts):
+		raise ValueError(f"Invalid interval '{text}'")
+	start, end = (_time(part) if part else None for part in parts)
+	if start and end and start > end:
+		raise ValueError(f"Reversed interval '{text}'")
+	return start, end
 
 
 # EOF

@@ -85,7 +85,7 @@ logical section headers, explicit `# EOF`. Do not delegate without authorization
 
 ## Phase 2 status: implementation progressing — conformance audit pending
 
-- Latest `make test`: **426 passed** (all phase-1 and phase-2 tests), Python 3.15.
+- Latest `make test`: **505 passed**, including schema contracts, Python 3.15.
 - `src/py/onto/observations/`: `parseObservations`, `resolveObservations`,
   `loadObservations`, `observationsToJson`, `reconcileObservations`,
   `printObservationsLog`, `printObservationsState`, `formatObservations`,
@@ -113,6 +113,31 @@ logical section headers, explicit `# EOF`. Do not delegate without authorization
 - Also audit historical/supersession semantics for distinct valid intervals,
   implications of typed mentions/facet attributes, reference-only handles, and
   complete-set claims followed by member retractions before phase-2 sign-off.
+
+### Structural review corrections (2026-11-12)
+
+- Reviewed the spec-04/spec-06 changes in jj `rmnzknvw` before applying fixes;
+  preserved `.formats`/`$format`, optional integrations and deferred mapping
+  contexts/registry support. No bindings, mappings or hexa integration were added.
+- Fixed observation value quoting for opening braces at the start or after any
+  whitespace, preserving values and provenance through log/state/JSON replay.
+- Tightened schemas: fractional-second validity intervals, disjoint claim
+  payloads, values required on claims but optional on withdrawals, derived
+  dependencies, closed function signatures, concrete collection members and
+  fractional-second implicit durations. Added schema/export/spec-example tests.
+- Grouped constants, utilities, contextual operations and public APIs; converted
+  public function comments into docstrings, completed production annotations,
+  documented compatibility exports and clarified printer stage contracts.
+- Shared specification extraction and semantic claim comparison in test helpers;
+  retained distinct fixtures and whole-document comparisons. Split operator
+  compatibility checks from delegation tests. Broad cosmetic renaming of legacy
+  test helpers and blanket test annotations remain optional, not a blocker.
+- `make test` uses the project's declared dev dependencies; `jsonschema` is
+  test-only. The runtime remains standard-library-only. Python 3.14 was not
+  available locally with downloads disabled; minimum-version testing remains.
+- Clarified contextual claim metadata in specs 04/06, shared scope in the curator
+  example and historical minted allocations in spec 05. Phase-2 semantic sign-off
+  remains a separate user decision before starting the implementation handoff.
 
 ### Updated spec-02 alignment
 

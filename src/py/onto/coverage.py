@@ -16,6 +16,9 @@ from .text import Diagnostics, annotation, lastSegment
 # -----------------------------------------------------------------------------
 
 
+STATUSES = ("supplied", "unknown", "absent", "missing")
+
+
 @dataclass(slots=True, frozen=True)
 class CoverageItem:
 	"""Coverage of `path` for a subject/context; multiple statuses retain differing sources."""
@@ -36,11 +39,9 @@ class _Selection:
 	contextType: str | None = None
 
 
-STATUSES = ("supplied", "unknown", "absent", "missing")
-
 # -----------------------------------------------------------------------------
 #
-# SELECTION
+# UTILITIES
 #
 # -----------------------------------------------------------------------------
 
@@ -135,7 +136,7 @@ def _status(value: Any) -> str:
 
 # -----------------------------------------------------------------------------
 #
-# API
+# HIGH-LEVEL API
 #
 # -----------------------------------------------------------------------------
 
@@ -181,18 +182,24 @@ def observationsCoverage(ontology: Ontology, observations: Observations, view: s
 							matches.append(claim)
 					elif selection.member:
 						member = claim.get("p", "")
-						if (
+						selectedMember = (
 							member == selection.member
 							or structure and member.startswith(selection.member + ".")
 							or member and selection.member.startswith(member + ".") and claim.get("v") in (None, {"unknown": True})
-						):
+						)
+						if selectedMember:
 							matches.append(claim)
 					elif claim.get("exists") or claim.get("rel") == selection.owner:
 						matches.append(claim)
 				statuses = {_status(claim["v"]) if selection.member and not selection.facet else "supplied" for claim in matches}
-				items.append(CoverageItem(path, subject, ctx, tuple(status for status in STATUSES if status in (statuses or {"missing"})),
-					any(claim.get("conflict", False) for claim in matches if not selection.facet or claim.get("facet") == selection.member),
-					not selection.facet and any(isinstance(claim.get("v"), dict) and claim["v"].get("partial", False) for claim in matches)))
+				items.append(CoverageItem(
+					path=path,
+					subject=subject,
+					ctx=ctx,
+					statuses=tuple(status for status in STATUSES if status in (statuses or {"missing"})),
+					conflict=any(claim.get("conflict", False) for claim in matches if not selection.facet or claim.get("facet") == selection.member),
+					partial=not selection.facet and any(isinstance(claim.get("v"), dict) and claim["v"].get("partial", False) for claim in matches),
+				))
 	return sorted(items, key=lambda item: (item.path, item.subject or "", item.ctx or ""))
 
 

@@ -1,4 +1,4 @@
-"""Module: observations.formatter — formatter for the observations format."""
+"""Module: observations.formatter — lossless audit logs, state text and JSON rendering."""
 
 from __future__ import annotations
 
@@ -39,7 +39,29 @@ from .model import (
 
 # -----------------------------------------------------------------------------
 #
-# DEFINITIONS
+# UTILITIES
+#
+# -----------------------------------------------------------------------------
+
+
+def _defaults(observations: Observations) -> dict[str, Any]:
+	return {key: float(value) if key == "conf" else value for key, value in observations.obs.items() if key in ("src", "at", "by", "conf")}
+
+
+def _claimMeta(claim: Claim) -> dict[str, Any]:
+	return {key: claim[key] for key in META_KEYS if key in claim}
+
+
+def _gapJson(gap: Gap) -> dict[str, Any]:
+	return {"n": gap.n, "raw": gap.raw, "text": gap.text,
+		"loc": {"file": gap.loc.file, "line": gap.loc.line}, "meta": dict(gap.meta),
+		**({"ctx": gap.ctx} if gap.ctx is not None else {}),
+		"diagnostics": [{"code": item.code, "message": item.message} for item in gap.diagnostics]}
+
+
+# -----------------------------------------------------------------------------
+#
+# OPERATIONS
 #
 # -----------------------------------------------------------------------------
 
@@ -76,7 +98,8 @@ class _Printer:
 			if value.get("partial"):
 				parts.append("...")
 			return f"[{', '.join(parts)}]"
-		unsafe = not value or value != value.strip() or any(char in value for char in '\n\r"') or " {" in value or re.search(r"(^|\s)//", value) or value in ("?", "null") or value.startswith("[") or inSet and (value == "..." or any(char in value for char in ",]"))
+		# NOTE: Match the annotation parser's whitespace rule, including the separator before a value.
+		unsafe = not value or value != value.strip() or any(char in value for char in '\n\r"') or re.search(r"(^|\s)(\{|//)", value) or value in ("?", "null") or value.startswith("[") or inSet and (value == "..." or any(char in value for char in ",]"))
 		return json.dumps(value, ensure_ascii=False) if unsafe else value
 
 	def meta(self, claim: Claim, defaults: dict[str, Any]) -> str:
@@ -135,21 +158,6 @@ class _Printer:
 			self.typed.add(handle)
 		return lines
 
-# -----------------------------------------------------------------------------
-#
-# OPERATIONS
-#
-# -----------------------------------------------------------------------------
-
-
-def _defaults(observations: Observations) -> dict[str, Any]:
-	return {key: float(value) if key == "conf" else value for key, value in observations.obs.items() if key in ("src", "at", "by", "conf")}
-
-
-def _claimMeta(claim: Claim) -> dict[str, Any]:
-	return {key: claim[key] for key in META_KEYS if key in claim}
-
-
 def _printObservationsLog(ontology: Ontology, observations: Observations) -> str:
 	"""Render a log; gaps are only replayed internally for JSON round-trip validation."""
 	p = _Printer(ontology, observations)
@@ -200,12 +208,19 @@ def _printObservationsLog(ontology: Ontology, observations: Observations) -> str
 	return "\n".join(lines) + "\n"
 
 
+# -----------------------------------------------------------------------------
+#
+# HIGH-LEVEL API
+#
+# -----------------------------------------------------------------------------
+
+
 def printObservationsState(ontology: Ontology, observations: Observations) -> str:
 	"""Print a reconciled state; value-only subjects stay line-form to avoid inventing existence."""
 	if observations.retractions:
 		raise ValueError("State printing requires reconciliation first")
 	if observations.gaps:
-		raise ValueError("State text cannot preserve gaps; use log form or JSON")
+		raise ValueError("State text cannot preserve gaps; use JSON")
 	p = _Printer(ontology, observations)
 	lines = p.headers()
 	implicit = sorted(handle for handle, instance in _markImplicit(observations.instances, observations.claims).items() if instance.get("implicit"))
@@ -288,13 +303,6 @@ def printObservationsState(ontology: Ontology, observations: Observations) -> st
 		for claim in sorted(identities, key=_order):
 			lines.append(p.statement(claim) + p.meta(claim, defaults))
 	return "\n".join(lines) + "\n"
-
-
-def _gapJson(gap: Gap) -> dict[str, Any]:
-	return {"n": gap.n, "raw": gap.raw, "text": gap.text,
-		"loc": {"file": gap.loc.file, "line": gap.loc.line}, "meta": dict(gap.meta),
-		**({"ctx": gap.ctx} if gap.ctx is not None else {}),
-		"diagnostics": [{"code": item.code, "message": item.message} for item in gap.diagnostics]}
 
 
 def printObservationsLog(ontology: Ontology, observations: Observations) -> str:

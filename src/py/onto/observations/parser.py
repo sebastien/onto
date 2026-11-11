@@ -1,4 +1,4 @@
-"""Module: observations.parser — parser for the observations format."""
+"""Module: observations.parser — source parsing, ontology-backed resolution and JSON decoding."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import re
 from copy import (
 	deepcopy,
 )
+from collections.abc import Callable
 from dataclasses import (
 	replace,
 )
@@ -18,6 +19,7 @@ from typing import (
 )
 from ..ontology import (
 	Attr,
+	Decl,
 	Model,
 	Ontology,
 	QUALIFIERS,
@@ -67,7 +69,64 @@ from .model import (
 
 # -----------------------------------------------------------------------------
 #
-# DEFINITIONS
+# UTILITIES
+#
+# -----------------------------------------------------------------------------
+
+
+def _metadata(pairs: list[tuple[str, str | bool]], loc: Loc, diag: Diagnostics) -> dict[str, Any]:
+	result = dict(pairs)
+	for key, value in pairs:
+		try:
+			if key not in META_KEYS:
+				raise ValueError(f"Unknown metadata '{key}'")
+			if key == "conflict":
+				if value is not True:
+					raise ValueError("conflict is a flag")
+				continue
+			if not isinstance(value, str):
+				raise ValueError(f"'{key}' needs a value")
+			if key == "at":
+				_time(value)
+			elif key == "valid":
+				parseInterval(value)
+			elif key == "ctx" and (not isName(value) or value == "none"):
+				raise ValueError("ctx must be a handle other than none")
+			elif key == "conf":
+				canonicalNumber(value)
+				if not Decimal(0) <= Decimal(value) <= Decimal(1):
+					raise ValueError("conf must be within 0..1")
+			elif key == "scale" and value not in ("?", "1", "100"):
+				raise ValueError("scale must be 1, 100 or ?")
+		except ValueError as error:
+			diag.error("meta", str(error), loc)
+	result.pop("conflict", None)
+	return result
+
+
+def _members(text: str) -> tuple[list[str], bool]:
+	if not text.endswith("]"):
+		raise ValueError("Unterminated collection")
+	body = text[1:-1]
+	if not body.strip():
+		return [], False
+	start, items = 0, []
+	for index in scanUnquoted(body):
+		if body[index] == ",":
+			items.append(body[start:index].strip())
+			start = index + 1
+	items.append(body[start:].strip())
+	partial = items[-1] == "..."
+	if partial:
+		items.pop()
+	if any(not item or item in ("...", "?", "null") or item.startswith("[") for item in items):
+		raise ValueError("Collections require concrete, non-nested members")
+	return items, partial
+
+
+# -----------------------------------------------------------------------------
+#
+# OPERATIONS
 #
 # -----------------------------------------------------------------------------
 
@@ -216,7 +275,7 @@ class _Resolver:
 		return {"n": statement.n, **({"s": statement.name} if statement.name else {}), "rel": decl.path,
 			"roles": {decl.participants[0].role: left, decl.participants[1].role: right}, **meta}
 
-	def context(self, statement: Statement, facet, meta: dict[str, Any]) -> dict[str, Any]:
+	def context(self, statement: Statement, facet: Decl | None, meta: dict[str, Any]) -> dict[str, Any]:
 		expected = annotation(facet.ann, "ctx") if facet else None
 		if not expected:
 			if "ctx" in meta:
@@ -370,163 +429,9 @@ class _Resolver:
 
 # -----------------------------------------------------------------------------
 #
-# OPERATIONS
+# JSON DECODING
 #
 # -----------------------------------------------------------------------------
-
-
-def _metadata(pairs: list[tuple[str, str | bool]], loc: Loc, diag: Diagnostics) -> dict[str, Any]:
-	result = dict(pairs)
-	for key, value in pairs:
-		try:
-			if key not in META_KEYS:
-				raise ValueError(f"Unknown metadata '{key}'")
-			if key == "conflict":
-				if value is not True:
-					raise ValueError("conflict is a flag")
-				continue
-			if not isinstance(value, str):
-				raise ValueError(f"'{key}' needs a value")
-			if key == "at":
-				_time(value)
-			elif key == "valid":
-				parseInterval(value)
-			elif key == "ctx" and (not isName(value) or value == "none"):
-				raise ValueError("ctx must be a handle other than none")
-			elif key == "conf":
-				canonicalNumber(value)
-				if not Decimal(0) <= Decimal(value) <= Decimal(1):
-					raise ValueError("conf must be within 0..1")
-			elif key == "scale" and value not in ("?", "1", "100"):
-				raise ValueError("scale must be 1, 100 or ?")
-		except ValueError as error:
-			diag.error("meta", str(error), loc)
-	result.pop("conflict", None)
-	return result
-
-
-def _members(text: str) -> tuple[list[str], bool]:
-	if not text.endswith("]"):
-		raise ValueError("Unterminated collection")
-	body = text[1:-1]
-	if not body.strip():
-		return [], False
-	start, items = 0, []
-	for index in scanUnquoted(body):
-		if body[index] == ",":
-			items.append(body[start:index].strip())
-			start = index + 1
-	items.append(body[start:].strip())
-	partial = items[-1] == "..."
-	if partial:
-		items.pop()
-	if any(not item or item in ("...", "?", "null") or item.startswith("[") for item in items):
-		raise ValueError("Collections require concrete, non-nested members")
-	return items, partial
-
-
-def parseObservations(source: Source) -> ObservationsDocument:
-	"""Parse `source` into statements; directives supply metadata defaults, never record headers."""
-	diag = Diagnostics()
-	doc = ObservationsDocument()
-	defaults: dict[str, Any] = {}
-	record, ctx = None, None
-	rawLines = source.text.split("\n")
-	if "\r" in source.text:
-		diag.error("syntax", "Line endings must be LF", Loc(source.name, 1))
-	for position, line in enumerate(sourceLines(source)):
-		if line.tabs or line.indent not in (0, 2):
-			diag.error("indent", "Body lines require exactly two spaces", line.loc)
-			record = None
-			continue
-		if line.indent == 2:
-			if record is None:
-				diag.error("indent", "Body line without a record header", line.loc)
-				continue
-			text = f"{record}.{line.text}"
-		else:
-			record = None
-			text = line.text
-		if text.startswith("@"):
-			parts = text.split(maxsplit=1)
-			directive, args = parts[0], parts[1] if len(parts) == 2 else ""
-			if directive == "@obs":
-				if position != 0:
-					diag.error("header", "@obs must be first", line.loc)
-					continue
-				parts = args.split(maxsplit=1)
-				namespace, rest = (parts[0], parts[1] if len(parts) == 2 else "") if parts else ("", "")
-				if not isPath(namespace):
-					diag.error("name", "Invalid ontology namespace", line.loc)
-				header = parseArguments(rest, line.loc, diag)
-				for key, _ in header:
-					if key not in HEADER_KEYS:
-						diag.error("header", f"Unknown @obs key '{key}'", line.loc)
-				_metadata([(key, value) for key, value in header if key != "rev"], line.loc, diag)
-				doc.obs = {"ontology": namespace, **dict(header), "scope": None}
-				defaults = {key: value for key, value in header if key != "rev"}
-			elif directive == "@src" and "=" in args:
-				for key, value in parseArguments(args, line.loc, diag):
-					if key in doc.sources and doc.sources[key] != value:
-						diag.error("duplicate", f"Source alias '{key}' redefined", line.loc)
-					doc.sources[key] = value
-			elif directive in ("@src", "@at") and isToken(args):
-				key = directive[1:]
-				_metadata([(key, args)], line.loc, diag)
-				defaults[key] = args
-			elif directive == "@ctx" and isName(args):
-				ctx = None if args == "none" else args
-			elif directive == "@scope" and isToken(args):
-				if doc.obs.get("scope") not in (None, args):
-					diag.error("scope", "Scope cannot change within one observations document", line.loc)
-				else:
-					doc.obs["scope"] = args
-			elif directive == "@type":
-				parts = args.split()
-				if len(parts) != 2 or not isName(parts[0]):
-					diag.error("directive", "@type requires a handle and an instance type, without metadata", line.loc)
-				else:
-					doc.declarations.append(TypeDeclaration(parts[0], parts[1], line.loc))
-			elif directive == "@implicit" and args and all(isName(handle) for handle in args.split()):
-				# NOTE: Display-only: neither introduces types nor asserts existence.
-				pass
-			else:
-				diag.error("directive", f"Invalid directive '{text}'", line.loc)
-			continue
-		if not doc.obs.get("ontology"):
-			diag.error("header", "File must start with @obs", line.loc)
-			continue
-		retract = text.startswith("- ")
-		body, ann = splitAnnotations(text[2:] if retract else text)
-		meta = defaults | _metadata(parseAnnotations(ann, line.loc, diag), line.loc, diag)
-		base = dict(n=len(doc.statements) + 1, loc=line.loc, meta=meta, retract=retract, ctx=ctx,
-			text=text, rawLine=rawLines[line.loc.line - 1])
-		if match := RE_IDENTITY.fullmatch(body):
-			left, operator, right = match.groups()
-			doc.statements.append(Statement(form="same" if operator == "=" else "distinct", s=left, type=None, obj=right, **base))
-		elif match := RE_LINK.fullmatch(body):
-			name, subject, verb, obj = match.groups()
-			doc.statements.append(Statement(form="link", s=subject, type=None, name=name, verb=verb, obj=obj, **base))
-		elif match := RE_HEADER.fullmatch(body):
-			handle, typeName, facetText = match.groups()
-			facets = [item.strip() for item in facetText.split(",")] if facetText is not None else []
-			if any(not isName(item) for item in facets) or len(set(facets)) != len(facets):
-				diag.error("syntax", "Invalid facet list", line.loc)
-			doc.statements.append(Statement(form="exists", s=handle, type=typeName, facets=facets, **base))
-			if not retract:
-				record = handle
-		elif match := RE_VALUE.fullmatch(body):
-			ref, path, raw = match.groups()
-			handle, typeName = RE_REF.fullmatch(ref).groups()
-			if raw is None and not retract:
-				diag.error("syntax", "Missing value", line.loc)
-			doc.statements.append(Statement(form="value", s=handle, type=typeName, p=path, raw=raw, **base))
-		else:
-			diag.error("syntax", f"Unrecognised statement '{text}'", line.loc)
-	if not doc.obs.get("ontology"):
-		diag.error("header", "Missing @obs directive")
-	doc.diagnostics = diag.check()
-	return doc
 
 
 def _jsonObject(value: Any, required: tuple[str, ...], optional: tuple[str, ...] = ()) -> dict[str, Any]:
@@ -537,7 +442,7 @@ def _jsonObject(value: Any, required: tuple[str, ...], optional: tuple[str, ...]
 	return value
 
 
-def _jsonString(value: Any, check=isToken) -> str:
+def _jsonString(value: Any, check: Callable[[str], bool] = isToken) -> str:
 	if not isinstance(value, str) or not check(value):
 		raise ValueError(f"Invalid JSON string '{value}'")
 	return value
@@ -696,6 +601,117 @@ def _jsonGap(value: Any) -> Gap:
 		diagnostics.append(Diagnostic("warning", _jsonString(item["code"], isName),
 			_jsonString(item["message"], lambda text: bool(text)), location))
 	return Gap(data["n"], data["raw"], data["text"], location, dict(meta), data.get("ctx"), tuple(diagnostics))
+
+
+# -----------------------------------------------------------------------------
+#
+# HIGH-LEVEL API
+#
+# -----------------------------------------------------------------------------
+
+
+def parseObservations(source: Source) -> ObservationsDocument:
+	"""Parse `source` into statements; directives supply metadata defaults, never record headers."""
+	diag = Diagnostics()
+	doc = ObservationsDocument()
+	defaults: dict[str, Any] = {}
+	record, ctx = None, None
+	rawLines = source.text.split("\n")
+	if "\r" in source.text:
+		diag.error("syntax", "Line endings must be LF", Loc(source.name, 1))
+	for position, line in enumerate(sourceLines(source)):
+		if line.tabs or line.indent not in (0, 2):
+			diag.error("indent", "Body lines require exactly two spaces", line.loc)
+			record = None
+			continue
+		if line.indent == 2:
+			if record is None:
+				diag.error("indent", "Body line without a record header", line.loc)
+				continue
+			text = f"{record}.{line.text}"
+		else:
+			record = None
+			text = line.text
+		if text.startswith("@"):
+			parts = text.split(maxsplit=1)
+			directive, args = parts[0], parts[1] if len(parts) == 2 else ""
+			if directive == "@obs":
+				if position != 0:
+					diag.error("header", "@obs must be first", line.loc)
+					continue
+				parts = args.split(maxsplit=1)
+				namespace, rest = (parts[0], parts[1] if len(parts) == 2 else "") if parts else ("", "")
+				if not isPath(namespace):
+					diag.error("name", "Invalid ontology namespace", line.loc)
+				header = parseArguments(rest, line.loc, diag)
+				for key, _ in header:
+					if key not in HEADER_KEYS:
+						diag.error("header", f"Unknown @obs key '{key}'", line.loc)
+				_metadata([(key, value) for key, value in header if key != "rev"], line.loc, diag)
+				doc.obs = {"ontology": namespace, **dict(header), "scope": None}
+				defaults = {key: value for key, value in header if key != "rev"}
+			elif directive == "@src" and "=" in args:
+				for key, value in parseArguments(args, line.loc, diag):
+					if key in doc.sources and doc.sources[key] != value:
+						diag.error("duplicate", f"Source alias '{key}' redefined", line.loc)
+					doc.sources[key] = value
+			elif directive in ("@src", "@at") and isToken(args):
+				key = directive[1:]
+				_metadata([(key, args)], line.loc, diag)
+				defaults[key] = args
+			elif directive == "@ctx" and isName(args):
+				ctx = None if args == "none" else args
+			elif directive == "@scope" and isToken(args):
+				if doc.obs.get("scope") not in (None, args):
+					diag.error("scope", "Scope cannot change within one observations document", line.loc)
+				else:
+					doc.obs["scope"] = args
+			elif directive == "@type":
+				parts = args.split()
+				if len(parts) != 2 or not isName(parts[0]):
+					diag.error("directive", "@type requires a handle and an instance type, without metadata", line.loc)
+				else:
+					doc.declarations.append(TypeDeclaration(parts[0], parts[1], line.loc))
+			elif directive == "@implicit" and args and all(isName(handle) for handle in args.split()):
+				# NOTE: Display-only: neither introduces types nor asserts existence.
+				pass
+			else:
+				diag.error("directive", f"Invalid directive '{text}'", line.loc)
+			continue
+		if not doc.obs.get("ontology"):
+			diag.error("header", "File must start with @obs", line.loc)
+			continue
+		retract = text.startswith("- ")
+		body, ann = splitAnnotations(text[2:] if retract else text)
+		meta = defaults | _metadata(parseAnnotations(ann, line.loc, diag), line.loc, diag)
+		base = dict(n=len(doc.statements) + 1, loc=line.loc, meta=meta, retract=retract, ctx=ctx,
+			text=text, rawLine=rawLines[line.loc.line - 1])
+		if match := RE_IDENTITY.fullmatch(body):
+			left, operator, right = match.groups()
+			doc.statements.append(Statement(form="same" if operator == "=" else "distinct", s=left, type=None, obj=right, **base))
+		elif match := RE_LINK.fullmatch(body):
+			name, subject, verb, obj = match.groups()
+			doc.statements.append(Statement(form="link", s=subject, type=None, name=name, verb=verb, obj=obj, **base))
+		elif match := RE_HEADER.fullmatch(body):
+			handle, typeName, facetText = match.groups()
+			facets = [item.strip() for item in facetText.split(",")] if facetText is not None else []
+			if any(not isName(item) for item in facets) or len(set(facets)) != len(facets):
+				diag.error("syntax", "Invalid facet list", line.loc)
+			doc.statements.append(Statement(form="exists", s=handle, type=typeName, facets=facets, **base))
+			if not retract:
+				record = handle
+		elif match := RE_VALUE.fullmatch(body):
+			ref, path, raw = match.groups()
+			handle, typeName = RE_REF.fullmatch(ref).groups()
+			if raw is None and not retract:
+				diag.error("syntax", "Missing value", line.loc)
+			doc.statements.append(Statement(form="value", s=handle, type=typeName, p=path, raw=raw, **base))
+		else:
+			diag.error("syntax", f"Unrecognised statement '{text}'", line.loc)
+	if not doc.obs.get("ontology"):
+		diag.error("header", "Missing @obs directive")
+	doc.diagnostics = diag.check()
+	return doc
 
 
 # EOF

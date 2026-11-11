@@ -50,6 +50,7 @@ own: not being the exchange, its company is source-qualified,
 @obs Finance at=2026-11-12 by=curator:review
 @src cu=curator:review/14
 @src cu
+@scope Finance
 
 Company_ACME:Company = Company_Broker_2FACM:Company
 ```
@@ -104,7 +105,9 @@ files, as an ontology does; a type with two policies is an error.
   without a referential, produces source-qualified handles only.
 - `implicit=<age>` sets how long an instance of the type may stay
   [implicit](#implicit-instances) before a warning: an ISO 8601 duration
-  (`P2D`), or `never`. It applies to the type and its specialisations.
+  (`P2D`, `PT0.5S`), or `never`. Durations use the spec-02 syntax: integer
+  components, with an optional fraction on seconds. It applies to the type and
+  its specialisations.
 - A specialisation shares its base's identity (spec-01); its policy is the base's.
   A policy on a specialisation of a type that already has one is an error.
 
@@ -237,8 +240,11 @@ by the four columns.
   `by=ref:<Namespace>`; retracting the link removes the entry. Each `key:` entry
   indexes the alternate key value claimed on the canonical handle. Rebuilding
   the registry from the log gives the same file.
-- The next minted handle of a type is the largest registered minted integer plus
-  one; minted integers are never reused.
+- The next minted handle of a type is the largest integer ever minted for that
+  type plus one; minted integers are never reused. The retained log, including
+  retracted alias links, preserves those allocations. An allocator reads that
+  history or preserves its equivalent high-water mark; the current registry
+  alone is insufficient after entries are removed.
 
 ## Validation
 

@@ -40,7 +40,14 @@
         }
       }
     },
-    "claims": { "type": "array", "items": { "$ref": "#/$defs/claim" } },
+    "claims": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/claim",
+        "if": { "required": ["p"] },
+        "then": { "required": ["v"] }
+      }
+    },
     "retractions": { "type": "array", "items": { "$ref": "#/$defs/claim" } },
     "gaps": {
       "description": "Unapplied statements retained by lenient loading, with raw source and effective defaults. Omitted when empty.",
@@ -84,7 +91,16 @@
     "attrPath": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$" },
     "token": { "type": "string", "pattern": "^[^\\s{},=]+$" },
     "time": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}(:\\d{2}(\\.\\d+)?)?(Z|[+-]\\d{2}:\\d{2})?)?$" },
-    "interval": { "type": "string", "pattern": "^(\\d{4}-\\d{2}-\\d{2}[^.]*)?(\\.\\.(\\d{4}-\\d{2}-\\d{2}[^.]*)?)?$", "minLength": 1 },
+    "interval": {
+      "description": "A time point or an interval with at least one endpoint; calendar validity is checked by the loader.",
+      "anyOf": [
+        { "$ref": "#/$defs/time" },
+        {
+          "type": "string",
+          "pattern": "^(?!\\.\\.$)(\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}(:\\d{2}(\\.\\d+)?)?(Z|[+-]\\d{2}:\\d{2})?)?)?\\.\\.(\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}(:\\d{2}(\\.\\d+)?)?(Z|[+-]\\d{2}:\\d{2})?)?)?$"
+        }
+      ]
+    },
     "ref": {
       "type": "object", "required": ["ref"], "additionalProperties": false,
       "properties": { "ref": { "$ref": "#/$defs/handle" } }
@@ -113,13 +129,21 @@
       "type": "object",
       "required": ["n"],
       "additionalProperties": false,
+      "dependentRequired": {
+        "exists": ["s"], "facet": ["s"], "p": ["s"],
+        "rel": ["roles"], "roles": ["rel"], "v": ["p"]
+      },
+      "dependentSchemas": {
+        "same": { "not": { "required": ["s"] } },
+        "distinct": { "not": { "required": ["s"] } }
+      },
       "oneOf": [
         { "required": ["s", "exists"] },
         { "required": ["s", "facet"] },
         { "required": ["s", "p"] },
         { "required": ["rel", "roles"] },
-        { "required": ["same"], "not": { "required": ["s"] } },
-        { "required": ["distinct"], "not": { "required": ["s"] } }
+        { "required": ["same"] },
+        { "required": ["distinct"] }
       ],
       "properties": {
         "n": { "type": "integer", "minimum": 1 },

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 # -----------------------------------------------------------------------------
@@ -12,6 +13,13 @@ from dataclasses import dataclass, field
 # -----------------------------------------------------------------------------
 
 type Annotations = list[tuple[str, str | bool]]
+
+
+NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+PATH = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*")
+TOKEN = re.compile(r"[^\s{},=]+")
+RE_ANNOTATION = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)(?:\s*=\s*(.*))?")
+RE_ARGUMENT = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=(.+)")
 
 
 @dataclass(slots=True, frozen=True)
@@ -70,60 +78,53 @@ class Diagnostics:
 	items: list[Diagnostic] = field(default_factory=list)
 
 	def error(self, code: str, message: str, loc: Loc | None = None) -> None:
+		"""Record an error with `code`, `message` and optional `loc`."""
 		self.items.append(Diagnostic("error", code, message, loc))
 
 	def warn(self, code: str, message: str, loc: Loc | None = None) -> None:
+		"""Record a warning with `code`, `message` and optional `loc`."""
 		self.items.append(Diagnostic("warning", code, message, loc))
 
 	def hasErrors(self) -> bool:
+		"""Whether any recorded diagnostic is an error."""
 		return any(item.level == "error" for item in self.items)
 
 	def check(self) -> list[Diagnostic]:
+		"""Return collected diagnostics, raising `FormatError` if any are errors."""
 		if self.hasErrors():
 			raise FormatError(self.items)
 		return self.items
 
 
-NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-PATH = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*")
-TOKEN = re.compile(r"[^\s{},=]+")
-RE_ANNOTATION = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)(?:\s*=\s*(.*))?")
-RE_ARGUMENT = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=(.+)")
-
 # -----------------------------------------------------------------------------
 #
-# OPERATIONS
+# HIGH-LEVEL API
 #
 # -----------------------------------------------------------------------------
 
 
-# Function: isName
-# True when `text` is a name.
 def isName(text: str) -> bool:
+	"""Whether `text` is a name."""
 	return NAME.fullmatch(text) is not None
 
 
-# Function: isPath
-# True when `text` is a `/`-separated path of names.
 def isPath(text: str) -> bool:
+	"""Whether `text` is a `/`-separated path of names."""
 	return PATH.fullmatch(text) is not None
 
 
-# Function: isToken
-# True when `text` is an annotation token (no whitespace, braces, commas or `=`).
 def isToken(text: str) -> bool:
+	"""Whether `text` is an annotation token, without whitespace, braces, commas or `=`."""
 	return TOKEN.fullmatch(text) is not None
 
 
-# Function: lastSegment
-# The last segment of `path`.
 def lastSegment(path: str) -> str:
+	"""Return the last segment of `path`."""
 	return path[path.rfind("/") + 1 :]
 
 
-# Function: scanUnquoted
-# Yields the indexes of `text` outside JSON-style double-quoted strings.
-def scanUnquoted(text: str):
+def scanUnquoted(text: str) -> Iterator[int]:
+	"""Yield indexes of `text` outside JSON-style double-quoted strings."""
 	quoted = False
 	i = 0
 	while i < len(text):
@@ -140,18 +141,16 @@ def scanUnquoted(text: str):
 		i += 1
 
 
-# Function: stripComment
-# Removes a `//` comment that starts the line or follows whitespace, outside quotes.
 def stripComment(text: str) -> str:
+	"""Remove an unquoted `//` comment starting the line or following whitespace in `text`."""
 	for i in scanUnquoted(text):
 		if text.startswith("//", i) and (i == 0 or text[i - 1].isspace()):
 			return text[:i]
 	return text
 
 
-# Function: splitDoc
-# Splits a trailing ` -- doc` from `text` → `(body, doc)`.
 def splitDoc(text: str) -> tuple[str, str | None]:
+	"""Split a trailing ` -- doc` from `text` into body and doc."""
 	for i in scanUnquoted(text):
 		if (
 			text.startswith("--", i)
@@ -162,9 +161,8 @@ def splitDoc(text: str) -> tuple[str, str | None]:
 	return text, None
 
 
-# Function: splitAnnotations
-# Splits a trailing `{...}` block from `text` → `(body, annotation text)`.
 def splitAnnotations(text: str) -> tuple[str, str | None]:
+	"""Split a trailing `{...}` block from `text` into body and annotation text."""
 	trimmed = text.rstrip()
 	if not trimmed.endswith("}"):
 		return trimmed, None
@@ -177,9 +175,8 @@ def splitAnnotations(text: str) -> tuple[str, str | None]:
 	return trimmed[:opening].rstrip(), trimmed[opening + 1 : -1]
 
 
-# Function: sourceLines
-# Splits `source` into significant lines; comments and blank lines are dropped.
 def sourceLines(source: Source) -> list[Line]:
+	"""Read significant lines from `source`, dropping comments/blanks and normalizing line endings."""
 	result: list[Line] = []
 	for index, raw in enumerate(source.text.replace("\r\n", "\n").replace("\r", "\n").split("\n")):
 		text = stripComment(raw).rstrip()
@@ -191,9 +188,8 @@ def sourceLines(source: Source) -> list[Line]:
 	return result
 
 
-# Function: parseAnnotations
-# Parses `k=v, flag` annotation text; bad tokens and duplicate keys are errors.
 def parseAnnotations(text: str | None, loc: Loc | None, diag: Diagnostics) -> Annotations:
+	"""Parse `text` as `k=v, flag` annotations, reporting invalid or duplicate tokens in `diag`."""
 	pairs: Annotations = []
 	if not text or not text.strip():
 		return pairs
@@ -214,27 +210,24 @@ def parseAnnotations(text: str | None, loc: Loc | None, diag: Diagnostics) -> An
 	return pairs
 
 
-# Function: printAnnotations
-# Prints `pairs` as `{...}` in `order`, unknown keys last by name; "" when empty.
 def printAnnotations(pairs: Annotations | None, order: list[str]) -> str:
+	"""Render `pairs` in `order`, unknown keys last by name; return an empty string if absent."""
 	if not pairs:
 		return ""
 	ranked = sorted(pairs, key=lambda pair: (order.index(pair[0]) if pair[0] in order else len(order), pair[0]))
 	return "{" + ", ".join(key if value is True else f"{key}={value}" for key, value in ranked) + "}"
 
 
-# Function: annotation
-# The value of annotation `key` in `pairs`, or None.
 def annotation(pairs: Annotations | None, key: str) -> str | bool | None:
+	"""Find annotation `key` in `pairs`, returning None when absent."""
 	for k, value in pairs or ():
 		if k == key:
 			return value
 	return None
 
 
-# Function: parseArguments
-# Parses directive arguments `k=v k=v`.
 def parseArguments(text: str, loc: Loc | None, diag: Diagnostics) -> list[tuple[str, str]]:
+	"""Parse directive arguments `text` as `k=v k=v`, reporting errors in `diag`."""
 	pairs: list[tuple[str, str]] = []
 	for item in text.split():
 		match = RE_ARGUMENT.fullmatch(item)
@@ -248,9 +241,8 @@ def parseArguments(text: str, loc: Loc | None, diag: Diagnostics) -> list[tuple[
 	return pairs
 
 
-# Function: printArguments
-# Prints directive arguments as `k=v k=v`.
 def printArguments(pairs: list[tuple[str, str]]) -> str:
+	"""Render directive argument `pairs` as `k=v k=v`."""
 	return " ".join(f"{key}={value}" for key, value in pairs)
 
 

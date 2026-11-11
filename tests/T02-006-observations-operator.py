@@ -17,9 +17,12 @@ from onto.observations.parser import parseObservations
 ONTOLOGY = loadOntology([Source("t", "@ontology A\nPerson\n  Name Text\n")])
 
 
-def testFeatureModulesAndOperatorReuseTheExistingFunctionalApi():
+def testFeatureModulesKeepPublicTypesAndImportsIdentical() -> None:
 	assert Observations is ObservationsModel
 	assert Operator is ObservationsOperator is ObservationsOperations
+
+
+def testOperatorDelegatesToTheExistingFunctionalApi() -> None:
 	operator = Operator(ONTOLOGY)
 	source = Source("t", "@obs A\np:Person\np.Name Old\np.Name New\n")
 	log = operator.load(source)
@@ -34,7 +37,7 @@ def testFeatureModulesAndOperatorReuseTheExistingFunctionalApi():
 	assert log == before
 
 
-def testOperatorKeepsModesAndDocumentsSeparate():
+def testOperatorKeepsModesAndDocumentsSeparate() -> None:
 	strict = Operator(ONTOLOGY)
 	lenient = Operator(ONTOLOGY, "lenient")
 	source = Source("t", "@obs A\np:Person\np.Missing X\n")

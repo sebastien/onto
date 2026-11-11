@@ -1,4 +1,4 @@
-"""Module: observations.operations — operations for the observations format."""
+"""Module: observations.operations — typed loading, identity reconciliation and interchange."""
 
 from __future__ import annotations
 
@@ -49,56 +49,7 @@ from .parser import (
 
 # -----------------------------------------------------------------------------
 #
-# DEFINITIONS
-#
-# -----------------------------------------------------------------------------
-
-
-class Operator:
-	"""Observation operations sharing an ontology and strict/lenient mode."""
-
-	def __init__(self, ontology: Ontology, mode: str = "strict"):
-		if mode not in ("strict", "lenient"):
-			raise ValueError("mode must be strict or lenient")
-		self.ontology = ontology
-		self.mode = mode
-
-	def resolve(self, doc: ObservationsDocument) -> Observations:
-		"""Resolve a parsed document against this operator's ontology."""
-		return resolveObservations(self.ontology, doc, self.mode)
-
-	def load(self, source: Source) -> Observations:
-		"""Parse and type a source in this operator's mode."""
-		return loadObservations(self.ontology, source, self.mode)
-
-	def reconcile(self, observations: Observations) -> Observations:
-		"""Apply withdrawals and identity links without mutating the input."""
-		return reconcileObservations(self.ontology, observations, self.mode)
-
-	def format(self, source: Source, form: str = "state") -> str:
-		"""Load and format a source as state or audit log text."""
-		return formatObservations(self.ontology, source, form, self.mode)
-
-	def printLog(self, observations: Observations) -> str:
-		"""Print a gap-free audit log."""
-		return printObservationsLog(self.ontology, observations)
-
-	def printState(self, observations: Observations) -> str:
-		"""Print an already reconciled, gap-free state."""
-		return printObservationsState(self.ontology, observations)
-
-	def toJson(self, observations: Observations) -> dict[str, Any]:
-		"""Export typed observations without changing them."""
-		return observationsToJson(observations)
-
-	def fromJson(self, data: Any, name: str = "observations.json") -> Observations:
-		"""Validate JSON in this operator's mode."""
-		return observationsFromJson(self.ontology, data, name, self.mode)
-
-
-# -----------------------------------------------------------------------------
-#
-# OPERATIONS
+# UTILITIES
 #
 # -----------------------------------------------------------------------------
 
@@ -213,6 +164,77 @@ def _canonicalise(model: Model, claims: list[Claim], instances: dict[str, dict[s
 	return result, registry
 
 
+def _gapContent(gaps: list[Gap]) -> list[str]:
+	return sorted(_valueKey({"text": gap.text, "meta": gap.meta, "ctx": gap.ctx,
+		"diagnostics": sorted({(item.code, item.message) for item in gap.diagnostics})}) for gap in gaps)
+
+
+def _claimContent(claims: list[Claim]) -> list[str]:
+	# NOTE: Ordinals are source-document locations; printing may regroup headers and renumber them.
+	def content(claim: Claim) -> Claim:
+		result = {key: value for key, value in claim.items() if key not in ("n", "conflict")}
+		if isinstance(result.get("v"), dict) and "set" in result["v"]:
+			result["v"] = result["v"] | {"set": sorted(result["v"]["set"], key=_valueKey)}
+		return result
+	return sorted(_valueKey(content(claim)) for claim in claims)
+
+
+# -----------------------------------------------------------------------------
+#
+# OPERATIONS
+#
+# -----------------------------------------------------------------------------
+
+
+class Operator:
+	"""Observation operations sharing an ontology and strict/lenient mode."""
+
+	def __init__(self, ontology: Ontology, mode: str = "strict"):
+		if mode not in ("strict", "lenient"):
+			raise ValueError("mode must be strict or lenient")
+		self.ontology = ontology
+		self.mode = mode
+
+	def resolve(self, doc: ObservationsDocument) -> Observations:
+		"""Resolve a parsed document against this operator's ontology."""
+		return resolveObservations(self.ontology, doc, self.mode)
+
+	def load(self, source: Source) -> Observations:
+		"""Parse and type a source in this operator's mode."""
+		return loadObservations(self.ontology, source, self.mode)
+
+	def reconcile(self, observations: Observations) -> Observations:
+		"""Apply withdrawals and identity links without mutating the input."""
+		return reconcileObservations(self.ontology, observations, self.mode)
+
+	def format(self, source: Source, form: str = "state") -> str:
+		"""Load and format a source as state or audit log text."""
+		return formatObservations(self.ontology, source, form, self.mode)
+
+	def printLog(self, observations: Observations) -> str:
+		"""Print a gap-free audit log."""
+		return printObservationsLog(self.ontology, observations)
+
+	def printState(self, observations: Observations) -> str:
+		"""Print an already reconciled, gap-free state."""
+		return printObservationsState(self.ontology, observations)
+
+	def toJson(self, observations: Observations) -> dict[str, Any]:
+		"""Export typed observations without changing them."""
+		return observationsToJson(observations)
+
+	def fromJson(self, data: Any, name: str = "observations.json") -> Observations:
+		"""Validate JSON in this operator's mode."""
+		return observationsFromJson(self.ontology, data, name, self.mode)
+
+
+# -----------------------------------------------------------------------------
+#
+# HIGH-LEVEL API
+#
+# -----------------------------------------------------------------------------
+
+
 def reconcileObservations(ontology: Ontology, observations: Observations, mode: str = "strict") -> Observations:
 	"""Apply withdrawals, identity links and supersession; `mode` controls identity conflicts."""
 	if mode not in ("strict", "lenient"):
@@ -301,21 +323,6 @@ def reconcileObservations(ontology: Ontology, observations: Observations, mode: 
 	claims = [claim | ({"conflict": True} if index in conflicted else {}) for index, claim in enumerate(claims)]
 	return Observations(deepcopy(observations.obs), dict(observations.sources), _markImplicit(instances, claims),
 		sorted(deepcopy(claims), key=lambda claim: claim["n"]), [], diag.items, deepcopy(observations.gaps))
-
-
-def _gapContent(gaps: list[Gap]) -> list[str]:
-	return sorted(_valueKey({"text": gap.text, "meta": gap.meta, "ctx": gap.ctx,
-		"diagnostics": sorted({(item.code, item.message) for item in gap.diagnostics})}) for gap in gaps)
-
-
-def _claimContent(claims: list[Claim]) -> list[str]:
-	# NOTE: Ordinals are source-document locations; printing may regroup headers and renumber them.
-	def content(claim: Claim) -> Claim:
-		result = {key: value for key, value in claim.items() if key not in ("n", "conflict")}
-		if isinstance(result.get("v"), dict) and "set" in result["v"]:
-			result["v"] = result["v"] | {"set": sorted(result["v"]["set"], key=_valueKey)}
-		return result
-	return sorted(_valueKey(content(claim)) for claim in claims)
 
 
 def resolveObservations(ontology: Ontology, doc: ObservationsDocument, mode: str = "strict") -> Observations:

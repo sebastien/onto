@@ -12,10 +12,13 @@ from onto.ontology.operations import Operator as OntologyOperations
 from onto.ontology.parser import parseOntology
 
 
-def testFeatureModulesKeepPublicTypesAndImportsIdentical():
+def testFeatureModulesKeepPublicTypesAndImportsIdentical() -> None:
 	assert Ontology is OntologyModel
 	assert Operator is OntologyOperator is OntologyOperations
 	assert Model.__module__ == "onto.ontology.model"
+
+
+def testOperatorDelegatesToTheExistingFunctionalApi() -> None:
 	sources = [Source("t", "@ontology A\nP\n  B Text\n  A Text\n")]
 	operator = Operator(parseOntology(sources))
 	assert operator.validate() == loadOntology(sources)
@@ -25,7 +28,7 @@ def testFeatureModulesKeepPublicTypesAndImportsIdentical():
 	assert operator.toJson() == ontologyToJson(operator.ontology)
 
 
-def testOperatorRetainsContextAndDoesNotMutateDuringFormatting():
+def testOperatorRetainsContextAndDoesNotMutateDuringFormatting() -> None:
 	ontology = loadOntology([Source("t", "@ontology A\nP\n  B Text\n  A Text\n")])
 	before = deepcopy(ontology)
 	operator = Operator(ontology)

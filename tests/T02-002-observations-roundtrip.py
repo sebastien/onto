@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
-import re
 from copy import deepcopy
-from pathlib import Path
+from typing import Any
 
 import pytest
 
-from onto import FormatError, Source, loadOntology
+from onto import FormatError, Ontology, Source, loadOntology
+from onto.observations import Observations
+from tests._helpers import _semanticClaims, _specExample
 from onto.observations import canonicalNumber, formatObservations, loadObservations, observationsFromJson, observationsToJson, parseInterval, parseObservations, printObservationsLog, printObservationsState, reconcileObservations
 
 # -----------------------------------------------------------------------------
@@ -18,10 +19,8 @@ from onto.observations import canonicalNumber, formatObservations, loadObservati
 #
 # -----------------------------------------------------------------------------
 
-ROOT = Path(__file__).parent.parent
-SPEC = (ROOT / "docs/specs/spec-02-observations.md").read_text()
-EXAMPLE = re.findall(r"```text\n(.*?)```", SPEC, re.S)[0]
-ONTOLOGY_EXAMPLE = re.findall(r"```text\n(.*?)```", (ROOT / "docs/specs/spec-01-ontology.md").read_text(), re.S)[0]
+EXAMPLE = _specExample("spec-02-observations")
+ONTOLOGY_EXAMPLE = _specExample("spec-01-ontology")
 ONTOLOGY = loadOntology([Source("finance.onto", ONTOLOGY_EXAMPLE)])
 MODEL = loadOntology([Source("model.onto", """@ontology A
 Money = Amount {cur=USD}
@@ -59,15 +58,15 @@ Income(Payer: Party, Recipient: + Person) {kind=state}
 """)])
 
 
-def load(text: str, ontology=MODEL):
+def load(text: str, ontology: Ontology = MODEL) -> Observations:
 	return loadObservations(ontology, Source("test.obs", text))
 
 
-def state(text: str):
+def state(text: str) -> Observations:
 	return reconcileObservations(MODEL, load(text))
 
 
-def values(log, path: str) -> list:
+def values(log: Observations, path: str) -> list[Any]:
 	return [claim["v"] for claim in log.claims if claim.get("p") == path]
 
 
@@ -102,7 +101,7 @@ def testCompleteSpecExample():
 
 def testSpecJsonExcerptMatchesTheCompleteLog():
 	data = observationsToJson(load(EXAMPLE, ONTOLOGY))
-	excerpt = json.loads(re.findall(r"```json\n(.*?)```", SPEC, re.S)[0])
+	excerpt = json.loads(_specExample("spec-02-observations", kind="json"))
 	for key in ("format", "obs", "sources"):
 		assert data[key] == excerpt[key]
 	for handle, instance in excerpt["instances"].items():
@@ -314,10 +313,6 @@ def testNumericEqualityDoesNotDependOnExponentSpelling():
 # -----------------------------------------------------------------------------
 
 
-def semanticClaims(log):
-	return sorted(json.dumps({key: value for key, value in claim.items() if key != "n"}, sort_keys=True) for claim in log.claims)
-
-
 @pytest.mark.parametrize("form", ["log", "state"])
 def testSpecNormalFormsAreIdempotent(form: str):
 	text = formatObservations(ONTOLOGY, Source("finance.obs", EXAMPLE), form)
@@ -335,7 +330,7 @@ def testLogRoundTripPreservesClaimsAndRetractions():
 	before = load(EXAMPLE, ONTOLOGY)
 	text = printObservationsLog(ONTOLOGY, before)
 	after = load(text, ONTOLOGY)
-	assert semanticClaims(before) == semanticClaims(after)
+	assert _semanticClaims(before) == _semanticClaims(after)
 	assert [{key: value for key, value in claim.items() if key != "n"} for claim in before.retractions] == [{key: value for key, value in claim.items() if key != "n"} for claim in after.retractions]
 	assert before.instances == after.instances
 
@@ -373,18 +368,28 @@ def testContextualNormalForms(form: str):
 		assert "@ctx" not in printed
 
 
+@pytest.mark.parametrize("form", ["log", "state"])
+@pytest.mark.parametrize("value", ["{src=x}", "a\t{src=x}", "a\u00a0{src=x}", "a\v{src=x}", "a\f{src=x}"])
+def testAnnotationLikeTextPreservesValuesAndMetadata(form: str, value: str) -> None:
+	before = load("@obs A\np:Person\np.Name " + json.dumps(value) + "\n")
+	printed = formatObservations(MODEL, Source("t", "@obs A\np:Person\np.Name " + json.dumps(value) + "\n"), form)
+	after = load(printed)
+	assert _semanticClaims(after) == _semanticClaims(before)
+	assert observationsFromJson(MODEL, observationsToJson(before)) == before
+
+
 def testStateOnlyEmitsRealExistenceClaims():
 	log = state("@obs A\np:Person\n- p\np.Name Back\n")
 	text = printObservationsState(MODEL, log)
 	assert "p:Person.Name Back" in text
-	assert semanticClaims(load(text)) == semanticClaims(log)
+	assert _semanticClaims(load(text)) == _semanticClaims(log)
 
 
 def testStatePreservesMultipleSourcesAndConflicts():
 	log = state("@obs A\np:Person {src=a}\np {src=b}\np.Name A {src=a}\np.Name B {src=b}\n")
 	text = printObservationsState(MODEL, log)
 	assert text.count("{conflict") + text.count(", conflict}") == 2
-	assert semanticClaims(reconcileObservations(MODEL, load(text))) == semanticClaims(log)
+	assert _semanticClaims(reconcileObservations(MODEL, load(text))) == _semanticClaims(log)
 	assert formatObservations(MODEL, Source("t", text)) == text
 
 

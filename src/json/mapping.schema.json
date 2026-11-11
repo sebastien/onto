@@ -371,12 +371,13 @@
     "signatureType": {
       "description": "A spec-01 type expression; `collection` marks `T*`.",
       "type": "object",
+      "unevaluatedProperties": false,
       "properties": {
         "collection": {
           "const": true
         }
       },
-      "anyOf": [
+      "oneOf": [
         {
           "required": [
             "builtin"
@@ -439,7 +440,7 @@
           "additionalProperties": false,
           "properties": {
             "ref": {
-              "type": "string"
+              "$ref": "#/$defs/name"
             }
           }
         },
@@ -463,7 +464,19 @@
           "additionalProperties": false,
           "properties": {
             "set": {
-              "type": "array"
+              "type": "array",
+              "items": {
+                "anyOf": [
+                  { "type": "string" },
+                  { "type": "boolean" },
+                  {
+                    "type": "object",
+                    "required": ["ref"],
+                    "additionalProperties": false,
+                    "properties": { "ref": { "$ref": "#/$defs/name" } }
+                  }
+                ]
+              }
             },
             "partial": {
               "const": true

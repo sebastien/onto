@@ -6,6 +6,7 @@ from copy import deepcopy
 
 import pytest
 
+from onto.observations import Observations
 from onto import FormatError, Source, formatObservations, loadObservations, loadOntology, observationsCoverage, observationsFromJson, observationsToJson, printObservationsLog, printObservationsState, reconcileObservations
 
 # -----------------------------------------------------------------------------
@@ -31,11 +32,11 @@ Household -has-> Person
 """)])
 
 
-def load(text: str, mode: str = "lenient"):
+def load(text: str, mode: str = "lenient") -> Observations:
 	return loadObservations(ONTOLOGY, Source("input.obs", "@obs A\n" + text), mode)
 
 
-def gapKeys(log) -> list:
+def gapKeys(log: Observations) -> list[tuple[str, dict[str, str | bool], str | None, list[str]]]:
 	return [(gap.text, gap.meta, gap.ctx, [item.code for item in gap.diagnostics]) for gap in log.gaps]
 
 # -----------------------------------------------------------------------------

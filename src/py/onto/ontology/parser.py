@@ -1,7 +1,8 @@
-"""Module: ontology.parser — parser for the ontology format."""
+"""Module: ontology.parser — source parsing and structural ontology JSON decoding."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import re
 from dataclasses import (
 	dataclass,
@@ -82,7 +83,7 @@ class _Context:
 
 # -----------------------------------------------------------------------------
 #
-# OPERATIONS
+# UTILITIES
 #
 # -----------------------------------------------------------------------------
 
@@ -295,7 +296,7 @@ def _parseDeclaration(line: Line, ctx: _Context) -> Decl | None:
 	return None
 
 
-def _bodyParser(decl: Decl, ctx: _Context):
+def _bodyParser(decl: Decl, ctx: _Context) -> Callable[[Line], None]:
 	def parseField(line: Line) -> None:
 		if decl.definition is not None:
 			ctx.diag.error("syntax", "Only structures (`T =` with no right side) have a body", line.loc)
@@ -312,7 +313,7 @@ def _bodyParser(decl: Decl, ctx: _Context):
 	return parseField if decl.kind == "type" else parseAttr
 
 
-def _parseDirective(line: Line, position: int, ctx: _Context, ontology: Ontology, seen: dict[str, Decl]):
+def _parseDirective(line: Line, position: int, ctx: _Context, ontology: Ontology, seen: dict[str, Decl]) -> Callable[[Line], None] | None:
 	loc, diag = line.loc, ctx.diag
 	text, doc = splitDoc(line.text)
 
@@ -442,6 +443,13 @@ def _parseFile(source: Source, ontology: Ontology, seen: dict[str, Decl], diag: 
 		seen[decl.path] = decl
 		ontology.decls.append(decl)
 		current = _bodyParser(decl, ctx)
+
+
+# -----------------------------------------------------------------------------
+#
+# JSON DECODING
+#
+# -----------------------------------------------------------------------------
 
 
 def _members(value: Any, what: str, required: tuple[str, ...], optional: tuple[str, ...] = ()) -> dict[str, Any]:
@@ -609,9 +617,15 @@ def _fromJson(value: Any) -> Ontology:
 	)
 
 
-# Function: parseOntology
-# Parses `sources` (one or several files of one ontology) into an ontology with full paths.
+# -----------------------------------------------------------------------------
+#
+# HIGH-LEVEL API
+#
+# -----------------------------------------------------------------------------
+
+
 def parseOntology(sources: list[Source]) -> Ontology:
+	"""Parse `sources` as one ontology with full paths, retaining locations and diagnostics."""
 	diag = Diagnostics()
 	ontology = Ontology()
 	seen: dict[str, Decl] = {}

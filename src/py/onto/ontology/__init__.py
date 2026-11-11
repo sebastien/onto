@@ -1,5 +1,8 @@
 """Module: ontology — public API for the ontology format."""
 
+from __future__ import annotations
+
+# NOTE: Keep historical exports; `onto` is the recommended high-level facade.
 from .model import (
 	TypeExpr,
 	Dep,
@@ -81,6 +84,7 @@ __all__ = [
 	"Decl",
 	"Ontology",
 	"ResolvedType",
+	# Compatibility exports: grammar, annotation policy and canonical ordering tables.
 	"ONTOLOGY_FORMAT",
 	"BUILTINS",
 	"ANNOTATION_PLACES",
@@ -114,14 +118,17 @@ __all__ = [
 	"RE_INPUT",
 	"RE_VIEW_ARROW",
 	"RE_VIEW_LINE",
+	# Domain helpers and operations retain their existing import paths.
 	"arrowPath",
 	"isAssociation",
 	"isSymmetric",
 	"Model",
 	"parseOntology",
 	"normaliseOntology",
+	# Compatibility exports: lower-level, context-retaining formatting operations.
 	"Namer",
 	"Printer",
+	# Functional API.
 	"printOntology",
 	"viewRelations",
 	"placesOf",

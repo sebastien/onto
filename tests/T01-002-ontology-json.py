@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import copy
 import json
-import re
-from pathlib import Path
+from typing import Any
 
 import pytest
 
-from onto.ontology import formatOntology, loadOntology, normaliseOntology, ontologyFromJson, ontologyToJson, printOntology
+from onto.ontology import Ontology, formatOntology, loadOntology, normaliseOntology, ontologyFromJson, ontologyToJson, printOntology
 from onto.text import FormatError, Source
+from tests._helpers import _specExample
 
 # -----------------------------------------------------------------------------
 #
@@ -18,25 +18,24 @@ from onto.text import FormatError, Source
 #
 # -----------------------------------------------------------------------------
 
-SPEC = (Path(__file__).parent.parent / "docs/specs/spec-01-ontology.md").read_text()
-EXAMPLE = re.findall(r"```text\n(.*?)```", SPEC, re.S)[0]
-EXCERPT = json.loads(re.findall(r"```json\n(.*?)```", SPEC, re.S)[0])
+EXAMPLE = _specExample("spec-01-ontology")
+EXCERPT = json.loads(_specExample("spec-01-ontology", kind="json"))
 
 
-def load(text: str):
+def load(text: str) -> Ontology:
 	return loadOntology([Source("t.onto", text)])
 
 
-def toJson(text: str) -> dict:
+def toJson(text: str) -> dict[str, Any]:
 	# NOTE: Through `json` so that the comparison is against plain JSON data.
 	return json.loads(json.dumps(ontologyToJson(load(text))))
 
 
-def printed(ontology) -> str:
+def printed(ontology: Ontology) -> str:
 	return printOntology(normaliseOntology(ontology))
 
 
-def errors(data) -> list[str]:
+def errors(data: Any) -> list[str]:
 	try:
 		ontologyFromJson(data)
 	except FormatError as error:
@@ -44,7 +43,7 @@ def errors(data) -> list[str]:
 	return []
 
 
-def changed(data: dict, target: str, **changes) -> dict:
+def changed(data: dict[str, Any], target: str, **changes: Any) -> dict[str, Any]:
 	"""A copy of `data` where the declaration `target` has `changes` (None removes a member)."""
 	result = copy.deepcopy(data)
 	for item in result["decls"]:

@@ -362,7 +362,9 @@ DocumentRecordsCollect: <Type>RecordsSelect → <Type>RecordsProject, for each s
   retraction `- h` instead.
 - Metadata: `src` is the document's token, `at` the record's `at` or the run's
   time from the `ClockRead` effect (so replay reproduces it), `by` is
-  `bind:<Namespace>`, and `valid` and `ctx` come from the record.
+  `bind:<Namespace>`, and `valid` comes from the record. A record's `ctx` is a
+  default only for contextual facet applicability and value claims, never for
+  existence or non-contextual claims (spec-02).
 - Instances referenced through `ref` and not produced by any record are typed by
   `@type` declarations; they are [implicit](spec-02-observations.md#implicit-instances).
 

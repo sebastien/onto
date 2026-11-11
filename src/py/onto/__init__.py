@@ -1,5 +1,8 @@
 """Module: onto — compact ontology and observation formats (specs 01–02)."""
 
+from __future__ import annotations
+
+from .text import Diagnostic, FormatError, Source
 from .ontology import (
 	Operator as OntologyOperator,
 	Model,
@@ -13,7 +16,6 @@ from .ontology import (
 	printOntology,
 	validateOntology,
 )
-from .text import Diagnostic, FormatError, Source
 from .observations import (
 	Operator as ObservationsOperator,
 	Gap,

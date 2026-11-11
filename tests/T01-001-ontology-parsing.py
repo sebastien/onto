@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 import pytest
 
-from onto.ontology import Model, TypeExpr, formatOntology, loadOntology
+from onto.ontology import Decl, Model, Ontology, TypeExpr, formatOntology, loadOntology
 from onto.text import FormatError, Source
+from tests._helpers import _specExample
 
 # -----------------------------------------------------------------------------
 #
@@ -16,13 +16,12 @@ from onto.text import FormatError, Source
 #
 # -----------------------------------------------------------------------------
 
-SPEC = (Path(__file__).parent.parent / "docs/specs/spec-01-ontology.md").read_text()
 # NOTE: The first `text` block of spec-01 is the complete example; later blocks are snippets.
-EXAMPLE = re.findall(r"```text\n(.*?)```", SPEC, re.S)[0]
+EXAMPLE = _specExample("spec-01-ontology")
 HEAD = "@ontology A\n@use Dimensions as D\n"
 
 
-def load(*texts: str):
+def load(*texts: str) -> Ontology:
 	return loadOntology([Source(f"t{index}.onto", text) for index, text in enumerate(texts)])
 
 
@@ -38,7 +37,7 @@ def errors(*texts: str) -> list[str]:
 	return []
 
 
-def decl(ontology, path: str):
+def decl(ontology: Ontology, path: str) -> Decl:
 	return next(item for item in ontology.decls if item.path == path)
 
 

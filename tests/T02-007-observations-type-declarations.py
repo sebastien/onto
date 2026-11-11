@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from typing import Any
 
 import pytest
 
+from onto.observations import Observations
 from onto import FormatError, Source, formatObservations, loadObservations, loadOntology, observationsCoverage, observationsFromJson, observationsToJson, printObservationsLog, printObservationsState, reconcileObservations
 from onto.observations.parser import parseObservations
 
@@ -40,11 +42,11 @@ T = Text
 """)])
 
 
-def load(text: str, mode: str = "strict"):
+def load(text: str, mode: str = "strict") -> Observations:
 	return loadObservations(ONTOLOGY, Source("type.obs", "@obs A\n" + text), mode)
 
 
-def content(log) -> dict:
+def content(log: Observations) -> dict[str, Any]:
 	data = observationsToJson(log)
 	for key in ("claims", "retractions"):
 		data[key] = sorted([{name: value for name, value in claim.items() if name != "n"} for claim in data[key]], key=lambda claim: json.dumps(claim, sort_keys=True))

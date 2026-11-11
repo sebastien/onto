@@ -1,4 +1,4 @@
-PYTEST ?= uv run --no-project --with pytest python -m pytest
+PYTEST ?= uv run --group dev python -m pytest
 
 .PHONY: test
 

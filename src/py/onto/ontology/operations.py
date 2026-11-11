@@ -1,7 +1,8 @@
-"""Module: ontology.operations — operations for the ontology format."""
+"""Module: ontology.operations — semantic validation, loading and ontology interchange."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import (
 	Any,
 )
@@ -42,68 +43,9 @@ from .parser import (
 
 # -----------------------------------------------------------------------------
 #
-# DEFINITIONS
+# UTILITIES
 #
 # -----------------------------------------------------------------------------
-
-
-class Operator:
-	"""Operations sharing an ontology; functions remain available for one-off calls."""
-
-	def __init__(self, ontology: Ontology):
-		self.ontology = ontology
-
-	def validate(self) -> Ontology:
-		"""Validate the current ontology, rebuilding lookups if the AST changed."""
-		return validateOntology(self.ontology)
-
-	def normalise(self) -> Ontology:
-		"""Return the canonical AST without replacing the context's ontology."""
-		return normaliseOntology(self.ontology)
-
-	def print(self) -> str:
-		"""Print canonical ontology text."""
-		return printOntology(self.normalise())
-
-	def toJson(self, ids: dict[str, str] | None = None) -> dict[str, Any]:
-		"""Export the ontology with its optional identity sidecar."""
-		return ontologyToJson(self.ontology, ids)
-
-
-# -----------------------------------------------------------------------------
-#
-# OPERATIONS
-#
-# -----------------------------------------------------------------------------
-
-
-# Function: viewRelations
-# The binary relations a view line `S.verb` (forward or inverse) or `S.verb.T` selects, or None.
-def viewRelations(model: Model, line: ViewLine) -> list[Decl] | None:
-	if "." in line.path:
-		decl = model.get(line.path)
-		return [decl] if decl and decl.arrow else []
-	if not line.member or not line.member[0].islower():
-		return None
-	return [decl for decl, _ in model.verbs(line.path, line.member)]
-
-
-# Function: placesOf
-# Where annotations of `item` (a declaration or an attribute) may apply, for `ANNOTATION_PLACES`.
-def placesOf(item: Decl | Attr) -> set[str]:
-	if isinstance(item, Attr):
-		places = {"attribute"}
-		if item.derived:
-			places.add("derived")
-		if item.type and item.type.values is not None:
-			places.add("vocabulary")
-		return places
-	places = {item.kind}
-	if item.kind == "type" and item.definition and item.definition.values is not None:
-		places.add("vocabulary")
-	if item.arrow:
-		places.add("binary")
-	return places
 
 
 def _checkAnnotations(model: Model, ann: Annotations, places: set[str], loc: Loc | None, diag: Diagnostics) -> None:
@@ -177,7 +119,7 @@ def _checkType(model: Model, type: TypeExpr | None, ann: Annotations, loc: Loc |
 		diag.error("reference", f"{what}: '{type.path}' is a {kind}, not a type, entity or association", loc)
 
 
-def _checkAttrs(model: Model, owner: Decl, attrs: list[Attr], localNames, diag: Diagnostics) -> None:
+def _checkAttrs(model: Model, owner: Decl, attrs: list[Attr], localNames: Callable[[], set[str]], diag: Diagnostics) -> None:
 	names: set[str] = set()
 	for attr in attrs:
 		if attr.name in names:
@@ -369,36 +311,95 @@ def _validate(model: Model, diag: Diagnostics) -> None:
 				)
 
 
-# Function: validateOntology
-# Checks references, names and structure of `ontology`; raises `FormatError` on errors.
+# -----------------------------------------------------------------------------
+#
+# OPERATIONS
+#
+# -----------------------------------------------------------------------------
+
+
+class Operator:
+	"""Operations sharing an ontology; functions remain available for one-off calls."""
+
+	def __init__(self, ontology: Ontology):
+		self.ontology = ontology
+
+	def validate(self) -> Ontology:
+		"""Validate the current ontology, rebuilding lookups if the AST changed."""
+		return validateOntology(self.ontology)
+
+	def normalise(self) -> Ontology:
+		"""Return the canonical AST without replacing the context's ontology."""
+		return normaliseOntology(self.ontology)
+
+	def print(self) -> str:
+		"""Normalize the current ontology and render canonical text."""
+		return printOntology(self.normalise())
+
+	def toJson(self, ids: dict[str, str] | None = None) -> dict[str, Any]:
+		"""Export the ontology with its optional identity sidecar."""
+		return ontologyToJson(self.ontology, ids)
+
+
+# -----------------------------------------------------------------------------
+#
+# HIGH-LEVEL API
+#
+# -----------------------------------------------------------------------------
+
+
+def viewRelations(model: Model, line: ViewLine) -> list[Decl] | None:
+	"""Find binary relations selected by `line`, or None for a non-binary selection."""
+	if "." in line.path:
+		decl = model.get(line.path)
+		return [decl] if decl and decl.arrow else []
+	if not line.member or not line.member[0].islower():
+		return None
+	return [decl for decl, _ in model.verbs(line.path, line.member)]
+
+
+def placesOf(item: Decl | Attr) -> set[str]:
+	"""Return annotation placement categories for declaration or attribute `item`."""
+	if isinstance(item, Attr):
+		places = {"attribute"}
+		if item.derived:
+			places.add("derived")
+		if item.type and item.type.values is not None:
+			places.add("vocabulary")
+		return places
+	places = {item.kind}
+	if item.kind == "type" and item.definition and item.definition.values is not None:
+		places.add("vocabulary")
+	if item.arrow:
+		places.add("binary")
+	return places
+
+
 def validateOntology(ontology: Ontology) -> Ontology:
+	"""Validate references and structure of `ontology`, updating diagnostics or raising `FormatError`."""
 	diag = Diagnostics(list(ontology.diagnostics))
 	_validate(Model(ontology), diag)
 	ontology.diagnostics = diag.check()
 	return ontology
 
 
-# Function: loadOntology
-# Parses and validates `sources`.
 def loadOntology(sources: list[Source]) -> Ontology:
+	"""Parse and validate `sources` as one ontology."""
 	return validateOntology(parseOntology(sources))
 
 
-# Function: formatOntology
-# Normal-form text of `sources`.
 def formatOntology(sources: list[Source]) -> str:
+	"""Parse, validate and render `sources` in normal form."""
 	return printOntology(normaliseOntology(loadOntology(sources)))
 
 
-# Function: ontologyToJson
-# The JSON form of `ontology`, with the identity sidecar `ids` when given.
 def ontologyToJson(ontology: Ontology, ids: dict[str, str] | None = None) -> dict[str, Any]:
+	"""Export normalized `ontology`, overriding its identity sidecar with `ids` when supplied."""
 	return _toJson(normaliseOntology(ontology), ids if ids is not None else ontology.ids)
 
 
-# Function: ontologyFromJson
-# Loads the JSON form through its normal-form text; data that does not round-trip is rejected.
 def ontologyFromJson(data: Any, name: str = "ontology.json") -> Ontology:
+	"""Load `data` through validated normal-form text, rejecting lossy JSON with location `name`."""
 	loc = Loc(name, 0)
 
 	def fail(message: str) -> FormatError:

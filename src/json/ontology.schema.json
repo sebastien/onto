@@ -95,6 +95,8 @@
       "type": "object",
       "required": ["name", "card"],
       "additionalProperties": false,
+      "if": { "required": ["derived"] },
+      "then": { "required": ["deps"] },
       "properties": {
         "name": { "$ref": "#/$defs/name" },
         "card": { "$ref": "#/$defs/card" },

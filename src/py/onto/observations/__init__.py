@@ -1,5 +1,8 @@
 """Module: observations — public API for the observations format."""
 
+from __future__ import annotations
+
+# NOTE: Keep historical exports; `_name` helpers shared by feature modules remain package-private.
 from .model import (
 	Claim,
 	Statement,
@@ -49,6 +52,7 @@ __all__ = [
 	"Gap",
 	"ObservationsDocument",
 	"Observations",
+	# Compatibility exports: grammar and lexical helpers, rather than the recommended facade.
 	"OBSERVATIONS_FORMAT",
 	"HEADER_KEYS",
 	"META_KEYS",
@@ -65,6 +69,7 @@ __all__ = [
 	"RE_DURATION",
 	"canonicalNumber",
 	"parseInterval",
+	# Functional API.
 	"parseObservations",
 	"printObservationsState",
 	"printObservationsLog",

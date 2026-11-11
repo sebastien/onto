@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import re
 from copy import deepcopy
-from pathlib import Path
 
 import pytest
 
-from onto import FormatError, Source, loadObservations, loadOntology, observationsCoverage
+from onto import CoverageItem, FormatError, Observations, Source, loadObservations, loadOntology, observationsCoverage
+from tests._helpers import _specExample
 
 # -----------------------------------------------------------------------------
 #
@@ -73,11 +72,11 @@ ReviewFacet of Review
 """)])
 
 
-def load(text: str):
+def load(text: str) -> Observations:
 	return loadObservations(ONTOLOGY, Source("test.obs", "@obs A\n" + text))
 
 
-def report(text: str, view: str = "Fields") -> dict:
+def report(text: str, view: str = "Fields") -> dict[tuple[str, str | None, str | None], CoverageItem]:
 	return {(item.path, item.subject, item.ctx): item for item in observationsCoverage(ONTOLOGY, load(text), view)}
 
 # -----------------------------------------------------------------------------
@@ -222,9 +221,8 @@ def testRecursiveStructureSelectionTerminates():
 
 
 def testCompleteSpecExamplesProducePerPersonCoverage():
-	root = Path(__file__).parent.parent / "docs/specs"
-	ontologyText = re.findall(r"```text\n(.*?)```", (root / "spec-01-ontology.md").read_text(), re.S)[0]
-	observationText = re.findall(r"```text\n(.*?)```", (root / "spec-02-observations.md").read_text(), re.S)[0]
+	ontologyText = _specExample("spec-01-ontology")
+	observationText = _specExample("spec-02-observations")
 	ontology = loadOntology([Source("finance.onto", ontologyText)])
 	log = loadObservations(ontology, Source("statement.obs", observationText))
 	items = {(item.path, item.subject, item.ctx): item for item in observationsCoverage(ontology, log, "PortfolioReview")}

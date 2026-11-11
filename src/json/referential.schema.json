@@ -46,7 +46,7 @@
         "from": { "$ref": "#/$defs/path" },
         "implicit": {
           "description": "How long an instance may stay implicit before a warning: an ISO 8601 duration, or `never`.",
-          "anyOf": [{ "const": "never" }, { "type": "string", "pattern": "^P(?!$)(\\d+Y)?(\\d+M)?(\\d+W)?(\\d+D)?(T(?=\\d)(\\d+H)?(\\d+M)?(\\d+S)?)?$" }]
+          "anyOf": [{ "const": "never" }, { "type": "string", "pattern": "^P(?=\\d|T\\d)(\\d+Y)?(\\d+M)?(\\d+W)?(\\d+D)?(T(?=\\d)(\\d+H)?(\\d+M)?(\\d+(\\.\\d+)?S)?)?$" }]
         },
         "doc": { "$ref": "#/$defs/doc" }
       }

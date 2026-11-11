@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import json
 from copy import deepcopy
 from random import Random
 
 import pytest
 
 from onto import FormatError, Source, formatObservations, loadObservations, loadOntology, observationsFromJson, observationsToJson, printObservationsLog, printObservationsState, reconcileObservations
+from onto.observations import Observations
+from tests._helpers import _semanticClaims
 
 # -----------------------------------------------------------------------------
 #
@@ -33,17 +34,17 @@ Person -knows-> Person
 """)])
 
 
-def load(text: str):
+def load(text: str) -> Observations:
 	return loadObservations(ONTOLOGY, Source("audit.obs", "@obs A\n" + text))
 
 
-def state(text: str):
+def state(text: str) -> Observations:
 	return reconcileObservations(ONTOLOGY, load(text))
 
 
 # -----------------------------------------------------------------------------
 #
-# AUDIT REGRESSIONS
+# TYPING AND WITHDRAWALS
 #
 # -----------------------------------------------------------------------------
 
@@ -108,6 +109,13 @@ def testReconciliationRemainsPureForAuditCases():
 	assert observationsToJson(reconcileObservations(ONTOLOGY, resolved)) == observationsToJson(resolved)
 
 
+# -----------------------------------------------------------------------------
+#
+# CHRONOLOGY AND NORMAL FORMS
+#
+# -----------------------------------------------------------------------------
+
+
 def testSubMicrosecondTimesOrderExactlyRatherThanByStatementPosition():
 	log = state("p:Person\np.Name Later {at=2026-01-01T00:00:00.0000002Z}\np.Name Earlier {at=2026-01-01T00:00:00.0000001Z}\n")
 	assert next(claim for claim in log.claims if claim.get("p") == "Name")["v"] == "Later"
@@ -159,13 +167,17 @@ def testCollectionsSortByEncodedValueWithoutLosingTypedReferenceMentions(form: s
 	assert formatObservations(ONTOLOGY, Source("t", printed), form) == printed
 
 
+# -----------------------------------------------------------------------------
+#
+# REPLAY AND COLLECTION PROVENANCE
+#
+# -----------------------------------------------------------------------------
+
+
 def testDeterministicReplayAuditPreservesClaimsAndFormatting():
 	random = Random(13)
 	statements = ["p.Name A", "p.Name B", "p.Name ?", "p.Name null", "p.Values 1", "p.Values 2",
 		"p.Values [1]", "p.Values [2]", "p.Values [1, ...]", "- p.Name", "- p.Values 1"]
-
-	def content(log) -> list[str]:
-		return sorted(json.dumps({key: value for key, value in claim.items() if key != "n"}, sort_keys=True) for claim in log.claims)
 
 	for _ in range(120):
 		text = "p:Person\n" + "\n".join(random.choice(statements) + " {src=" + random.choice(["a", "b"]) + "}" for _ in range(random.randrange(1, 9))) + "\n"
@@ -174,7 +186,7 @@ def testDeterministicReplayAuditPreservesClaimsAndFormatting():
 		assert observationsToJson(observationsFromJson(ONTOLOGY, observationsToJson(log))) == observationsToJson(log)
 		printed = printObservationsState(ONTOLOGY, resolved)
 		loaded = reconcileObservations(ONTOLOGY, loadObservations(ONTOLOGY, Source("t", printed)))
-		assert content(loaded) == content(resolved)
+		assert _semanticClaims(loaded) == _semanticClaims(resolved)
 		assert formatObservations(ONTOLOGY, Source("t", printed)) == printed
 
 

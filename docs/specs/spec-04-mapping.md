@@ -414,8 +414,10 @@ Body lines are evaluated from that value (the **record**).
   uppercase hexadecimal digits of each of its UTF-8 bytes. `C-17` gives
   `Issuer_C_2D17`. Within one `scope`, equal keys are the same instance, across
   documents.
-- `valid=expr` and `ctx=expr` give the existence claim's `valid` and `ctx`.
-  `valid` accepts a date, a date-time or a spec-02 interval.
+- `valid=expr` gives the existence claim's `valid`: a date, a date-time or a
+  spec-02 interval. `ctx=expr` supplies the default context for contextual facet
+  applicability and value claims produced by the body, never for existence or
+  non-contextual claims (spec-02).
 - `deleted=path:value` marks deletions in a feed that reports them: a record
   whose path's value, as text, equals `value` produces the retraction `- h`
   instead of claims. This is how a `complete=none` (delta) feed removes
