@@ -306,6 +306,10 @@ def reconcileObservations(ontology: Ontology, observations: Observations, mode: 
 	active = {}
 	for claim in sorted(claims, key=_order):
 		key = (_slot(claim), source(claim))
+		if "same" in claim or "distinct" in claim:
+			# Links accumulate: dropping an earlier repeated join can change canonical handles on replay.
+			active.setdefault(key, []).append(claim)
+			continue
 		complete = isinstance(claim.get("v"), dict) and "set" in claim["v"] and not claim["v"].get("partial")
 		if not multi(claim) or complete:
 			active[key] = [claim]

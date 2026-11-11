@@ -256,6 +256,14 @@ class Model:
 		"""Find declaration `path`, or return None when absent."""
 		return self.index.get(path) if path else None
 
+	def namespaces(self) -> set[str]:
+		"""Known namespace prefixes, including imported declarations carried by this ontology."""
+		result = {self.ontology.namespace} if self.ontology.namespace else set()
+		for path in self.index:
+			parts = path.split("/")
+			result.update("/".join(parts[:index]) for index in range(1, len(parts)) if "." not in "/".join(parts[:index]))
+		return result
+
 	def lineage(self, path: str) -> list[str]:
 		"""Entity `path` and its bases, nearest first; an association is its own lineage."""
 		if isAssociation(self.get(path)):

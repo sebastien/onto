@@ -7,7 +7,7 @@ from random import Random
 
 import pytest
 
-from onto import FormatError, Source, formatObservations, loadObservations, loadOntology, observationsFromJson, observationsToJson, printObservationsLog, printObservationsState, reconcileObservations
+from onto import FormatError, Source, formatObservations, loadObservations, loadOntology, observationsCoverage, observationsFromJson, observationsToJson, printObservationsLog, printObservationsState, reconcileObservations
 from onto.observations import Observations
 from tests._helpers import _semanticClaims
 
@@ -28,9 +28,16 @@ Person
   + Required Number
   * Labels Text
   * Friends Person
+Scenario
+Investor of Person
+  Rating Text
+Review of Person {ctx=Scenario}
+  Included Boolean
 Person -knows-> Person
   Witness Person
   Span Duration
+@view Audit
+  Person[*]
 """)])
 
 
@@ -116,6 +123,107 @@ def testReconciliationRemainsPureForAuditCases():
 # -----------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(("left", "right", "conflict"), [
+	("2026-01-01..2026-02-01", "2026-03-01..", False),
+	("..2026-02-01", "2026-02-01..", True),
+	("2026-02-01", "2026-02-01..2026-03-01", True),
+	("2026-01-01T00:00:00.0000001Z", "2026-01-01T00:00:00.0000002Z", False),
+	("2026-01-01T01:00:00+01:00", "2026-01-01T00:00:00Z", True),
+])
+def testHistoricalConflictDetectionAndReplay(left: str, right: str, conflict: bool):
+	resolved = state(f"p:Person\np.Name Earlier {{src=a, valid={left}}}\np.Name Later {{src=b, valid={right}}}\n")
+	claims = [claim for claim in resolved.claims if claim.get("p") == "Name"]
+	assert [claim.get("conflict", False) for claim in claims] == [conflict, conflict]
+	assert [claim["valid"] for claim in claims] == [left, right]
+	printed = printObservationsState(ONTOLOGY, resolved)
+	replayed = reconcileObservations(ONTOLOGY, loadObservations(ONTOLOGY, Source("t", printed)))
+	assert _semanticClaims(replayed) == _semanticClaims(resolved)
+	assert formatObservations(ONTOLOGY, Source("t", printed)) == printed
+
+
+def testWithinSourceSupersessionUsesObservationTimeNotValidity():
+	text = ("p:Person\np.Name Later {src=feed, at=2026-04-01, valid=2025-01-01..2025-02-01}\n"
+		"p.Name Earlier {src=feed, at=2026-03-01, valid=2026-01-01..}\n")
+	resolved = state(text)
+	assert [(claim["v"], claim["valid"]) for claim in resolved.claims if claim.get("p") == "Name"] == [("Later", "2025-01-01..2025-02-01")]
+	# A withdrawal means the observation should not have been made, revealing earlier evidence.
+	resolved = state(text + "- p.Name Later {src=feed, at=2026-05-01}\n")
+	assert [claim["v"] for claim in resolved.claims if claim.get("p") == "Name"] == ["Earlier"]
+
+
+@pytest.mark.parametrize("value", ["Known", "?", "null"])
+def testFacetAttributeOnlySubjectsDoNotAcquireExistenceOrExplicitFacets(value: str):
+	log = load(f"p:Person.Investor.Rating {value}\n")
+	resolved = reconcileObservations(ONTOLOGY, log)
+	assert len(resolved.claims) == 1
+	assert "exists" not in resolved.claims[0] and "facet" not in resolved.claims[0]
+	assert "implicit" not in resolved.instances["p"]
+	rows = {(item.path, item.subject, item.ctx): item for item in observationsCoverage(ONTOLOGY, log, "Audit")}
+	assert rows[("A/Person", "p", None)].statuses == ("missing",)
+	assert rows[("A/Person[Investor]", "p", None)].statuses == ("supplied",)
+	printed = printObservationsState(ONTOLOGY, resolved)
+	replayed = reconcileObservations(ONTOLOGY, loadObservations(ONTOLOGY, Source("t", printed)))
+	assert _semanticClaims(replayed) == _semanticClaims(resolved)
+	assert observationsToJson(observationsFromJson(ONTOLOGY, observationsToJson(resolved))) == observationsToJson(resolved)
+	assert formatObservations(ONTOLOGY, Source("t", printed)) == printed
+
+
+def testContextOnlyAndReferenceOnlyHandlesRemainImplicitUntilTheirReferencesDisappear():
+	text = "@type c Scenario\np:Person.Friends [q:Person]\np.Review.Included true {ctx=c}\n"
+	resolved = state(text)
+	assert {handle for handle, instance in resolved.instances.items() if instance.get("implicit")} == {"q", "c"}
+	assert not any(claim.get("exists") or "facet" in claim for claim in resolved.claims)
+	printed = printObservationsState(ONTOLOGY, resolved)
+	replayed = reconcileObservations(ONTOLOGY, loadObservations(ONTOLOGY, Source("t", printed)))
+	assert _semanticClaims(replayed) == _semanticClaims(resolved)
+	assert replayed.instances == resolved.instances
+	assert formatObservations(ONTOLOGY, Source("t", printed)) == printed
+	resolved = state(text + "- p.Friends q\n- p[Review] {ctx=c}\n")
+	assert resolved.claims == []
+	assert all("implicit" not in instance for instance in resolved.instances.values())
+	printed = printObservationsState(ONTOLOGY, resolved)
+	assert reconcileObservations(ONTOLOGY, loadObservations(ONTOLOGY, Source("t", printed))).instances == resolved.instances
+
+
+@pytest.mark.parametrize("partial", ["", ", ..."])
+@pytest.mark.parametrize("path", ["Values", "Required"])
+def testMemberWithdrawalsPreserveCollectionEvidenceAndOtherProducers(partial: str, path: str):
+	text = ("@src feed=system:feed alias=system:feed\np:Person\n"
+		+ f"p.{path} 9 {{src=feed, by=earlier}}\n"
+		+ f"p.{path} [1, 2{partial}] {{src=feed, by=snapshot}}\n"
+		+ f"p.{path} 3 {{src=alias, by=addition}}\n"
+		+ f"- p.{path} 2 {{src=curator, of=alias, by=snapshot}}\n")
+	log = load(text)
+	before = deepcopy(log)
+	resolved = reconcileObservations(ONTOLOGY, log)
+	assert log == before
+	claims = [claim for claim in resolved.claims if claim.get("p") == path]
+	collection = {"set": ["1"], **({"partial": True} if partial else {})}
+	expected = [("9", "feed", "earlier")] if partial else []
+	assert [(claim["v"], claim["src"], claim["by"]) for claim in claims] == expected + [(collection, "feed", "snapshot"), ("3", "alias", "addition")]
+	printed = printObservationsState(ONTOLOGY, resolved)
+	replayed = reconcileObservations(ONTOLOGY, loadObservations(ONTOLOGY, Source("t", printed)))
+	assert _semanticClaims(replayed) == _semanticClaims(resolved)
+	assert observationsToJson(observationsFromJson(ONTOLOGY, observationsToJson(resolved))) == observationsToJson(resolved)
+	assert formatObservations(ONTOLOGY, Source("t", printed)) == printed
+	# A producer-qualified member withdrawal must leave the other producer's member alone.
+	resolved = state(text + f"- p.{path} 3 {{src=feed, by=snapshot}}\n")
+	assert any(claim.get("v") == "3" and claim.get("by") == "addition" for claim in resolved.claims)
+	assert any(item.code == "retraction" for item in resolved.diagnostics)
+
+
+@pytest.mark.parametrize("withdrawal", ["1", "[1]"])
+def testWithdrawingAnEntireSnapshotCanRevealEarlierProducerEvidence(withdrawal: str):
+	text = ("p:Person\np.Values [9] {src=feed, by=earlier}\n"
+		"p.Values [1] {src=feed, by=snapshot}\n"
+		+ f"- p.Values {withdrawal} {{src=feed, by=snapshot}}\n")
+	resolved = state(text)
+	assert [(claim["v"], claim["by"]) for claim in resolved.claims if claim.get("p") == "Values"] == [({"set": ["9"]}, "earlier")]
+	printed = printObservationsState(ONTOLOGY, resolved)
+	assert formatObservations(ONTOLOGY, Source("t", printed)) == printed
+	assert observationsToJson(reconcileObservations(ONTOLOGY, resolved)) == observationsToJson(resolved)
+
+
 def testSubMicrosecondTimesOrderExactlyRatherThanByStatementPosition():
 	log = state("p:Person\np.Name Later {at=2026-01-01T00:00:00.0000002Z}\np.Name Earlier {at=2026-01-01T00:00:00.0000001Z}\n")
 	assert next(claim for claim in log.claims if claim.get("p") == "Name")["v"] == "Later"
@@ -172,6 +280,33 @@ def testCollectionsSortByEncodedValueWithoutLosingTypedReferenceMentions(form: s
 # REPLAY AND COLLECTION PROVENANCE
 #
 # -----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("mode", ["strict", "lenient"])
+def testRepeatedIdentityLinksAccumulateWithoutChangingCanonicalHandleOnReplay(mode: str):
+	log = load("a:Person\nb:Person\nc:Person\na.Name A\nb.Name B\nc.Name C\nc = a\nb = a\nc = a\n")
+	before = deepcopy(log)
+	resolved = reconcileObservations(ONTOLOGY, log, mode)
+	assert log == before
+	assert [claim["same"] for claim in resolved.claims if "same" in claim] == [["c", "a"], ["b", "a"], ["c", "a"]]
+	assert next(claim for claim in resolved.claims if claim.get("p") == "Name")["s"] == "b"
+	printed = printObservationsState(ONTOLOGY, resolved)
+	replayed = reconcileObservations(ONTOLOGY, loadObservations(ONTOLOGY, Source("t", printed)), mode)
+	assert _semanticClaims(replayed) == _semanticClaims(resolved)
+	assert formatObservations(ONTOLOGY, Source("t", printed), mode=mode) == printed
+	assert observationsToJson(observationsFromJson(ONTOLOGY, observationsToJson(resolved), mode=mode)) == observationsToJson(resolved)
+
+
+@pytest.mark.parametrize("kind", ["=", "!="])
+def testIdentityLinksKeepRepeatedEvidenceAndProducerScopedWithdrawals(kind: str):
+	text = f"a:Person\nb:Person\na {kind} b {{by=first}}\na {kind} b {{by=second}}\n"
+	key = "same" if kind == "=" else "distinct"
+	resolved = state(text)
+	assert [claim["by"] for claim in resolved.claims if key in claim] == ["first", "second"]
+	resolved = state(text + f"- a {kind} b {{by=second}}\n")
+	assert [claim["by"] for claim in resolved.claims if key in claim] == ["first"]
+	printed = printObservationsState(ONTOLOGY, resolved)
+	assert formatObservations(ONTOLOGY, Source("t", printed)) == printed
 
 
 def testDeterministicReplayAuditPreservesClaimsAndFormatting():

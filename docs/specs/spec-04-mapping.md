@@ -574,10 +574,16 @@ A reference to an instance with no existence claim yet is kept; the instance is
 - The signature lists argument types and the result type, resolved like any
   ontology name: built-in types, declared types, vocabularies or references.
   `T*` is a collection argument or result.
+- Declared `@fn` signatures require concrete types. `any` and `any*` are notation
+  for the built-in contracts only, not valid types in a declaration. A concrete
+  signature fixes how each example is read: bare `p` is text for `Text`, but a
+  reference for an entity type. No inference from its spelling is needed.
 - Body lines are **examples**: arguments (comma-separated, in the observations
   value encoding) `=>` the result. Every implementation must reproduce them; they
   are the conformance tests shared by implementations. A declared function needs
   at least one example.
+  Quote text values containing example delimiters (`,`, `[` or `]`, `=>`, or a
+  doc/comment delimiter), in addition to the observations quoting rules.
 - Annotations: `inverse=Name` names the function undoing it (used by
   [reversal](#reversal)), in the same library or file; `nulls` makes it receive
   `?` and `null` instead of propagating them.

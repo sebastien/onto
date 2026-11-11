@@ -16,7 +16,7 @@ def testMappingAndFunctionSpecExamplesMatchSchema(index: int) -> None:
 
 @pytest.mark.parametrize("signature,valid", [
 	({"builtin": "Text"}, True), ({"path": "Finance/Person", "collection": True}, True),
-	({"any": True}, True), ({"builtin": "Text", "path": "Finance/Person"}, False),
+	({"any": True}, False), ({"builtin": "Text", "path": "Finance/Person"}, False),
 	({"builtin": "Text", "typo": True}, False), ({"collection": True}, False),
 ])
 def testSignatureVariantsAreExclusiveAndClosed(signature: dict, valid: bool) -> None:

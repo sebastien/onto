@@ -13,10 +13,11 @@
 
 ## Goal and agreed scope
 
-Implement the onto formats in Python, in phases. **The current phase is spec-02
-observations**, including its recent identity-link and implicit-instance additions.
-Spec-01 has been implemented and reviewed. Finish and review observations before
-implementing bindings/mappings, referential policies/registries or overlays.
+Implement the onto formats in Python, in phases. **The current phase is spec-04
+core models and parsers**, following the implementation handoff below. Spec-01
+has been implemented and reviewed. The user signed off spec-02 observations and
+approved continuation ("OK, continue") after the 525-test conformance review.
+Referential registries, overlays and integration work are not started.
 
 Current layout follows the conventions above: `src/py/onto/{ontology,observations}/` each has
 `model.py`, `parser.py`, `formatter.py`, `operations.py` and public `__init__.py`.
@@ -83,9 +84,9 @@ logical section headers, explicit `# EOF`. Do not delegate without authorization
 - Spec-01 example fixed: `~ Age Years <- $AsOf, DateOfBirth` (normal form puts
   `$inputs` first).
 
-## Phase 2 status: implementation progressing — conformance audit pending
+## Phase 2 status: implemented and signed off
 
-- Latest `make test`: **505 passed**, including schema contracts, Python 3.15.
+- At sign-off, `make test`: **525 passed**, including schema contracts, Python 3.15.
 - `src/py/onto/observations/`: `parseObservations`, `resolveObservations`,
   `loadObservations`, `observationsToJson`, `reconcileObservations`,
   `printObservationsLog`, `printObservationsState`, `formatObservations`,
@@ -101,8 +102,9 @@ logical section headers, explicit `# EOF`. Do not delegate without authorization
   idempotent in both normal forms; JSON log import/export preserves ordinals.
   Incoming conflict flags are ignored (recomputed by reconciliation). Schema's
   `n` minimum corrected to 1, matching the spec.
-- Still TODO before phase-2 review: finish the conformance audit and review the
-  phase-2 outcome. The type-only registry representation decision is now settled.
+- The listed conformance audit checks are complete and the user approved
+  continuation after reviewing the outcome. The type-only registry representation
+  decision is settled. Python 3.14 testing remains unavailable locally.
 - Type-only `@type` declarations now preserve unused registry entries, context-only
   handles and named binary handles without defining links. They introduce no
   existence/facet/link claims. Value-only subjects still print in line form.
@@ -110,9 +112,9 @@ logical section headers, explicit `# EOF`. Do not delegate without authorization
   claim has the metadata key, since no directive can clear src/at to absent.
 - Numeric JSON spelling retains exponents as in the spec; exact Decimal-based
   equality handles exponent/plain equivalents in collections and reconciliation.
-- Also audit historical/supersession semantics for distinct valid intervals,
+- Audited historical/supersession semantics for distinct valid intervals,
   implications of typed mentions/facet attributes, reference-only handles, and
-  complete-set claims followed by member retractions before phase-2 sign-off.
+  complete-set claims followed by member retractions (details below).
 
 ### Structural review corrections (2026-11-12)
 
@@ -214,7 +216,7 @@ logical section headers, explicit `# EOF`. Do not delegate without authorization
   type preservation, fatal parser boundaries, pure strict refusal, JSON round
   trips, forged gaps/diagnostics and ontology updates that could activate a gap.
 
-### Conformance audit: fixes and remaining decisions
+### Conformance audit: fixes and review outcome
 
 - `tests/T02-001-observations-conformance.py` follows the new `TODO.md` naming
   convention. All other tests have now been migrated too; pytest collects only
@@ -249,6 +251,35 @@ logical section headers, explicit `# EOF`. Do not delegate without authorization
   sorting, contexts, associations and named binary relation attributes.
 - The collection-order and type-only registry decisions are now settled and
   implemented; no known normal-form representation blocker remains.
+- Continued identity replay review found a supersession bug: repeated `same` or
+  `distinct` evidence from one source was treated as a single-valued slot. For
+  `c = a`, `b = a`, `c = a`, discarding the first link changed the canonical
+  handle from `b` to `c` on state replay. Identity links now accumulate, as
+  spec-02 requires; withdrawals still run first and respect producers.
+- Added four regressions for strict/lenient canonical-handle replay, purity,
+  text/JSON idempotence, repeated link evidence and producer-scoped withdrawals.
+  An additional deterministic exploratory audit checked 2,000 identity-log
+  candidates: all 1,247 strict-valid logs preserved their state and formatting
+  on replay (conflicting candidates were excluded, not counted as passing).
+- Completed the remaining targeted audit with 16 additional regressions:
+  disjoint/overlapping validity, inclusive boundaries, sub-microsecond points and
+  timezone equivalence; same-source supersession uses `at`, not `valid`, and a
+  withdrawal can reveal an earlier observation. Facet attributes imply
+  applicability without inventing explicit facet or existence claims, including
+  unknown/absent values. Context-only/reference-only handles remain implicit
+  only while surviving references name them; registry types survive withdrawal.
+- Complete and partial collections retain their surviving members, completeness,
+  provenance and producer metadata through member withdrawals and state/JSON
+  replay. Complete collections still suppress older members; withdrawing the
+  entire snapshot (including its last member) can reveal an earlier producer's
+  evidence, consistent with withdrawing an observation rather than claiming
+  confirmed absence. Wrong-producer withdrawals leave evidence unchanged and warn.
+- A further deterministic exploratory audit checked 500 mixed identity,
+  reference, named-relation and withdrawal logs in lenient mode; all preserved
+  semantic claims, the full registry and idempotent formatting on state replay.
+- No new production defect was found in these remaining checks. The user approved
+  phase-2 sign-off and continuation after the review outcome. Python 3.14 remains
+  unavailable locally; the phase-2 suite passed all 525 tests on Python 3.15.
 
 ### Feature layout migration complete
 
@@ -269,8 +300,8 @@ logical section headers, explicit `# EOF`. Do not delegate without authorization
   mode isolation and API/module compatibility. All feature modules' imports and
   type annotations were checked in a fresh interpreter.
 - That migration introduced no new syntax or semantic rule. The subsequent
-  approved type-only syntax is implemented below; conformance review still
-  precedes phase-2 sign-off.
+  approved type-only syntax is implemented below. Phase 2 was subsequently
+  reviewed and signed off.
 
 ### Type-only declarations implemented
 
@@ -295,7 +326,6 @@ logical section headers, explicit `# EOF`. Do not delegate without authorization
 
 ## Later work
 
-- Finish observations (spec-02), as listed above.
 - Bindings/mappings/functions (spec-04) and the hexa integration (spec-06): see
   the implementation handoff below.
 - Identities (spec-05): referentials, registry, identity links, resolution.
@@ -389,9 +419,117 @@ agent. Read spec-04, spec-05 (policies only), spec-06 and hexa spec-001/003/004/
 first. Specs are authoritative; if implementing reveals a spec problem, stop and
 ask rather than diverging.
 
-**Before starting:** the agreed scope says phase 2 (observations) is signed off
-before bindings/mappings. The conformance audit and phase-2 review above are
-still open: confirm with the user whether to finish them first.
+**Approval received:** phase 2 (observations) was signed off after the listed
+conformance audit and review; the user approved starting this handoff.
+
+### Spec-04 implementation progress
+
+- Read spec-04, spec-05 policies, spec-06 and hexa specs 001/003/004/005.
+  hexa remains read-only; its implementation/integration is not part of this slice.
+- Implemented the shared expression grammar in `src/py/onto/expressions.py`,
+  alongside the existing shared `text.py` and `coverage.py` utilities. Expressions
+  use the spec's JSON AST directly, not a second intermediate representation.
+  Public APIs (also exported from `onto`): `parseExpression`, `printExpression`,
+  `expressionFromJson` and `Expression`.
+- Supports binding document paths (root, ancestors, wildcards, indexes, quoted
+  fields), mapping metadata, literals with exact decimal spelling, namespaced
+  calls and coalescing. Parsing/printing distinguish whole binding quoted fields
+  from literal string arguments; `field=False` handles annotation expressions.
+  Strict JSON import checks exact variants, member types and text replay; it
+  rejects non-round-trippable nodes instead of silently changing their meaning.
+- `tests/T04-001-expressions-parsing.py`: 111 tests, including every assigned
+  expression in the four complete binding/mapping example files from spec-04,
+  schema validation, nested/escaped strings, context boundaries, malformed input,
+  non-canonical JSON and non-mutating independent copies. Tests were written
+  before implementation. Full `make test`: **636 passed** on Python 3.15.
+- The shared expression helpers alone are syntax/interchange only; binding and
+  mapping declaration resolution is implemented below. Referential policies,
+  evaluation/execution and integration remain unimplemented.
+- Added `src/py/onto/functions/` with the required model/parser/formatter/operations
+  layout and public facade. `parseFunctions` retains locations and raw examples;
+  `resolveFunctions`/`loadFunctions` resolve signature types against supplied
+  ontologies, type examples using the existing observations reader, and check
+  inverse signatures. `printFunctions`, `formatFunctions`, `functionsToJson` and
+  `functionsFromJson` provide normal form and strict, detached JSON replay.
+  `FunctionsOperator` (also `Operator` in the feature package) retains ontology
+  context. APIs are exported from `onto` and `onto.functions`.
+- `tests/T04-002-functions-library.py`: 70 tests, including complete `markets.fn`
+  normal form/JSON/schema round trips, file-local aliases across library files,
+  forward inverses, decimals/collections/reference values, example-local reference
+  registries, malformed input, strict JSON and purity/context isolation. All
+  **706 tests pass** on Python 3.15. No function implementation is executed;
+  executable example/inverse conformance remains step 3, not declaration loading.
+- Resolved the `any` example ambiguity with the conservative option after the
+  user deferred the design choice: `any`/`any*` are built-in contract notation
+  only; declared `@fn` signatures require concrete types. This preserves the
+  observation rule that types determine whether a bare value is text or a
+  reference, without inventing new literal syntax. Spec-04, the signature schema,
+  parser and schema-contract tests now agree. Removed the temporary semantic
+  clarification gate and unused generic-type machinery.
+- Reviewed function-library replay: JSON collection order is normalized rather
+  than treated as example meaning; text delimiters (including an opening bracket
+  within text) are quoted safely; canonical alias choice is independent of file
+  and alias declaration order. Added regressions for each and clarified example
+  text quoting in spec-04. The concrete function-library declaration slice is
+  reused by bindings below; execution remains step 3.
+- Added `src/py/onto/binding/` with model/parser/formatter/operations and public
+  facade. APIs exported from `onto` and `onto.binding`: `parseBinding`,
+  `resolveBinding`, `loadBinding`, `formatBinding`, `printBinding`, `bindingToJson`,
+  `bindingFromJson`, the binding dataclasses and `BindingOperator`. The operator
+  retains the source ontology, optional function libraries and extra ontologies
+  used by signatures. Source locations and diagnostics survive declaration loading.
+- Complete `exchange.bind` and `sheet.bind` load against their spec ontologies,
+  print exactly as their normal-form examples and round-trip through schema-valid
+  JSON. Supports nested/quoted expressions in annotations, conditions, `@at`, CSV
+  columns, exclusions/docs, facets, roles, forward/inverse binary verbs, and local
+  or imported functions and ontology maps. Extracted shared function header,
+  example and block helpers rather than duplicating the `.fn` grammar/formatter.
+- Binding resolution checks header domains (revision differences warn), ontology
+  targets, duplicate assignments, function names/arity and statically known type
+  or collection mismatches. References are fully qualified in JSON and shortened
+  only for text. Enclosing-instance references require a defining parent scope;
+  root objects, list/indexed records and equivalent `$` paths are covered.
+  Contextual facets require a scope context; known incompatible context/reference
+  types fail. Document-only exclusions cannot read ancestor records.
+- `tests/T04-003-binding-parsing.py`: 70 tests, written before implementation and
+  fixes, covering spec fixtures, text/JSON purity and replay, imports/aliases,
+  context isolation, malformed declarations and strict JSON. Fresh full
+  `make test`: **776 passed** on Python 3.15; `git diff --check` passes. Python
+  3.14 remains unavailable locally. No documents are read and no functions,
+  bindings or run policies are executed. Dynamic document checks, coverage,
+  formats and hexa remain later steps. Mapping declarations follow below.
+- Added `src/py/onto/mapping/` with the required feature layout and public facade.
+  `parseMapping`, `resolveMapping`, `loadMapping`, `formatMapping`, `printMapping`,
+  `mappingToJson`, `mappingFromJson`, mapping dataclasses and `MappingOperator`
+  are exported from `onto` and `onto.mapping`. Operators retain both ontologies,
+  imported function/type contexts and an explicit set of known referential names.
+- Complete `exchange-finance.map` and `finance-sheet.map` load and round-trip
+  through schema-valid JSON and canonical text. The import's aligned docs are
+  normalized to one separator, as the inherited spec-01 normal-form rules require.
+  The JSON excerpt is tested with its omitted local map and issuer correspondence
+  supplied, rather than pretending it is a semantically complete standalone file.
+- Static checks cover source/target types, inherited/facet/structured/reference
+  paths, association roles and binary verbs/cardinalities; function/map names and
+  signatures; duplicate targets; fixed qualifier contradictions; `src` expression
+  membership; `reverse` reference reach; candidates; conditions; and view reach
+  through references and nested views. Explicit or inferred contextual inputs
+  retain their context type through correspondence checks. No execution is added.
+- Reference correspondence is translated before output type checks. Multiple
+  applicable `->` scopes are errors; no correspondence warns of future run-time
+  gaps, without inventing target instances. Unmapped references cannot bypass
+  scalar-target type checks. Source and target models remain separate for
+  same-namespace revision mappings, including vocabulary-map validation.
+- Reused binding call typing and annotation splitting, function declarations and
+  codecs, ontology map validation/normalization, and existing view selections.
+  Added `Model.namespaces()` so imported declarations physically carried by an
+  ontology (as `Dimensions` is in the Finance example) are recognized by function,
+  binding and mapping contexts. Existing feature tests remain green.
+- `tests/T04-004-mapping-parsing.py`: 67 tests. Fresh full `make test`:
+  **843 passed** on Python 3.15; `git diff --check` passes. Minimum-version
+  testing still needs Python 3.14. Referential names are checked only for
+  declaration interchange: policy/key checks remain step 2. Execution, inverse
+  conformance, coverage/reversal, formats, run policies and hexa remain deferred.
+  Next: spec-05 referential policy models/parsers and their mapping key checks.
 
 Work in this order; each step is test-first and leaves `make test` green.
 

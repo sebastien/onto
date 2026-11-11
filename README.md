@@ -9,11 +9,17 @@ they describe. The specifications are in
 
 Phase 1 implements [spec-01](docs/specs/spec-01-ontology.md) in Python: parsing,
 validation, normal form, printing and the JSON form of ontologies. Phase 2 is
-in progress: observations parsing, ontology-backed typing, JSON conversion,
+signed off: observations parsing, ontology-backed typing, JSON conversion,
 reconciliation, log/state printing, view coverage and lenient semantic gaps are
 available. Spec-02 identity links, implicit instance
-markers, `by`-scoped retractions and `approved` metadata are implemented. Overlays
-(spec-03), bindings and mappings (spec-04), referential policies and registries
+markers, `by`-scoped retractions and `approved` metadata are implemented. Spec-04
+implementation has started with shared expressions, function-library, binding and mapping
+declarations, canonical printing and strict JSON import. `onto.functions`
+supports concrete built-in/named signatures, typed examples and inverse-signature
+checks; unrestricted `any` is reserved for the built-in contracts. Functions are
+not executed. Bindings and mappings support declaration loading, static
+validation and text/JSON normal forms; execution is not implemented yet.
+Overlays (spec-03), referential policies and registries
 (spec-05), the identity sidecar file, `OntologyDiff`, the CLI and a JavaScript backend are not
 implemented yet.
 
@@ -33,16 +39,22 @@ one loads its library only when it is itself imported.
 
 ## Layout
 
-The `ontology/` and `observations/` packages under `src/py/onto/` each contain
+The `ontology/`, `observations/`, `functions/`, `binding/` and `mapping/` packages under
+`src/py/onto/` each contain
 `model.py`, `parser.py`, `formatter.py` and `operations.py`, plus a public
 `__init__.py`. Models hold types, constants and shared value/claim helpers;
 parsers read text/JSON; formatters produce canonical text/JSON; operations
 validate, load and reconcile. Shared lexical utilities remain in `text.py`, and
-cross-feature view reporting in `coverage.py`.
+cross-feature view reporting in `coverage.py`. `expressions.py` holds the shared
+spec-04 expression grammar used by bindings and mappings.
 
 Existing `onto`, `onto.ontology` and `onto.observations` imports are preserved.
 Each feature also exports an `Operator`: `OntologyOperator(ontology)` and
-`ObservationsOperator(ontology, mode="strict")` from the top-level package.
+`ObservationsOperator(ontology, mode="strict")`, plus
+`FunctionsOperator(ontologies)`, `BindingOperator(ontology)` and
+`MappingOperator(fromOntology, toOntology)` from the top-level package.
+Binding/mapping operators optionally retain imported libraries and extra type
+ontologies as well.
 Operators retain the ontology/mode context across calls; the functional API
 remains available.
 
@@ -88,7 +100,92 @@ state = obsOps.reconcile(log)
 data = obsOps.toJson(state)
 ```
 
-### Observations (partial spec-02)
+### Shared expressions (first spec-04 slice)
+
+```python
+from onto import parseExpression, printExpression, expressionFromJson
+
+expr = parseExpression("multiply(Price, Quantity)")  # mapping syntax
+path = parseExpression('row."asset class"', binding=True)
+text = printExpression(path, binding=True)
+again = expressionFromJson(expr)                     # independent validated copy
+```
+
+Expressions use the JSON nodes of `mapping.schema.json`. `binding=True` admits
+document paths (`[*]`, indexes, `$`, `^`) and `$format`; mapping expressions
+instead admit `$valid`, `$at` and `$src`. A whole quoted binding expression is
+a field name; strings inside calls or `??` are literals. For binding annotation
+expressions such as `id=`, pass `field=False` to keep a whole string literal.
+Invalid or non-round-trippable expressions raise `ValueError`. These helpers
+do not resolve names, type-check against ontologies or evaluate functions.
+
+### Function-library declarations (spec-04)
+
+```python
+from onto import Source, loadFunctions, printFunctions, functionsToJson, functionsFromJson
+
+library = loadFunctions([dimensionsOntology], [Source("markets.fn", libraryText)])
+text = printFunctions(library)
+data = functionsToJson(library)                 # onto.functions/1
+again = functionsFromJson([dimensionsOntology], data)
+```
+
+`parseFunctions` retains source locations and raw examples; `resolveFunctions`
+checks them against supplied ontologies. Libraries may span files with matching
+namespace/revision and file-local aliases. Loading validates signature types,
+example encodings and reversed inverse signatures, but does not execute any
+implementation or check executable inverse round trips. Declared signatures use
+concrete types (`Text`, `Integer`, named types/references, or `T*` collections);
+`any` and `any*` are built-in notation only. Invalid libraries raise `FormatError`.
+
+### Binding declarations (spec-04)
+
+```python
+from onto import Source, loadBinding, printBinding, bindingToJson, bindingFromJson
+
+binding = loadBinding(sourceOntology, Source("exchange.bind", bindingText))
+text = printBinding(binding)
+data = bindingToJson(binding)                   # onto.binding/1
+again = bindingFromJson(sourceOntology, data)
+```
+
+`parseBinding` retains locations and untyped local function examples;
+`resolveBinding` checks them against the source ontology. Optional `libraries`
+and extra `ontologies` provide imported functions and signature types. Validation
+checks header domains, target names/duplicates, function names/arity, known
+expression types and collection cardinality, references and enclosing scopes.
+Revision differences warn. Contextual facets need a scope context expression.
+
+Printing is canonical and JSON import checks exact members and lossless text
+replay. These operations do not read JSON/CSV data, execute functions, learn
+formats, compute coverage or produce observations. Document-dependent checks and
+run policies belong to the later execution/integration steps.
+
+### Mapping declarations (spec-04)
+
+```python
+from onto import Source, loadMapping, printMapping, mappingToJson, mappingFromJson
+
+mapping = loadMapping(fromOntology, toOntology, Source("projection.map", mappingText))
+text = printMapping(mapping)
+data = mappingToJson(mapping)                   # onto.mapping/1
+again = mappingFromJson(fromOntology, toOntology, data)
+```
+
+`parseMapping` retains source locations and local `@fn`/`@map` declarations;
+`resolveMapping` validates scopes, paths through structures/references, types,
+cardinality, view restrictions, targets and reference correspondence. Local and
+imported functions, conditions, contexts, candidates, exclusions, `src` and
+`reverse` annotations are retained and checked. Unmapped references warn that
+execution would produce a gap; ambiguous correspondence is an error.
+
+Optional `libraries` and extra `ontologies` supply imported declarations.
+For declaration-only loading, `referentials={"MarketIds"}` supplies known
+referential **names only**. Policies and required key assignments are not yet
+validated; this is not referential/registry support. The APIs do not execute
+mappings, propagate claim metadata, reverse mappings or produce observations.
+
+### Observations (spec-02)
 
 ```python
 from onto import (

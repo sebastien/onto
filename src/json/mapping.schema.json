@@ -369,7 +369,7 @@
       }
     },
     "signatureType": {
-      "description": "A spec-01 type expression; `collection` marks `T*`.",
+      "description": "A concrete spec-01 type expression for @fn; `collection` marks `T*`. Unrestricted `any` is reserved for built-in functions.",
       "type": "object",
       "unevaluatedProperties": false,
       "properties": {
@@ -405,16 +405,6 @@
           "properties": {
             "path": {
               "$ref": "#/$defs/path"
-            }
-          }
-        },
-        {
-          "required": [
-            "any"
-          ],
-          "properties": {
-            "any": {
-              "const": true
             }
           }
         }

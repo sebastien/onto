@@ -134,16 +134,16 @@ def _checkAttrs(model: Model, owner: Decl, attrs: list[Attr], localNames: Callab
 				diag.error("reference", f"Unknown dependency '{dep.path}.{dep.attr}'", attr.loc)
 
 
-def _validateMap(model: Model, decl: Decl, diag: Diagnostics) -> None:
-	def vocabulary(path: str) -> set[str] | None:
-		target = model.get(path)
-		resolved = model.resolveType(TypeExpr(path=path)) if target and target.kind == "type" else None
+def _validateMap(model: Model, decl: Decl, diag: Diagnostics, targetModel: Model | None = None) -> None:
+	def vocabulary(path: str, using: Model) -> set[str] | None:
+		target = using.get(path)
+		resolved = using.resolveType(TypeExpr(path=path)) if target and target.kind == "type" else None
 		if not resolved or resolved.kind != "vocab":
 			diag.error("reference", f"Map '{decl.path}': '{path}' is not a vocabulary type", decl.loc)
 			return None
 		return set(resolved.values or [])
 
-	fromValues, toValues = vocabulary(decl.mapFrom), vocabulary(decl.mapTo)
+	fromValues, toValues = vocabulary(decl.mapFrom, model), vocabulary(decl.mapTo, targetModel or model)
 	pairs: set[tuple[str, str]] = set()
 	for line in decl.mapLines:
 		if fromValues is not None and line.fromValue not in fromValues:
