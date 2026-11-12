@@ -71,6 +71,10 @@ def _checkAnnotations(model: Model, ann: Annotations, places: set[str], loc: Loc
 			diag.error("annotation", f"id must be {', '.join(IDENTIFIERS)}", loc)
 		elif key in ("subjectRole", "objectRole") and not (isinstance(value, str) and isName(value)):
 			diag.error("annotation", f"{key} must name a role", loc)
+		elif key == "layer" and not (isinstance(value, str) and isName(value)):
+			diag.error("annotation", "layer must be a name", loc)
+		elif key == "default" and not isinstance(value, str):
+			diag.error("annotation", "default needs a value", loc)
 		elif key == "privacy":
 			names = value.split("+") if isinstance(value, str) else []
 			if not names or not all(isName(name) for name in names) or len(set(names)) != len(names):
@@ -119,6 +123,19 @@ def _checkType(model: Model, type: TypeExpr | None, ann: Annotations, loc: Loc |
 		diag.error("reference", f"{what}: '{type.path}' is a {kind}, not a type, entity or association", loc)
 
 
+def _checkDefault(model: Model, attr: Attr, what: str, diag: Diagnostics) -> None:
+	"""A default on a closed vocabulary must be one of its values; other types are not checked."""
+	default = next((value for key, value in attr.ann if key == "default"), None)
+	if not isinstance(default, str):
+		return
+	if attr.derived:
+		diag.error("annotation", f"{what}: a derived attribute has no default", attr.loc)
+		return
+	resolved = model.resolveType(attr.type, attr.ann)
+	if resolved.kind == "vocab" and not resolved.open and default not in (resolved.values or []):
+		diag.error("annotation", f"{what}: default '{default}' is not a value of its vocabulary", attr.loc)
+
+
 def _checkAttrs(model: Model, owner: Decl, attrs: list[Attr], localNames: Callable[[], set[str]], diag: Diagnostics) -> None:
 	names: set[str] = set()
 	for attr in attrs:
@@ -127,6 +144,7 @@ def _checkAttrs(model: Model, owner: Decl, attrs: list[Attr], localNames: Callab
 		names.add(attr.name)
 		_checkType(model, attr.type, attr.ann, attr.loc, f"{owner.path}.{attr.name}", diag)
 		_checkAnnotations(model, attr.ann, placesOf(attr), attr.loc, diag)
+		_checkDefault(model, attr, f"{owner.path}.{attr.name}", diag)
 		for dep in attr.deps or []:
 			if dep.local and dep.local not in localNames():
 				diag.error("reference", f"Unknown dependency '{dep.local}' of '{owner.path}.{attr.name}'", attr.loc)

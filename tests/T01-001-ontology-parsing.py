@@ -131,6 +131,19 @@ def testAssociationParticipantsSortAndFacetsFollow():
 	)
 
 
+def testLayerAndDefaultAnnotations():
+	text = (
+		"@ontology A\nCur = NZD|USD\nMoney =\n  1 Amount Number\n  Currency Cur {default=NZD}\n"
+		"P {layer=Party}\n  Code A|... {default=Z}\n  Count Integer {default=0}\nQ\n"
+		"R(P, Q) {layer=Holding, kind=state}\n"
+	)
+	assert fmt(text) == (
+		"@ontology A\n\nCur = NZD|USD\n\nMoney =\n  1 Amount Number\n  Currency Cur {default=NZD}\n\n"
+		"P {layer=Party}\n  Code A|... {default=Z}\n  Count Integer {default=0}\n\nQ\n\n"
+		"R(P, Q) {kind=state, layer=Holding}\n"
+	)
+
+
 def testDomainsMapsAndAnnotations():
 	text = (
 		"@ontology A\n@use Dimensions as D\n@domain Society -- People\n@domain Money\n"
@@ -270,6 +283,12 @@ def testAssociationsHaveFacetsAndRolesActAsAttributes():
 		("@ontology A\nP\n  E Text {id=yes}\n", "annotation"),
 		("@ontology A\nP\n  E Text {privacy=Owner+Owner}\n", "annotation"),
 		("@ontology A\nP\n  E Text {scale=10}\n", "annotation"),
+		("@ontology A\nP\n  E Text {layer=Party}\n", "annotation"),
+		("@ontology A\nP {layer}\n", "annotation"),
+		("@ontology A\nP {default=X}\n", "annotation"),
+		("@ontology A\nP\n  E Text {default}\n", "annotation"),
+		("@ontology A\nP\n  E A|B {default=C}\n", "annotation"),
+		("@ontology A\nP\n  D Text\n  ~ E Text <- D {default=X}\n", "annotation"),
 		("@ontology A\nP\nQ\nP -has-> Q {context=Missing}\n", "reference"),
 		("@ontology A\nP\nQ\nP -has-> Q\nP -of-> Q {context=P.has.Q}\n", "name"),
 		("@ontology A\nP\nQ\nP -of-> Q {context=P}\n", "reference"),

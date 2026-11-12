@@ -397,7 +397,9 @@ Keys, in normal-form order:
 | `key` | attribute | Used for entity resolution (matching records to an instance). Not uniqueness, not requiredness. |
 | `id` | attribute | How far a value identifies its subject: `key`, `narrow`, `broad`, `none`. `key` is the flag's meaning |
 | `privacy` | attribute | Who may see values: audience names joined by `+` (e.g. `Owner+Household`). The audiences are not fixed by the format; normal form sorts them |
+| `default` | attribute | The value assumed when none is observed (e.g. `Currency Currency {default=NZD}`). On a closed vocabulary it must be one of its values. Not allowed on derived attributes |
 | `kind` | relation | `event` or `state` |
+| `layer` | entity, relation | A name classifying the element across domains (e.g. `Party`, `Holding`, `Evidence`). The layers are not fixed by the format |
 | `context` | binary relation | The n-ary relation carrying the link's state; written shortest, stored as a full path |
 | `subjectRole`, `objectRole` | context-backed binary relation | Role names on the context selecting the subject and object |
 | `ctx` | facet | Entity or association whose instances the facet's values hold within ([contextual facets](#contextual-facets)); written shortest, stored as a full path |

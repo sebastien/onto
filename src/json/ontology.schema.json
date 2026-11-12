@@ -16,6 +16,8 @@
         "rev": { "$ref": "#/$defs/token" },
         "src": { "$ref": "#/$defs/token" },
         "card": { "$ref": "#/$defs/card" },
+        "default": { "$ref": "#/$defs/token" },
+        "layer": { "$ref": "#/$defs/name" },
         "cards": { "enum": ["stated", "inferred", "assumed"] },
         "rel": { "$ref": "#/$defs/counts" }
       }
