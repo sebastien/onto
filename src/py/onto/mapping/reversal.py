@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from ..expressions import Expression
 from ..functions.model import Function, FunctionLibrary
 from ..ontology.model import Decl, MapLine, Model, Ontology
-from ..text import annotation, lastSegment
+from ..text import Loc, annotation, lastSegment
 from .model import Mapping, MappingLine, MappingScope
 
 # -----------------------------------------------------------------------------
@@ -32,6 +32,7 @@ class LossyLine:
 	target: str
 	line: str
 	reason: str
+	loc: Loc | None = None
 
 
 class Lossy(Exception):
@@ -171,7 +172,7 @@ class Reverser:
 				raise Lossy("contextual scopes are not reversed")
 		except Lossy as error:
 			for line in lines:
-				self.lossy.append(LossyLine(scope.source, scope.target, lineLabel(line), str(error)))
+				self.lossy.append(LossyLine(scope.source, scope.target, lineLabel(line), str(error), line.loc))
 			return None
 		if scope.valid is not None and "path" in scope.valid:
 			reverse.lines.append(MappingLine(target=".".join(scope.valid["path"]), expr={"meta": "valid"}))
@@ -191,7 +192,7 @@ class Reverser:
 				solved.candidate, solved.doc = line.candidate, line.doc
 				reverse.lines.append(solved)
 			except Lossy as error:
-				self.lossy.append(LossyLine(scope.source, scope.target, lineLabel(line), str(error)))
+				self.lossy.append(LossyLine(scope.source, scope.target, lineLabel(line), str(error), line.loc))
 		return reverse
 
 	def reverse(self, referential: str | None) -> tuple[Mapping, list[LossyLine]]:

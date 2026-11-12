@@ -23,16 +23,46 @@ the records they describe.
 
 Onto is implemented in Python.
 
-Onto offers the following formats:
+Onto offers the following formats, each with a text and a JSON form:
 
-- `.onto` for ontologies
+- `.onto` for ontologies ([spec-01](docs/specs/spec-01-ontology.md))
+- `.obs` for observations ([spec-02](docs/specs/spec-02-observations.md))
+- `.bind`, `.map` and `.fn` for bindings, mappings and function libraries
+  ([spec-04](docs/specs/spec-04-mapping.md))
+- `.ref` for identity referentials ([spec-05](docs/specs/spec-05-identities.md))
 
-And the following CLI operations ([spec-07](docs/specs/spec-07-cli.md)):
+## Get started
 
-- `onto check [FILE...]` validates files with their context, found in the workspace by namespace
-- `onto fmt [-w|--check|--diff] [FILE...]` prints or rewrites files in normal form
-- `onto json FILE` / `onto text FILE.json` convert between text and JSON forms
-- `onto ls` lists the workspace: kinds, namespaces, revisions and files
-- `onto state FILE.obs` / `onto log FILE.obs` print observations in state or log form
-- `onto coverage`, `onto reverse FILE.map`, `onto inventory DOCUMENT...` for bindings and mappings
-- `onto fn test` / `onto fn ls` run and list function libraries
+Onto needs Python 3.14 or later and has no other dependencies. From a
+checkout, `pip install .` installs the `onto` command; `uv run onto` runs it
+without installing.
+
+## In a nutshell
+
+Files name each other by namespace (`@use Finance as F`), so `onto` indexes
+the files of your project by their header and finds what each one needs:
+
+```
+$ onto ls ontology mapping
+mapping   Exchange->Finance              finance/exchange-finance.map
+ontology  Exchange           2026-11-10  finance/exchange.onto
+ontology  Finance            2026-11-10  finance/finance.onto
+
+$ onto check finance/exchange-finance.map    # loads Exchange, Finance, Markets, MarketIds
+no problems in 1 file (5 read)
+
+$ onto fmt --check                           # lists files not in normal form; exit 1 if any
+
+$ onto coverage finance/exchange-finance.map
+source                target                 status       note
+Dividend.Amount       Dividend.Amount        direct
+Dividend.Currency                            condition
+Instrument.Class      Instrument.AssetClass  transformed
+
+$ onto reverse finance/exchange-finance.map > finance-exchange.map
+finance/exchange-finance.map:19: warning map.lossy: ... 'AssetClass' is not
+reversed: @map 'AssetClassFromCode' is not exact and one-to-one
+```
+
+`onto help` lists every command; [spec-07](docs/specs/spec-07-cli.md)
+describes them.

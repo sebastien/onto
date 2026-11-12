@@ -330,8 +330,9 @@ logical section headers, explicit `# EOF`. Do not delegate without authorization
   the implementation handoff below.
 - Identities (spec-05): referentials, registry, identity links, resolution.
 - Overlays (spec-03) and semantic diff.
-- CLI (spec-07, `docs/specs/spec-07-cli.md`): specified, not implemented.
-  Static tooling first; `bind`/`map` runs come with the hexa integration.
+- CLI (spec-07): static tooling implemented in `src/py/onto/cli/`, tested by
+  `tests/T07-*`. Deferred: `bind`/`map` runs (with the hexa integration),
+  `diff`, overlays, `formats update`, `.ids`/`.reg` readers.
 - JavaScript backend sharing JSON contracts and conformance examples.
 
 ## Spec-04 design review (2026-11-11): decided and written into the specs
