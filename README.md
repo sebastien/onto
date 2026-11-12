@@ -33,9 +33,28 @@ Onto offers the following formats, each with a text and a JSON form:
 
 ## Get started
 
-Onto needs Python 3.14 or later and has no other dependencies. From a
-checkout, `pip install .` installs the `onto` command; `uv run onto` runs it
-without installing.
+*onto* needs Python 3.14 or later and has no runtime dependencies. The
+distribution is named `onto-lang`; the command and Python import are both
+`onto`.
+
+From the repository root, run the CLI without installing:
+
+```sh
+./bin/onto --help
+```
+
+Or install the checkout into your Python environment:
+
+```sh
+pip install .
+onto --help
+python -m onto --help
+```
+
+The package has not been published to PyPI yet. Once released, you can
+install it with `pip install onto-lang`.
+
+For publishing, see the [release instructions](docs/releasing.md).
 
 ## In a nutshell
 

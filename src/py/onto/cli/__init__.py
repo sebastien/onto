@@ -34,7 +34,7 @@ EXIT_INTERRUPTED = 130
 def ontoVersion() -> str:
 	"""The installed package version."""
 	try:
-		return version("onto")
+		return version("onto-lang")
 	except PackageNotFoundError:
 		return "unknown"
 
