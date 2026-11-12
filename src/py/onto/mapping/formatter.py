@@ -10,7 +10,7 @@ from ..functions.formatter import functionBlock, functionsToJson
 from ..functions.model import FunctionLibrary
 from ..ontology.formatter import Namer, Printer, _toJson, normaliseOntology
 from ..ontology.model import ANNOTATION_KEYS as ONTOLOGY_ANNOTATIONS, Ontology
-from ..text import printAnnotations
+from ..text import printAnnotations, withDoc
 from .model import ANNOTATION_KEYS, HEADER_KEYS, MAPPING_FORMAT, Mapping, MappingLine
 
 # -----------------------------------------------------------------------------
@@ -70,8 +70,6 @@ def printMapping(mapping: Mapping) -> str:
 				value = printExpression({"path": value["path"]}) + ":" + value["value"]
 			parts.append(f"{key}={value}")
 		return " {" + ", ".join(parts) + "}" if parts else ""
-	def docText(item: Any) -> str:
-		return f" -- {item.doc}" if item.doc else ""
 	header = dict(mapping.header)
 	if "view" in header:
 		header["view"] = left(header["view"])
@@ -85,17 +83,17 @@ def printMapping(mapping: Mapping) -> str:
 	printer = Printer(Ontology(namespace=mapping.fromNamespace))
 	for decl in normaliseOntology(Ontology(decls=mapping.maps)).decls:
 		ann = printAnnotations(decl.ann, ONTOLOGY_ANNOTATIONS)
-		lines += ["", f"@map {decl.path} {left(decl.mapFrom)} -> {right(decl.mapTo)}" + (" " + ann if ann else "") + docText(decl)]
-		lines += ["  " + printer.mapLine(line) for line in decl.mapLines]
+		lines += ["", withDoc(f"@map {decl.path} {left(decl.mapFrom)} -> {right(decl.mapTo)}" + (" " + ann if ann else ""), decl.doc)]
+		lines += [printer.mapLine(line, indent="  ") for line in decl.mapLines]
 	for scope in sorted(mapping.scopes, key=lambda item: (item.source, item.target)):
-		lines += ["", f"{left(scope.source)} -> {right(scope.target)}" + annotations(scope, ("when", "ctx", "valid")) + docText(scope)]
+		lines += ["", withDoc(f"{left(scope.source)} -> {right(scope.target)}" + annotations(scope, ("when", "ctx", "valid")), scope.doc)]
 		for line in sorted(scope.lines, key=lineKey):
 			text = f"[{line.facet}]" if line.facet else f"{line.target or line.verb} <- {expressionText(line.expr, left)}"
-			lines.append("  " + text + annotations(line, ("when", "src", "reverse", "candidate")) + docText(line))
+			lines.append(withDoc("  " + text + annotations(line, ("when", "src", "reverse", "candidate")), line.doc))
 	if mapping.exclusions:
 		lines.append("")
 		for item in sorted(mapping.exclusions, key=lambda item: item.path):
-			lines.append(f"- {shortElement(item.path, left)} {{reason={item.reason}}}" + docText(item))
+			lines.append(withDoc(f"- {shortElement(item.path, left)} {{reason={item.reason}}}", item.doc))
 	return "\n".join(lines) + "\n"
 
 

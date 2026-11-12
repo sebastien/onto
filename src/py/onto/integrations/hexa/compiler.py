@@ -9,12 +9,15 @@ from typing import Any as AnyValue
 from hexa.shapes import Any, Bool, DateOnly, DatePattern, DateTime, Decimal, DecimalText, Location, Null, Origin, Text, Timed, derive, either, gather, loose, optional, parsed, slot, tolerant, via
 
 from ...binding.model import Binding, BindingLine, BindingScope
+from ...binding.operations import BUILTIN_RESULTS
 from ...expressions import Expression, printExpression
 from ...formats.model import Formats
 from ...functions.model import FunctionLibrary
+from ...functions.operations import _resolveSignature
 from ...functions.runtime import FunctionEvaluator
 from ...inventory.operations import pascalCase
-from ...ontology.model import Attr, Model, Ontology
+from ...ontology.model import Attr, Model, Ontology, ResolvedType, TypeExpr
+from ...referential.operations import policyFor
 from ...text import annotation, lastSegment
 from . import vocabulary as V
 
@@ -376,16 +379,20 @@ class ScopeCompiler:
 	# --- shapes ---------------------------------------------------------------
 
 	def leafShape(self, position: Position) -> AnyValue:
-		target = position.slot
-		if position.codecs:
-			branches = [via(target, codec) for codec in position.codecs]
-			inner = branches[0] if len(branches) == 1 else either(*branches)
-		else:
-			inner = target
-		return either(position.nulls if position.nulls is not None else Null, inner)
+		"""A position's slot, through its codec or, for `$format`, a union of pattern codecs."""
+		if not position.codecs:
+			return position.slot
+		branches = [via(position.slot, codec) for codec in position.codecs]
+		return branches[0] if len(branches) == 1 else either(*branches)
 
 	def shape(self) -> AnyValue:
-		"""A loose struct of every position, nested as in the document, every key optional and tolerant."""
+		"""A loose struct of every position, nested as in the document, every key optional.
+
+		Positions are `either(Null, tolerant(P))` rather than spec-06's `tolerant(P | Null)`:
+		hexa reports a union whose branches fail differently as `Issue.Mismatch`, which would
+		hide a codec's reason (`DatePattern.Invalid`). A null still matches first and says
+		nothing; a null policy's marker slot takes its place.
+		"""
 		tree: dict = {}
 		for key, position in self.positions.items():
 			node = tree
@@ -394,22 +401,18 @@ class ScopeCompiler:
 			node[key[-1]] = position
 
 		def build(node: dict, inList: bool) -> AnyValue:
-			fields = {}
-			for name, child in node.items():
-				if name == "*":
-					continue
-				fields[name + "?"] = value(child, inList)
-			return loose(fields)
+			return loose({name + "?": value(child, inList) for name, child in node.items()})
 
 		def value(child: AnyValue, inList: bool) -> AnyValue:
+			nullBranch = child.nulls if isinstance(child, Position) and child.nulls is not None else Null
 			if isinstance(child, Position):
-				inner = self.leafShape(child)
+				inner = gather(self.leafShape(child)) if child.collection and inList else self.leafShape(child)
 			elif "*" in child and len(child) == 1:
 				item = child["*"]
-				inner = either(Null, [self.leafShape(item) if isinstance(item, Position) else either(Null, build(item, True))])
+				inner = [either(Null, gather(self.leafShape(item)) if isinstance(item, Position) else build(item, True))]
 			else:
-				inner = either(Null, build(child, inList))
-			return inner if inList else tolerant(inner)
+				inner = build(child, inList)
+			return either(nullBranch, inner if inList else tolerant(inner))
 
 		return build(tree, False)
 
@@ -457,6 +460,7 @@ class ScopeCompiler:
 				owner = "Outer" if level == 1 else f"Outer{level}"
 			fields[name] = slot(slotName("Bind", self.short, "Fields", owner, pascalCase(name)), Any)
 			self.outer.append(fields[name])
+			self.outer.sort(key=lambda item: item.name)
 		return fields[name]
 
 	def pathValue(self, steps: list[AnyValue]) -> AnyValue:
@@ -486,6 +490,7 @@ class ScopeCompiler:
 		if self.owner.atField not in fields:
 			fields[self.owner.atField] = self.owner.atSlot
 			self.outer.append(self.owner.atSlot)
+			self.outer.sort(key=lambda item: item.name)
 
 	def expression(self, expr: Expression) -> AnyValue:
 		"""A template value for `expr`; absent inputs give `ABSENT_VALUE`, failures holes."""
@@ -671,6 +676,339 @@ def rootExpression(expr: Expression) -> Expression:
 	return expr
 
 
-__all__ = ["CompileError", "BindingCompiler", "ScopeCompiler", "typeSpec", "scalarShape", "valueShape", "slotName", "fieldName", "Calls", "literal", "isMulti"]
+# -----------------------------------------------------------------------------
+#
+# MAPPINGS
+#
+# -----------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class Segment:
+	"""One step of a mapping path: a tree key, what it is, and the type it leads to."""
+
+	key: str
+	kind: str
+	attr: Attr | None = None
+	owner: str = ""
+	multi: bool = False
+	next: str | None = None
+
+
+@dataclass(slots=True)
+class LineInfo:
+	"""A compiled mapping line: its record key, the paths it reads (`when` included) and its source input."""
+
+	section: str
+	key: str
+	inputs: list[list[str]]
+	source: int = 0
+	also: str | None = None
+
+	def sourcePath(self, paths: list[list[str]]) -> list[str]:
+		"""The pointers of the source input's path; none for literals and facets."""
+		return paths[self.source] if 0 <= self.source < len(paths) else []
+
+
+ROOT_KEYS = ("$handle", "$type", "$scope", "$target", "$valid", "$at", "$src")
+
+
+def qualifierPair(source: dict[str, str], target: dict[str, str]) -> tuple[dict, dict] | None:
+	"""The `scale`/`unit` qualifiers to convert, when both are fixed and differ."""
+	left, right = {}, {}
+	for name in ("scale", "unit"):
+		a, b = source.get(name, "?"), target.get(name, "?")
+		if a != "?" and b != "?" and a != b:
+			left[name], right[name] = a, b
+	return (left, right) if left else None
+
+
+class MappingScopeCompiler:
+	"""Compile one `S -> T` scope: its reach, the tree shape, the record template and the handle template."""
+
+	def __init__(self, owner: "MappingCompiler", scope: AnyValue, name: str):
+		self.owner = owner
+		self.scope = scope
+		self.name = name
+		self.source = owner.model
+		self.target = owner.targetModel
+		self.short = lastSegment(scope.source)
+		self.positions: dict[str, AnyValue] = {}
+		self.lines: list[LineInfo] = []
+		self.roots: dict[str, AnyValue] = {}
+
+	# --- paths ---------------------------------------------------------------
+
+	def segments(self, steps: list[str]) -> list[Segment]:
+		"""Walk attribute `steps` from the scope's source type, through facets, structures and references."""
+		result: list[Segment] = []
+		current, index = self.scope.source, 0
+		while index < len(steps):
+			if current is None:
+				raise CompileError(V.MappingCodes.ReferenceUnmapped, f"Path '{'.'.join(steps)}' reads through a value")
+			name = steps[index]
+			facet = self.source.facetOf(current, name)
+			if facet is not None and annotation(facet.ann, "ctx"):
+				raise CompileError(V.MappingCodes.ContextUnsupported, f"Contextual facet '{name}' in a mapping")
+			member = f"{name}.{steps[index + 1]}" if facet is not None and index + 1 < len(steps) else name
+			index += 2 if facet is not None and index + 1 < len(steps) else 1
+			attr = self.source.lookup(current, member)
+			if attr is None:
+				found = self.source.verbs(current, name)
+				if not found:
+					raise CompileError(V.BindingCodes.TypeMismatch, f"Unknown path '{'.'.join(steps)}' of '{self.scope.source}'")
+				decl, inverse = found[0]
+				other = decl.participants[0 if inverse else 1].type
+				result.append(Segment(name, "verb", owner=current, multi=True, next=other))
+				current = other
+				continue
+			while index < len(steps) and self.source.structOf(attr.type):
+				member, index = f"{member}.{steps[index]}", index + 1
+				attr = self.source.lookup(current, member)
+			resolved = self.source.resolveType(attr.type, attr.ann)
+			reference = resolved.kind in ("entity", "relation")
+			result.append(Segment(member, "ref" if reference else "attr", attr, current, isMulti(self.source, attr), resolved.path if reference else None))
+			current = resolved.path if reference else None
+		return result
+
+	def position(self, segment: Segment) -> AnyValue:
+		"""The slot capturing a top-level tree key: the attribute slot of a value, a field slot for references."""
+		if segment.key not in self.positions:
+			if segment.kind == "attr":
+				self.positions[segment.key] = self.owner.attributeSlot(self.scope.source, segment.key, segment.owner)
+			else:
+				self.positions[segment.key] = slot(slotName("Map", self.short, "Fields", fieldName(segment.key.split("."))), Any)
+		return self.positions[segment.key]
+
+	def root(self, key: str) -> AnyValue:
+		if key not in self.roots:
+			self.roots[key] = slot(slotName("Map", "Root", key[1:].capitalize()), Any)
+		return self.roots[key]
+
+	def pathValue(self, steps: list[str]) -> tuple[AnyValue, list[Segment]]:
+		segments = self.segments(steps)
+		value = optional(self.position(segments[0]))
+		if len(segments) > 1:
+			navigation: list[str] = []
+			for previous, segment in zip(segments, segments[1:]):
+				navigation += (["set", "*", "of"] if previous.multi else ["of"]) + [segment.key]
+			value = derive(V.Field, value, navigation)
+		return value, segments
+
+	# --- typing --------------------------------------------------------------
+
+	def exprType(self, expr: Expression) -> AnyValue:
+		"""The resolved type of an expression, for conversions; None when unknown."""
+		if "path" in expr:
+			segments = self.segments(expr["path"])
+			last = segments[-1]
+			if last.kind == "verb":
+				return ResolvedType("entity", path=last.next)
+			return self.source.resolveType(last.attr.type, last.attr.ann)
+		if "call" in expr:
+			name = expr["call"]
+			if name in BUILTIN_RESULTS:
+				return ResolvedType("builtin", builtin=BUILTIN_RESULTS[name])
+			evaluator = self.owner.calls.evaluator
+			if (function := evaluator.functions.get(name)) is not None:
+				return _resolveSignature(evaluator.model, function.result)
+			if (mapping := evaluator.maps.get(name)) is not None:
+				return evaluator.model.resolveType(TypeExpr(path=mapping.mapTo))
+			return None
+		if "coalesce" in expr:
+			return self.exprType(expr["coalesce"][0])
+		if "meta" in expr:
+			return ResolvedType("builtin", builtin="DateTime" if expr["meta"] == "at" else "Text")
+		return None
+
+	def convert(self, value: AnyValue, actual: AnyValue, attr: Attr) -> AnyValue:
+		"""spec-04 typing conversions that a compile-time check cannot settle."""
+		expected = self.target.resolveType(attr.type, attr.ann)
+		if expected.kind in ("entity", "relation"):
+			return derive(V.Correspond, value) if actual is not None and actual.kind in ("entity", "relation") else value
+		if actual is None:
+			return value
+		if expected.kind == "builtin" and expected.builtin in NUMERIC + ("Duration",):
+			if actual.kind == "builtin" and actual.builtin in NUMERIC + ("Duration",):
+				if pair := qualifierPair(actual.qualifiers, expected.qualifiers):
+					value = derive(V.QualifierConvert, value, pair[0], pair[1])
+				if expected.builtin == "Integer" and actual.builtin != "Integer":
+					value = derive(V.ToInteger, value)
+		elif expected.kind == "vocab" and not expected.open:
+			if actual.kind == "builtin" and actual.builtin == "Text" or actual.kind == "vocab" and actual.open:
+				value = derive(V.ToVocabulary, value, list(expected.values or []))
+		return value
+
+	# --- expressions -----------------------------------------------------------
+
+	def expression(self, expr: Expression) -> AnyValue:
+		if "path" in expr:
+			return self.pathValue(expr["path"])[0]
+		if "call" in expr:
+			name, args = expr["call"], expr["args"]
+			if name == "ref":
+				return self.reference(args[0]["path"][0], self.expression(args[1]))
+			return derive(self.owner.calls.transform(name), *[self.expression(arg) for arg in args])
+		if "coalesce" in expr:
+			return derive(V.Coalesce, *[self.expression(item) for item in expr["coalesce"]])
+		if "meta" in expr:
+			return optional(self.root(f"${expr['meta']}"))
+		return literal(expr)
+
+	def reference(self, typePath: str, key: AnyValue) -> AnyValue:
+		"""A generated `ref(T, Key)`: the handle from `T`'s policy key, else source-qualified with the key."""
+		policy = self.owner.policy(typePath)
+		if policy is not None:
+			return derive(V.Ref, typePath, key)
+		return derive(V.Ref, typePath, derive(V.builtin("concat"), optional(self.root("$scope")), "/", key))
+
+	def paths(self, expr: Expression | None) -> list[list[str]]:
+		if expr is None:
+			return []
+		if "path" in expr:
+			return [expr["path"]]
+		if "call" in expr:
+			return [path for index, arg in enumerate(expr["args"]) if not (expr["call"] == "ref" and index == 0) for path in self.paths(arg)]
+		if "coalesce" in expr:
+			return [path for item in expr["coalesce"] for path in self.paths(item)]
+		return []
+
+	def condition(self, when: dict, value: AnyValue) -> AnyValue:
+		return derive(V.When, derive(V.TextEquals, self.pathValue(when["path"])[0], when["value"]), value)
+
+	def lineValue(self, line: AnyValue) -> tuple[AnyValue, LineInfo]:
+		read = self.paths(line.expr)
+		inputs = read + ([line.when["path"]] if line.when else [])
+		# The source input comes from the expression (`{src=Path}`, else its first path), never from `when`.
+		source = 0 if read else -1
+		if line.src:
+			wanted = line.src.split(".")
+			source = next((index for index, path in enumerate(inputs) if path == wanted), 0)
+		if line.facet:
+			value: AnyValue = True
+			info = LineInfo("facets", line.facet, inputs, source)
+		else:
+			value = self.expression(line.expr)
+			actual = self.exprType(line.expr)
+			key = line.target or line.verb
+			head = key.split(".")[0]
+			headAttr = self.target.lookup(self.scope.target, head) if line.target else None
+			also = None
+			if line.target and "." in key and headAttr is not None and self.target.resolveType(headAttr.type, headAttr.ann).kind in ("entity", "relation"):
+				# `Ref.Attr <- Path` (a `{reverse}` line reversed): claimed on the referenced instance.
+				referenced = self.target.resolveType(headAttr.type, headAttr.ann).path
+				attr = self.target.lookup(referenced, key.split(".", 1)[1])
+				also = head
+			elif line.target:
+				attr = self.target.lookup(self.scope.target, key)
+			else:
+				attr = None
+			if attr is not None:
+				value = self.convert(value, actual, attr)
+			elif line.verb:
+				value = derive(V.Correspond, value)
+			info = LineInfo("links" if line.verb else "values", key, inputs, source, also)
+		if line.when:
+			value = self.condition(line.when, value)
+		return value, info
+
+	def template(self) -> dict[str, AnyValue]:
+		candidates = self.owner.mapping.header.get("candidates") is True
+		sections: dict[str, dict] = {"values": {}, "facets": {}, "links": {}}
+		for line in self.scope.lines:
+			if line.candidate and not candidates:
+				continue
+			value, info = self.lineValue(line)
+			sections[info.section][info.key + "?"] = value
+			self.lines.append(info)
+		record: dict[str, AnyValue] = {"type": self.scope.target, "scope": self.name, "handle": optional(self.root("$target"))}
+		if self.scope.valid is not None:
+			record["valid?"] = derive(V.Valid, self.expression(self.scope.valid))
+		if self.scope.ctx is not None:
+			raise CompileError(V.MappingCodes.ContextUnsupported, f"Scope '{self.scope.source} -> {self.scope.target}' sets a context")
+		return record | sections | {"source": Location}
+
+	def handleTemplate(self) -> dict[str, AnyValue]:
+		"""`{handle}`: derived from the key line of `T`'s policy, else source-qualified."""
+		policy = self.owner.policy(self.scope.target)
+		short = lastSegment(self.scope.target)
+		if policy is None:
+			return {"handle": derive(V.SourceHandle, short, optional(self.root("$scope")), optional(self.root("$handle")), self.scope.source)}
+		key = policy.keys[0]
+		line = next((item for item in self.scope.lines if item.target == key and (not item.candidate or self.owner.mapping.header.get("candidates") is True)), None)
+		if line is None:
+			raise CompileError(V.MappingCodes.PolicyUnsupported, f"No line of '{self.scope.source} -> {self.scope.target}' assigns key '{key}'")
+		actual = self.exprType(line.expr)
+		if actual is not None and actual.kind in ("entity", "relation"):
+			raise CompileError(V.MappingCodes.KeyReference, f"Key '{key}' reads a reference's target")
+		value = self.expression(line.expr)
+		attr = self.target.lookup(self.scope.target, key)
+		value = self.convert(value, actual, attr)
+		if line.when:
+			value = self.condition(line.when, value)
+		return {"handle": derive(V.Handle, short, value)}
+
+	def shape(self) -> AnyValue:
+		fields = {f"{key}?": slotValue for key, slotValue in self.roots.items()}
+		fields |= {f"{key}?": tolerant(position) for key, position in self.positions.items()}
+		return loose(fields)
+
+	def reach(self) -> dict:
+		"""Every path the scope reads: `{key: {segment, children}}`, references continuing under their type."""
+		tree: dict = {}
+		paths = [path for line in self.scope.lines for path in self.paths(line.expr) + ([line.when["path"]] if line.when else [])]
+		paths += self.paths(self.scope.valid) + ([self.scope.when["path"]] if self.scope.when else [])
+		for steps in paths:
+			node = tree
+			for segment in self.segments(steps):
+				node = node.setdefault(segment.key, {"segment": segment, "children": {}})["children"]
+		return tree
+
+
+class MappingCompiler:
+	"""Compile every scope of a mapping, sharing attribute slots with bindings of the same ontology."""
+
+	def __init__(self, fromOntology: Ontology, toOntology: Ontology, mapping: AnyValue, referential: AnyValue, libraries: list[FunctionLibrary] | None,
+		implementations: dict | None, ontologies: list[Ontology] | None = None):
+		self.model = Model(fromOntology)
+		self.targetModel = Model(toOntology)
+		self.mapping = mapping
+		self.referential = referential
+		self.slots: dict[str, AnyValue] = {}
+		self.used: set[str] = set()
+		decls = {decl.path: decl for item in [fromOntology, toOntology] + list(ontologies or []) for decl in item.decls}
+		context = Ontology(namespace=fromOntology.namespace, header=fromOntology.header, decls=list(decls.values()))
+		self.calls = Calls(FunctionEvaluator([context], libraries or [], mapping.functions, mapping.maps, implementations or {}), self.used)
+
+	def attributeSlot(self, typePath: str, attrPath: str, owner: str | None = None) -> AnyValue:
+		name = slotName(typePath, attrPath)
+		if name not in self.slots:
+			attr = self.model.lookup(owner or typePath, attrPath)
+			self.slots[name] = slot(name, valueShape(self.model, attr))
+		return self.slots[name]
+
+	def policy(self, typePath: str) -> AnyValue:
+		"""`T`'s identity policy when it derives handles here; minted and alternate keys are deferred."""
+		if self.referential is None:
+			return None
+		found = policyFor(self.targetModel, self.referential, typePath)
+		if found is None:
+			return None
+		if found.minted or len(found.keys) != 1:
+			raise CompileError(V.MappingCodes.PolicyUnsupported, f"Policy of '{typePath}' needs a registry")
+		if found.fromNamespace and found.fromNamespace != self.mapping.fromNamespace:
+			return None
+		return found
+
+	def compile(self) -> list[MappingScopeCompiler]:
+		ordered = sorted(self.mapping.scopes, key=lambda item: (item.source, item.target))
+		result = []
+		for scope in ordered:
+			name = lastSegment(scope.source) + lastSegment(scope.target)
+			result.append(MappingScopeCompiler(self, scope, name))
+		return result
+
+
+__all__ = ["CompileError", "BindingCompiler", "MappingCompiler", "MappingScopeCompiler", "LineInfo", "Segment", "ROOT_KEYS", "ScopeCompiler", "typeSpec", "scalarShape", "valueShape", "slotName", "fieldName", "Calls", "literal", "isMulti"]
 
 # EOF

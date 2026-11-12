@@ -5,7 +5,6 @@ from __future__ import annotations
 from ..coverage import CoverageReport, Elements, _selections, coverageRows
 from ..expressions import Expression
 from ..ontology.model import Model, Ontology
-from ..text import lastSegment
 from .model import Mapping, MappingScope
 
 # -----------------------------------------------------------------------------

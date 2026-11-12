@@ -43,7 +43,7 @@ def decl(ontology: Ontology, path: str) -> Decl:
 
 def withoutComments(text: str) -> str:
 	lines = (re.sub(r"\s+//.*$|^//.*$", "", line) for line in text.split("\n"))
-	return re.sub(r"\n{3,}", "\n\n", "\n".join(re.sub(r"\s+-- ", " -- ", line) for line in lines))
+	return re.sub(r"\n{3,}", "\n\n", "\n".join(lines))
 
 
 # -----------------------------------------------------------------------------
@@ -53,7 +53,7 @@ def withoutComments(text: str) -> str:
 # -----------------------------------------------------------------------------
 
 
-def testExampleIsInNormalFormExceptCommentsAndDocAlignment():
+def testExampleIsInNormalFormExceptComments():
 	assert fmt(EXAMPLE) == withoutComments(EXAMPLE).strip("\n") + "\n"
 
 
@@ -98,7 +98,7 @@ def testNormalFormSortsStripsDefaultsAndComments():
 	)
 	out = fmt(text)
 	assert out == (
-		"@ontology A card=? rel=*:*\n\nDoc\nHousehold\nOrg\n\nPerson -- A person\n  Email Text {key, src=X}\n"
+		"@ontology A card=? rel=*:*\n\nDoc\nHousehold\nOrg\n\nPerson                                          -- A person\n  Email Text {key, src=X}\n"
 		"  Name Text\n  Status A|B|C\n\nHousehold -hasMember-> Person\n"
 	)
 	assert fmt(out) == out
@@ -143,13 +143,13 @@ def testDomainsMapsAndAnnotations():
 	)
 	out = fmt(text)
 	assert out == (
-		"@ontology A\n@use Dimensions as D\n\n@domain Money\n@domain Society -- People\n\n"
+		"@ontology A\n@use Dimensions as D\n\n@domain Money\n@domain Society                                 -- People\n\n"
 		"D/Money/Basis = Monthly|Yearly\nD/Society/Freq = Fortnightly|Monthly|Weekly\n\n"
 		"Money/Org\n\nSociety/Person\n  Email Text {key, id=key, privacy=Adviser+Owner}\n\n"
 		"Money/Employment(Employee: Society/Person, Employer: Money/Org) {kind=state}\n"
 		"Society/Person -employedBy/employs-> Money/Org {context=Money/Employment}\n\n"
 		"@map Money/FreqToBasis D/Society/Freq -> D/Money/Basis {rule=x26} -- conv\n"
-		"  Fortnightly broader Monthly -- approx\n  Monthly exact Monthly\n  Weekly broader Monthly\n"
+		"  Fortnightly broader Monthly                   -- approx\n  Monthly exact Monthly\n  Weekly broader Monthly\n"
 	)
 	assert fmt(out) == out
 	ontology = load(text)

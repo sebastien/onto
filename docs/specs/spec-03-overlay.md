@@ -70,7 +70,7 @@ include all fields you intend to retain.
 ### Attribute retyping
 
 ```text
-@refine Owner.Attribute Type {status=inferred} -- Rationale
+@refine Owner.Attribute Type {status=inferred}  -- Rationale
 ```
 
 The target must already exist. `Owner.Facet.Attribute` and structure-field paths

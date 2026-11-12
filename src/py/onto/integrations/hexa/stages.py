@@ -7,18 +7,30 @@ DocumentRecordsCollect: <Type>RecordsSelect → <Type>RecordsProject, for each s
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import re
 from typing import Any as AnyValue
 
 from hexa.combinators import Policy, collect, each, parallel, pipe, project, select, stage
 from hexa.runtime import Ledger, report
 from hexa.shapes import Failure
 
+from ...expressions import printExpression
 from ...inventory.operations import documentFields
 from ...ontology.model import Model
 from ...text import annotation
 from .model import ScopeProgram
 from .vocabulary import BindingCodes, isAbsent, reasonCode
+
+# -----------------------------------------------------------------------------
+#
+# DEFINITIONS
+#
+# -----------------------------------------------------------------------------
+
+
+EACH = {"each": True}
+RE_DECIMAL_TEXT = re.compile(r"-?[0-9]+(?:\.([0-9]+))?")
+
 
 # -----------------------------------------------------------------------------
 #
@@ -129,6 +141,40 @@ def handleOf(value: AnyValue) -> str | None:
 	return value if isinstance(value, str) else None
 
 
+def rawValues(value: AnyValue, steps: list[AnyValue], found: dict[str, list]) -> None:
+	"""Raw scalar values by field path in inventory syntax."""
+	if isinstance(value, dict):
+		for key, item in value.items():
+			rawValues(item, steps + [key], found)
+	elif isinstance(value, list):
+		for item in value:
+			rawValues(item, steps + [EACH], found)
+	elif steps and value is not None:
+		found.setdefault(printExpression({"path": steps}, binding=True), []).append(value)
+
+
+def writingFormats(document: AnyValue, csv: bool, fields: set[str]) -> dict[str, dict[str, int]]:
+	"""`DocumentFormatsDiscover`: counts of the writing formats of each bound field's raw values; names only."""
+	found: dict[str, list] = {}
+	rawValues(document, [{"root": True}] if csv or isinstance(document, list) else [], found)
+	tallies: dict[str, dict[str, int]] = {}
+	for path in sorted(fields & set(found)):
+		for value in found[path]:
+			if (name := classify(value)) is not None:
+				tallies.setdefault(path, {})
+				tallies[path][name] = tallies[path].get(name, 0) + 1
+	return tallies
+
+
+def classify(value: AnyValue) -> str | None:
+	"""A raw value's writing format: `decimals:N` for decimal text, else `trim` or `padded` for text."""
+	if not isinstance(value, str):
+		return None
+	if match := RE_DECIMAL_TEXT.fullmatch(value):
+		return f"decimals:{len(match[1] or '')}"
+	return "padded" if value != value.strip() else "trim"
+
+
 # -----------------------------------------------------------------------------
 #
 # OPERATIONS
@@ -146,6 +192,7 @@ class ClaimsBuilder:
 		self.by = by
 		self.aliases: dict[str, str] = {}
 		self.implicit: dict[str, str] = {}
+		self.headers: dict[str, tuple[int, dict]] = {}
 		self.n = 0
 
 	def alias(self, token: str) -> str:
@@ -165,6 +212,25 @@ class ClaimsBuilder:
 		self.data["retractions" if retraction else "claims"].append(claim)
 		return claim
 
+	def exists(self, handle: str, meta: dict) -> dict:
+		"""An existence claim, the header facet claims of the same metadata share its statement (`n`)."""
+		claim = self.add({"s": handle, "exists": True, **meta})
+		self.headers[handle] = (claim["n"], meta)
+		return claim
+
+	def facet(self, handle: str, name: str, meta: dict, ctx: str | None = None) -> None:
+		"""A facet claim; in spec-02 text `h[F]` also asserts existence, so a facet whose metadata differs
+		from its header gets its own statement with an existence claim, as the text form reads it back."""
+		meta = {key: value for key, value in meta.items() if key not in ("valid", "ctx")}
+		header = self.headers.get(handle)
+		if header is not None and {key: value for key, value in header[1].items() if key not in ("valid", "ctx")} == meta:
+			n = header[0]
+		else:
+			self.n += 1
+			n = self.n
+			self.data["claims"].append({"n": n, "s": handle, "exists": True, **meta})
+		self.data["claims"].append({"n": n, "s": handle, "facet": name, **meta, **({"ctx": ctx} if ctx else {})})
+
 	def contextual(self, typePath: str, member: str, isFacet: bool) -> bool:
 		facet = self.model.facets(typePath).get(member if isFacet else member.split(".")[0])
 		return bool(facet is not None and (isFacet or self.model.facetOf(typePath, member) is facet) and annotation(facet.ann, "ctx"))
@@ -177,12 +243,12 @@ class ClaimsBuilder:
 			self.add({"s": handle, "exists": True, **meta}, retraction=True)
 			return
 		valid = record.get("valid")
-		self.add({"s": handle, "exists": True, **meta, **({"valid": valid} if isinstance(valid, str) else {})})
+		self.exists(handle, {**meta, **({"valid": valid} if isinstance(valid, str) else {})})
 		ctx = handleOf(record.get("ctx"))
 		relation = self.model.get(typePath)
 		for name, value in record.get("facets", {}).items():
 			if value is True:
-				self.add({"s": handle, "facet": name, **meta, **({"ctx": ctx} if ctx and self.contextual(typePath, name, True) else {})})
+				self.facet(handle, name, meta, ctx if ctx and self.contextual(typePath, name, True) else None)
 		for name, value in record.get("values", {}).items():
 			if isAbsent(value):
 				continue
@@ -270,15 +336,26 @@ def emitClaims(program: AnyValue, documents: list[dict], runTime: str | None) ->
 			if record.get("deleted") is True:
 				deleted.append({"src": document["src"], "s": record["handle"]})
 			builder.record(record, meta)
+		for path, tally in document.get("writing", {}).items():
+			for name, count in tally.items():
+				formats.setdefault(path, {})
+				formats[path][name] = formats[path].get(name, 0) + count
 		documentReport, documentStale, documentUnidentified = documentGaps(document["records"], document["gaps"], scopes, document["src"])
 		gaps += documentReport
 		stale += documentStale
 		unidentified += documentUnidentified
 	result = {"log": builder.finish(), "stale": stale, "unidentified": unidentified, "deleted": deleted, "formats": formats, "gaps": gaps,
-		"documents": [{key: document[key] for key in ("src", "replaces") if key in document} | {"records": sum("handle" in record for record in document["records"])} for document in documents]}
+		"documents": [documentSummary(document, runTime) for document in documents]}
 	if program.inventory is not None:
 		result["fields"] = fieldsReport(program, documents)
 	return result
+
+
+def documentSummary(document: dict, runTime: str | None) -> dict:
+	"""A document's `src`, `replaces`, run time `at` and number of records read."""
+	times = [record["at"] for record in document["records"] if isinstance(record.get("at"), str)]
+	result = {key: document[key] for key in ("src", "replaces") if key in document}
+	return result | {"at": times[0] if times else runTime, "records": sum("handle" in record for record in document["records"])}
 
 
 def fieldsReport(program: AnyValue, documents: list[dict]) -> dict:
@@ -300,7 +377,7 @@ def needsClock(documents: list[dict]) -> bool:
 	return any("handle" in record and not isinstance(record.get("at"), str) for document in documents for record in document["records"])
 
 
-def bindingStages(program: AnyValue, extra: Callable[[dict], dict] | None = None) -> dict[str, AnyValue]:
+def bindingStages(program: AnyValue) -> dict[str, AnyValue]:
 	"""The stages of a binding program, by name, ending with `BindingRead`."""
 	members: dict[str, AnyValue] = {}
 	pairs = []
@@ -331,14 +408,21 @@ def bindingStages(program: AnyValue, extra: Callable[[dict], dict] | None = None
 			output["replaces"] = item["replaces"]
 		if program.inventory is not None:
 			output["fields"] = (yield from members["DocumentFieldsDiscover"](env, item))["fields"]
+		if program.formats is not None:
+			output["writing"] = (yield from members["DocumentFormatsDiscover"](env, item))["formats"]
 		return output
 
 	def ClaimsEmit(env, documents):
 		"""[{src, records, gaps, fields?}] → {log, stale, formats, fields?}; reads the clock only without `@at`."""
-		runTime = (yield env.ClockRead()) if needsClock(documents) else None
+		runTime = (yield env.ClockRead()) if needsClock(documents) or not any(record for document in documents for record in document["records"]) else None
 		return emitClaims(program, documents, runTime)
 
+	def DocumentFormatsDiscover(env, item):
+		"""{src, document} → {src, formats}: writing formats (`decimals:N`, `trim`, `padded`) of bound fields, names and counts only."""
+		return (yield {"src": item["src"], "formats": writingFormats(item["document"], csv, program.writeFields)})
+
 	members["DocumentFieldsDiscover"] = stage(DocumentFieldsDiscover)
+	members["DocumentFormatsDiscover"] = stage(DocumentFormatsDiscover)
 	members["DocumentRecordsCollect"] = stage(DocumentRecordsCollect)
 	members["DocumentsRead"] = namedStage("DocumentsRead", parallel(members["DocumentRecordsCollect"], Policy.Abort))
 	members["ClaimsEmit"] = stage(ClaimsEmit)
@@ -346,6 +430,6 @@ def bindingStages(program: AnyValue, extra: Callable[[dict], dict] | None = None
 	return members
 
 
-__all__ = ["namedStage", "scopeStages", "emitClaims", "bindingStages", "ClaimsBuilder", "documentGaps", "gapTarget", "cleanValue", "needsClock"]
+__all__ = ["namedStage", "scopeStages", "emitClaims", "bindingStages", "ClaimsBuilder", "documentGaps", "gapTarget", "cleanValue", "needsClock", "writingFormats", "classify"]
 
 # EOF

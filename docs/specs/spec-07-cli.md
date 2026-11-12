@@ -66,16 +66,14 @@ finance/finance.onto:83: error reference: Finance/Broken.Thing: unknown 'Finance
 2 errors in 1 file (2 read)
 
 $ onto fmt --check
-finance/exchange-finance.map
-finance/exchange.onto
-finance/finance.onto
-finance/statement.obs
-4 files not in normal form; run 'onto fmt -w' to rewrite them
+finance/sheet.bind
+1 file not laid out; run 'onto fmt -w' to rewrite it
 ```
 
 `check` resolved the mapping's `From` and `To` ontologies from the workspace and
 reported the error where it is: in `finance.onto`, with a `cli.context` error on
-the mapping's header saying why the mapping could not be checked.
+the mapping's header saying why the mapping could not be checked. `fmt --check`
+found a hand-edited binding whose docs are not aligned.
 
 ## Invocation
 
@@ -194,15 +192,22 @@ Without files, checks the whole workspace.
 
 #### `onto fmt [-w|--check|--diff] [FILE...]`
 
-Print files in their normal form. Observations keep their **log form**, which is
-lossless; `onto state` prints the state form. A file of a multi-file model is
-formatted alone, after its whole model validates.
+Fix the layout of hand-edited files, keeping what they say and how they say it.
+`fmt` changes only:
+
+- trailing ` -- doc`s, aligned as normal form aligns them (spec-01: column 48,
+  or one space after longer code), in the formats that have docs;
+- trailing whitespace, line endings (LF) and the end of the file (one newline).
+
+Declaration order, comments, blank lines, record or log forms and spelling are
+kept as written. The normal forms of the specs are what `onto text` prints, and
+what `onto json` encodes; `onto state` and `onto log` print the observation forms.
 
 | Option | Meaning |
 | --- | --- |
-| `-w`, `--write` | Rewrite files not in normal form; list them |
-| `--check` | List files not in normal form; write nothing; exit 1 if any |
-| `--diff` | Print a unified diff per file not in normal form; exit 1 if any |
+| `-w`, `--write` | Rewrite files whose layout changes; list them |
+| `--check` | List files whose layout would change; write nothing; exit 1 if any |
+| `--diff` | Print a unified diff per file whose layout would change; exit 1 if any |
 
 The three options are exclusive and, without files, apply to the workspace;
 plain `fmt` requires files. Files with errors are reported and left unchanged.
@@ -342,7 +347,7 @@ every column (empty cells included), with a header row for `coverage` and
 
 Under `--color auto`, standard output and standard error are each colored when
 they are a terminal, `TERM` is not `dumb`, and neither `NO_COLOR` nor `NOCOLOR`
-is set. JSON output is never colored, nor are normal forms (`fmt`, `json`,
+is set. JSON output is never colored, nor are file texts (`fmt`, `json`,
 `text`, `state`, `log`, `reverse`, `inventory`), so that they can be copied back
 into files.
 
@@ -407,7 +412,7 @@ Help is written for someone who does not know the formats yet:
   Getting started:
     onto ls                     see what the workspace holds
     onto check                  validate every file
-    onto fmt --diff             see what normal form would change
+    onto fmt --diff             see what layout fixes fmt would make
     onto state statement.obs    read the current state of observations
   ```
 

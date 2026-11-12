@@ -76,6 +76,7 @@ class BindingProgram:
 	formats: Formats | None = None
 	inventory: Inventory | None = None
 	model: Model | None = None
+	writeFields: set[str] = field(default_factory=set)
 
 
 @dataclass(slots=True)

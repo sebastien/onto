@@ -291,8 +291,10 @@ def readValue(value: AnyValue, spec: str) -> AnyValue:
 
 def readSet(value: AnyValue, spec: str) -> AnyValue:
 	"""A complete collection of members read as `spec`; a lone value is a one-member collection."""
-	if isAbsent(value) or value is None or value == UNKNOWN:
-		return ABSENT_VALUE if isAbsent(value) else value
+	if isAbsent(value):
+		return ABSENT_VALUE
+	if value is None or value == UNKNOWN:
+		return value
 	items = value["set"] if isinstance(value, dict) and "set" in value else value if isinstance(value, list) else [value]
 	members: dict[str, AnyValue] = {}
 	for item in items:
@@ -356,6 +358,8 @@ def handleKey(value: AnyValue, typeName: str) -> AnyValue:
 
 def correspond(value: AnyValue) -> AnyValue:
 	"""`{ref, target}` → `{ref: target}`; an unmapped reference is a gap."""
+	if isAbsent(value):
+		return ABSENT_VALUE
 	if isAbsent(value) or value is None or value == UNKNOWN:
 		return value
 	if isinstance(value, dict) and "set" in value:
@@ -415,12 +419,27 @@ def nullable(value: AnyValue, marker: AnyValue, kind: str) -> AnyValue:
 	return value
 
 
+def given(value: AnyValue, result: AnyValue) -> AnyValue:
+	"""`result` when `value` is present: a `when` condition written back beside its line."""
+	return ABSENT_VALUE if isAbsent(value) or value is None or value == UNKNOWN else result
+
+
+def members(value: AnyValue, key: str) -> AnyValue:
+	"""A collection's members as a JSON list, sorted; with `key`, as `{key: member}` objects."""
+	if isAbsent(value) or not isinstance(value, dict) or "set" not in value:
+		return ABSENT_VALUE
+	items = sorted(value["set"], key=lambda item: json.dumps(item, sort_keys=True))
+	return [{key: item} for item in items] if key else items
+
+
 def arithmetic(name: str, *args: str) -> str:
 	return EVALUATOR.evaluate(name, list(args))[0].value
 
 
 def qualifierConvert(value: AnyValue, source: dict, target: dict) -> AnyValue:
 	"""Exact `scale` and `unit` conversion (spec-04 qualifier conversion)."""
+	if isAbsent(value):
+		return ABSENT_VALUE
 	if isAbsent(value) or value is None or value == UNKNOWN:
 		return value
 	if isinstance(value, dict) and "set" in value:
@@ -439,6 +458,8 @@ def qualifierConvert(value: AnyValue, source: dict, target: dict) -> AnyValue:
 
 
 def toInteger(value: AnyValue) -> AnyValue:
+	if isAbsent(value):
+		return ABSENT_VALUE
 	if isAbsent(value) or value is None or value == UNKNOWN:
 		return value
 	if isinstance(value, dict) and "set" in value:
@@ -449,6 +470,8 @@ def toInteger(value: AnyValue) -> AnyValue:
 
 
 def toVocabulary(value: AnyValue, values: list[str]) -> AnyValue:
+	if isAbsent(value):
+		return ABSENT_VALUE
 	if isAbsent(value) or value is None or value == UNKNOWN:
 		return value
 	if isinstance(value, dict) and "set" in value:
@@ -592,7 +615,7 @@ Coalesce = transform("Onto.Coalesce", coalesce, inputs=[[Any, ...]], output=Any,
 	examples=[{"input": [ABSENT_VALUE, "ACM30"], "output": "ACM30"}, {"input": [None, "x"], "output": None}])
 Handle = transform("Onto.Handle", handle, inputs=[Text, Any], output=Text, gaps=["KeyMissing", "TypeMismatch"],
 	examples=[{"input": ["Issuer", "C-17"], "output": "Issuer_C_2D17"}, {"input": ["Issuer", ABSENT_VALUE], "gap": "KeyMissing"}])
-SourceHandle = transform("Onto.SourceHandle", sourceHandle, inputs=[Text, Text, Text, Text], output=Text,
+SourceHandle = transform("Onto.SourceHandle", sourceHandle, inputs=[Text, Any, Any, Text], output=Text,
 	examples=[{"input": ["Company", "Exchange", "Issuer_C_2D17", "Issuer"], "output": "Company_Exchange_2FC_2D17"}])
 Ref = transform("Onto.Ref", reference, inputs=[Text, Any], output=Any, gaps=["TypeMismatch"],
 	examples=[{"input": ["Exchange/Issuer", "C-17"], "output": {"ref": "Issuer_C_2D17", "type": "Exchange/Issuer"}}])
@@ -614,6 +637,10 @@ QualifierConvert = transform("Onto.QualifierConvert", qualifierConvert, inputs=[
 	examples=[{"input": ["0.0525", {"scale": "1"}, {"scale": "100"}], "output": "5.25"}, {"input": ["90", {"unit": "Minute"}, {"unit": "Hour"}], "output": "1.5"}])
 ToInteger = transform("Onto.ToInteger", toInteger, inputs=[Any], output=Any, gaps=["NotIntegral"],
 	examples=[{"input": ["6"], "output": "6"}, {"input": ["6.5"], "gap": "NotIntegral"}])
+Given = transform("Onto.Given", given, inputs=[Any, Any], output=Any,
+	examples=[{"input": ["2026-09-15", "F"], "output": "F"}, {"input": [ABSENT_VALUE, "F"], "output": ABSENT_VALUE}])
+Members = transform("Onto.Members", members, inputs=[Any, Text], output=Any,
+	examples=[{"input": [{"set": ["b", "a"]}, ""], "output": ["a", "b"]}, {"input": [{"set": ["a"]}, "b"], "output": [{"b": "a"}]}])
 ToVocabulary = transform("Onto.ToVocabulary", toVocabulary, inputs=[Any, Any], output=Any, gaps=["ValueUnmapped"],
 	examples=[{"input": ["Bond", ["Bond", "Equity"]], "output": "Bond"}, {"input": ["Cash", ["Bond"]], "gap": "ValueUnmapped"}])
 
@@ -642,7 +669,7 @@ for builtinName, builtinExamples in BUILTIN_EXAMPLES.items():
 CODECS = {"EpochDate": EpochDate, "IntegerText": IntegerText, "SplitText": SplitText, "DateTimePattern": DateTimePattern,
 	"DecimalNumber": DecimalNumber, "DecimalPlaces": DecimalPlaces, "Case": Case}
 TRANSFORMS = {item.name: item for item in (Read, Set, TextEquals, When, Coalesce, Handle, SourceHandle, Ref, HandleKey, Correspond, Valid, At,
-	FormatName, Field, Nullable, QualifierConvert, ToInteger, ToVocabulary, *BUILTIN_TRANSFORMS.values())}
+	FormatName, Field, Nullable, QualifierConvert, ToInteger, ToVocabulary, Given, Members, *BUILTIN_TRANSFORMS.values())}
 
 
 def builtin(name: str) -> AnyValue:
@@ -708,7 +735,7 @@ __all__ = [
 	"ABSENT_VALUE", "BindingCodes", "MappingCodes", "CALLS", "Integral", "IsoDuration", "EpochDate", "IntegerText", "SplitText",
 	"DateTimePattern", "DecimalNumber", "DecimalPlaces", "Case", "DatePattern", "DecimalText", "Read", "Set", "TextEquals", "When",
 	"Coalesce", "Handle", "SourceHandle", "Ref", "HandleKey", "Correspond", "Valid", "At", "FormatName", "Field", "Nullable",
-	"QualifierConvert", "ToInteger", "ToVocabulary", "TRANSFORMS", "CODECS", "builtin", "functionTransform", "functionCodec",
+	"QualifierConvert", "ToInteger", "ToVocabulary", "Given", "Members", "TRANSFORMS", "CODECS", "builtin", "functionTransform", "functionCodec",
 	"registerCall", "reasonCode", "vocabularyConformance", "isAbsent", "decimalText", "documentValue", "encodeKey", "decodeKey",
 	"handleOf", "textOf",
 ]

@@ -51,7 +51,7 @@ ontology  Finance            2026-11-10  finance/finance.onto
 $ onto check finance/exchange-finance.map    # loads Exchange, Finance, Markets, MarketIds
 no problems in 1 file (5 read)
 
-$ onto fmt --check                           # lists files not in normal form; exit 1 if any
+$ onto fmt --check                           # lists files whose layout would change
 
 $ onto coverage finance/exchange-finance.map
 source                target                 status       note

@@ -93,15 +93,16 @@ COMMANDS = (
 	),
 	Command(
 		"fmt", "Files", "[-w|--check|--diff] [FILE...]",
-		"Print or rewrite files in normal form",
-		"Print files in their normal form. Observations keep their lossless log form; 'onto state' prints the "
-		"state form. Only files that validate are formatted. With --write, --check or --diff and no FILE, applies "
-		"to the whole workspace.",
+		"Align the layout of files, keeping what they say",
+		"Fix the layout of hand-edited files: docs (' -- text') aligned at column 48, no trailing whitespace, LF "
+		"line endings, one final newline. Order, comments, blank lines and forms are kept as written; 'onto text' "
+		"prints a normal form instead. Only files that validate are formatted. With --write, --check or --diff and "
+		"no FILE, applies to the whole workspace.",
 		(Argument("files", "*"),),
 		(
 			Option(("-w", "--write"), "Rewrite files in place; lists the files rewritten"),
-			Option(("--check",), "List files not in normal form, write nothing; exit 1 if any"),
-			Option(("--diff",), "Print a unified diff for each file not in normal form; exit 1 if any"),
+			Option(("--check",), "List files whose layout would change, write nothing; exit 1 if any"),
+			Option(("--diff",), "Print a unified diff for each file whose layout would change; exit 1 if any"),
 			LENIENT, KIND,
 		),
 		("onto fmt finance.onto", "onto fmt --check", "onto fmt --diff", "onto fmt -w exchange.bind"),
@@ -216,7 +217,7 @@ TERMS = (
 GETTING_STARTED = (
 	("onto ls", "see what the workspace holds"),
 	("onto check", "validate every file"),
-	("onto fmt --diff", "see what normal form would change"),
+	("onto fmt --diff", "see what layout fixes fmt would make"),
 	("onto state statement.obs", "read the current state of observations"),
 )
 DESCRIPTION = "onto — check, format and convert ontologies, observations, bindings and mappings."

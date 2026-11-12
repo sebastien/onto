@@ -14,6 +14,7 @@ from ..text import (
 	lastSegment,
 	printAnnotations,
 	printArguments,
+	withDoc,
 )
 from .model import (
 	ANNOTATION_KEYS,
@@ -101,9 +102,9 @@ class Printer:
 	def __init__(self, ontology: Ontology):
 		self.short = Namer(ontology.namespace, ontology.uses)
 
-	def _tail(self, ann: Annotations, doc: str | None) -> list[str]:
+	def _tail(self, ann: Annotations) -> list[str]:
 		pairs = [(key, self.short(value)) if key in PATH_KEYS and isinstance(value, str) else (key, value) for key, value in ann]
-		return [part for part in (printAnnotations(pairs, ANNOTATION_KEYS), f"-- {doc}" if doc else "") if part]
+		return [part for part in (printAnnotations(pairs, ANNOTATION_KEYS),) if part]
 
 	@staticmethod
 	def _Join(parts: list[str]) -> str:
@@ -130,41 +131,42 @@ class Printer:
 			return f"${dep.input}"
 		return dep.local or f"{self.short(dep.path)}.{dep.attr}"
 
-	def attr(self, item: Attr, doc: bool = True) -> str:
-		"""An attribute line without indentation."""
+	def attr(self, item: Attr, doc: bool = True, indent: str = "") -> str:
+		"""An attribute line after `indent`, with its doc aligned."""
 		deps = f"<- {', '.join(self.depText(dep) for dep in item.deps)}" if item.deps else ""
-		return self._Join(
-			[item.card or "", "~" if item.derived else "", item.name, self.typeText(item.type), deps]
-			+ self._tail(item.ann, item.doc if doc else None)
-		)
+		code = self._Join([item.card or "", "~" if item.derived else "", item.name, self.typeText(item.type), deps] + self._tail(item.ann))
+		return withDoc(indent + code, item.doc if doc else None)
 
 	def head(self, decl: Decl, doc: bool = True) -> str:
-		"""A declaration's header line."""
-		docText = decl.doc if doc else None
+		"""A declaration's header line, with its doc aligned."""
+		return withDoc(self.headCode(decl), decl.doc if doc else None)
+
+	def headCode(self, decl: Decl) -> str:
+		"""A declaration's header line without its doc."""
 		short = self.short
 		if decl.kind == "type":
-			return self._Join([f"{short(decl.path)} =", self.typeText(decl.definition)] + self._tail(decl.ann, docText))
+			return self._Join([f"{short(decl.path)} =", self.typeText(decl.definition)] + self._tail(decl.ann))
 		if decl.kind == "entity":
-			return self._Join([short(decl.path), f"< {short(decl.base)}" if decl.base else ""] + self._tail(decl.ann, docText))
+			return self._Join([short(decl.path), f"< {short(decl.base)}" if decl.base else ""] + self._tail(decl.ann))
 		if decl.kind == "facet":
-			return self._Join([f"{short(decl.path)} of {short(decl.subject)}"] + self._tail(decl.ann, docText))
+			return self._Join([f"{short(decl.path)} of {short(decl.subject)}"] + self._tail(decl.ann))
 		if decl.kind == "view":
-			return self._Join([f"@view {short(decl.path)}"] + self._tail([], docText))
+			return self._Join([f"@view {short(decl.path)}"] + [])
 		if decl.kind == "domain":
-			return self._Join([f"@domain {short(decl.path)}"] + self._tail([], docText))
+			return self._Join([f"@domain {short(decl.path)}"] + [])
 		if decl.kind == "map":
-			return self._Join([f"@map {short(decl.path)} {short(decl.mapFrom)} -> {short(decl.mapTo)}"] + self._tail(decl.ann, docText))
+			return self._Join([f"@map {short(decl.path)} {short(decl.mapFrom)} -> {short(decl.mapTo)}"] + self._tail(decl.ann))
 		if decl.arrow:
 			subject, obj = decl.participants
 			verbs = decl.arrow.verb + (f"/{decl.arrow.inverse}" if decl.arrow.inverse else "")
 			return self._Join(
-				[short(subject.type), f"-{verbs}->", short(obj.type), decl.arrow.counts or ""] + self._tail(decl.ann, docText)
+				[short(subject.type), f"-{verbs}->", short(obj.type), decl.arrow.counts or ""] + self._tail(decl.ann)
 			)
 		parts = [
 			("" if item.role == lastSegment(item.type) else f"{item.role}: ") + (f"{item.card} " if item.card else "") + short(item.type)
 			for item in decl.participants
 		]
-		return self._Join([f"{short(decl.path)}({', '.join(parts)})"] + self._tail(decl.ann, docText))
+		return self._Join([f"{short(decl.path)}({', '.join(parts)})"] + self._tail(decl.ann))
 
 	def viewLine(self, line: ViewLine) -> str:
 		"""Render the selected path, facets and member of `line`."""
@@ -176,19 +178,19 @@ class Printer:
 			facets = "[*]" if line.facets == "*" else f"[{', '.join(line.facets)}]"
 		return f"{self.short(line.path)}{facets}{f'.{line.member}' if line.member else ''}"
 
-	def mapLine(self, line: MapLine, doc: bool = True) -> str:
-		"""Render vocabulary map `line`, optionally including its doc."""
-		return self._Join([line.fromValue, line.match, line.toValue, f"-- {line.doc}" if doc and line.doc else ""])
+	def mapLine(self, line: MapLine, doc: bool = True, indent: str = "") -> str:
+		"""Render vocabulary map `line` after `indent`, optionally with its doc aligned."""
+		return withDoc(indent + self._Join([line.fromValue, line.match, line.toValue]), line.doc if doc else None)
 
 	def block(self, decl: Decl) -> list[str]:
 		"""A declaration and its body lines."""
 		if decl.kind == "view":
-			body = [self.viewLine(line) for line in decl.viewLines]
+			body = [f"  {self.viewLine(line)}" for line in decl.viewLines]
 		elif decl.kind == "map":
-			body = [self.mapLine(line) for line in decl.mapLines]
+			body = [self.mapLine(line, indent="  ") for line in decl.mapLines]
 		else:
-			body = [self.attr(item) for item in (decl.fields or [] if decl.kind == "type" else decl.attrs)]
-		return [self.head(decl)] + [f"  {line}" for line in body]
+			body = [self.attr(item, indent="  ") for item in (decl.fields or [] if decl.kind == "type" else decl.attrs)]
+		return [self.head(decl)] + body
 
 # -----------------------------------------------------------------------------
 #

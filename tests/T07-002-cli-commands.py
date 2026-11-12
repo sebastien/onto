@@ -18,34 +18,48 @@ from tests._helpers import _specExample
 # -----------------------------------------------------------------------------
 
 
-def test_fmt_prints_the_normal_form(workspace):
-	status, out, _ = onto("fmt", "finance/finance.onto")
-	assert status == 0 and out == formatOntology([Source("finance.onto", _specExample("spec-01-ontology"))])
+MESSY = "@ontology Loose   \r\n\n// Kept\nThing -- A thing  // also kept\n  Name Text      --   The name\nOther\n\n\n"
+LAID_OUT = (
+	"@ontology Loose\n\n// Kept\n"
+	+ "Thing".ljust(47) + " -- A thing  // also kept\n"
+	+ "  Name Text".ljust(47) + " -- The name\nOther\n"
+)
+
+
+def test_fmt_keeps_hand_edited_files_as_written(workspace):
+	# NOTE: The spec examples are laid out: comments, order and record forms stay.
+	for path in ("finance/finance.onto", "finance/statement.obs", "finance/exchange-finance.map", "finance/market-ids.ref"):
+		status, out, _ = onto("fmt", path)
+		assert status == 0 and out == (workspace / path).read_text()
+	assert onto("fmt", "--check") == (0, "", "")
+
+
+def test_fmt_fixes_layout_only(workspace):
+	(workspace / "finance/loose.onto").write_text(MESSY)
+	status, out, _ = onto("fmt", "finance/loose.onto")
+	assert status == 0 and out == LAID_OUT
 
 
 def test_fmt_check_lists_files_and_fails(workspace):
+	(workspace / "finance/loose.onto").write_text(MESSY)
 	status, out, err = onto("fmt", "--check")
-	assert status == 1
-	assert "finance/finance.onto" in out.splitlines()
-	assert err.endswith("not in normal form; run 'onto fmt -w' to rewrite them\n")
+	assert status == 1 and out == "finance/loose.onto\n"
+	assert err == "1 file not laid out; run 'onto fmt -w' to rewrite it\n"
 
 
 def test_fmt_write_then_check_is_clean(workspace):
+	(workspace / "finance/loose.onto").write_text(MESSY)
 	status, out, _ = onto("fmt", "-w")
-	assert status == 0 and "finance/finance.onto" in out.splitlines()
+	assert status == 0 and out == "finance/loose.onto\n"
+	assert (workspace / "finance/loose.onto").read_text() == LAID_OUT
 	assert onto("fmt", "--check") == (0, "", "")
-	assert onto("check")[0] == 0
 
 
 def test_fmt_diff_is_unified(workspace):
-	status, out, _ = onto("fmt", "--diff", "finance/exchange.onto")
-	assert status == 1 and out.startswith("--- a/finance/exchange.onto\n+++ b/finance/exchange.onto\n")
-
-
-def test_fmt_keeps_the_observations_log(workspace):
-	_, formatted, _ = onto("fmt", "finance/statement.obs")
-	_, log, _ = onto("log", "finance/statement.obs")
-	assert formatted == log
+	(workspace / "finance/loose.onto").write_text("@ontology Loose\nThing -- A thing\n")
+	status, out, _ = onto("fmt", "--diff", "finance/loose.onto")
+	assert status == 1 and out.startswith("--- a/finance/loose.onto\n+++ b/finance/loose.onto\n")
+	assert "+Thing                                           -- A thing" in out
 
 
 def test_fmt_usage_errors(workspace):
@@ -57,7 +71,7 @@ def test_json_and_text_round_trip(workspace):
 	status, data, _ = onto("json", "finance/finance.onto")
 	assert status == 0 and json.loads(data)["namespace"] == "Finance"
 	(workspace / "finance.json").write_text(data)
-	assert onto("text", "finance.json")[1] == onto("fmt", "finance/finance.onto")[1]
+	assert onto("text", "finance.json")[1] == formatOntology([Source("finance.onto", _specExample("spec-01-ontology"))])
 
 
 def test_json_rejects_kinds_without_a_json_form(workspace):
@@ -80,12 +94,15 @@ def test_state_and_log(workspace):
 
 def test_lenient_gaps_have_no_text_form(workspace):
 	(workspace / "finance/gap.obs").write_text("@obs Finance rev=2026-11-10 at=2026-11-10\n@src s=x:y\n@src s\n\np9:Person\n  NoSuchAttr 3\n")
-	for command in ("state", "log", "fmt"):
+	for command in ("state", "log"):
 		status, out, err = onto(command, "--lenient", "finance/gap.obs")
 		assert status == 1 and out == ""
 		assert "finance/gap.obs:1: error cli.gaps: 1 statement is a gap (lenient mode), which text forms cannot hold; use 'onto json'" in err
 	status, out, _ = onto("json", "--lenient", "finance/gap.obs")
 	assert status == 0 and json.loads(out)["gaps"]
+	# NOTE: Layout needs no text form, so fmt keeps a lenient file as written.
+	status, out, _ = onto("fmt", "--lenient", "finance/gap.obs")
+	assert status == 0 and out == (workspace / "finance/gap.obs").read_text()
 
 
 def test_state_rejects_other_kinds(workspace):

@@ -6,6 +6,7 @@ from copy import deepcopy
 from typing import Any
 
 from ..ontology.formatter import Namer
+from ..text import withDoc
 from .model import REFERENTIAL_FORMAT, Policy, Referential
 
 # -----------------------------------------------------------------------------
@@ -43,9 +44,7 @@ def printReferential(ref: Referential) -> str:
 			parts.append("from=" + policy.fromNamespace)
 		if policy.implicit is not None:
 			parts.append("implicit=" + policy.implicit)
-		if policy.doc is not None:
-			parts.append("-- " + policy.doc)
-		lines.append(" ".join(parts))
+		lines.append(withDoc(" ".join(parts), policy.doc))
 	return "\n".join(lines) + "\n"
 
 

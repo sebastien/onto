@@ -10,7 +10,7 @@ from ..expressions import Expression, printExpression
 from ..functions.formatter import functionBlock, functionsToJson
 from ..functions.model import FunctionLibrary
 from ..ontology.formatter import Namer
-from ..text import isName
+from ..text import isName, withDoc
 from .model import ANNOTATION_KEYS, BINDING_FORMAT, HEADER_KEYS, Binding, BindingLine
 
 # -----------------------------------------------------------------------------
@@ -63,9 +63,6 @@ def printBinding(binding: Binding) -> str:
 			parts.append(f"{key}={value}")
 		return " {" + ", ".join(parts) + "}" if parts else ""
 
-	def docText(item: Any) -> str:
-		return f" -- {item.doc}" if item.doc else ""
-
 	args = " ".join(f"{key}={binding.header[key]}" for key in HEADER_KEYS if key in binding.header)
 	lines = [f"@binding {binding.ontology}" + (f" {args}" if args else "")]
 	lines += [f"@use {namespace} as {alias}" for alias, namespace in sorted(binding.uses.items())]
@@ -76,14 +73,14 @@ def printBinding(binding: Binding) -> str:
 	for function in sorted(binding.functions, key=lambda item: item.name):
 		lines += [""] + functionBlock(function, short)
 	for scope in sorted(binding.scopes, key=lambda item: (item.type, exprText(item.path))):
-		lines += ["", f"{short(scope.type)} <- {exprText(scope.path)}" + annotations(scope, ("id", "ctx", "valid", "deleted")) + docText(scope)]
+		lines += ["", withDoc(f"{short(scope.type)} <- {exprText(scope.path)}" + annotations(scope, ("id", "ctx", "valid", "deleted")), scope.doc)]
 		for line in sorted(scope.lines, key=lineKey):
 			text = f"[{line.facet}]" if line.facet else f"{line.target or line.verb} <- {exprText(line.expr)}"
-			lines.append("  " + text + annotations(line, ("when", "null")) + docText(line))
+			lines.append(withDoc("  " + text + annotations(line, ("when", "null")), line.doc))
 	if binding.exclusions:
 		lines.append("")
 		for exclusion in sorted(binding.exclusions, key=lambda item: exprText(item.path)):
-			lines.append("- " + exprText(exclusion.path) + f" {{reason={exclusion.reason}}}" + docText(exclusion))
+			lines.append(withDoc("- " + exprText(exclusion.path) + f" {{reason={exclusion.reason}}}", exclusion.doc))
 	return "\n".join(lines) + "\n"
 
 

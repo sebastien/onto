@@ -8,8 +8,8 @@ import re
 from typing import Any
 
 from ..ontology.formatter import Namer
-from ..text import printAnnotations
-from .model import FUNCTIONS_FORMAT, FunctionExample, FunctionLibrary, SignatureType
+from ..text import printAnnotations, withDoc
+from .model import FUNCTIONS_FORMAT, Function, FunctionExample, FunctionLibrary, SignatureType
 
 # -----------------------------------------------------------------------------
 #
@@ -56,7 +56,7 @@ def functionBlock(function: Function, short: Namer) -> list[str]:
 		return (signature.builtin or short(signature.path)) + ("*" if signature.collection else "")
 	annotations = printAnnotations(function.ann, ["inverse", "nulls"])
 	head = f"@fn {function.name} {', '.join(signatureText(arg) for arg in function.args)} -> {signatureText(function.result)}"
-	lines = [head + (f" {annotations}" if annotations else "") + (f" -- {function.doc}" if function.doc else "")]
+	lines = [withDoc(head + (f" {annotations}" if annotations else ""), function.doc)]
 	for example in sorted(function.examples, key=_exampleKey):
 		args = ", ".join(_valueText(value) for value in example.args)
 		lines.append(f"  {args} => {_valueText(example.result)}")

@@ -17,13 +17,13 @@ from typing import Any
 from ..binding import Binding, bindingCoverage, bindingToJson, printBinding
 from ..coverage import CoverageReport, observationsCoverage
 from ..formats import Formats, printFormats
-from ..functions import FunctionEvaluator, FunctionLibrary, functionsToJson, loadFunctions, printFunctions
+from ..functions import FunctionEvaluator, FunctionLibrary, functionsToJson, printFunctions
 from ..inventory import Inventory, defaultBinding, inventoryFromDocuments, printInventory
 from ..mapping import Mapping, mappingCoverage, mappingReverse, mappingToJson, printMapping
 from ..observations import Observations, observationsToJson, printObservationsLog, printObservationsState, reconcileObservations
-from ..ontology import Ontology, normaliseOntology, ontologyToJson, parseOntology, printOntology
-from ..referential import Referential, loadReferential, printReferential, referentialToJson
-from ..text import Diagnostic, FormatError, Loc, annotation
+from ..ontology import Ontology, normaliseOntology, ontologyToJson, printOntology
+from ..referential import Referential, printReferential, referentialToJson
+from ..text import Diagnostic, FormatError, Loc, annotation, layoutText
 from .usage import UsageError
 from .workspace import STDIN, Entry, Workspace
 
@@ -35,6 +35,8 @@ from .workspace import STDIN, Entry, Workspace
 
 type Row = dict[str, str]
 COVERAGE_COLUMNS = ("source", "target", "status", "note")
+# NOTE: Kinds whose lines may end with a ` -- doc`.
+DOC_KINDS = ("ontology", "functions", "binding", "mapping", "referential")
 JSON_WRITERS: tuple[tuple[type, Callable[[Any], Any]], ...] = (
 	(Ontology, ontologyToJson),
 	(Observations, observationsToJson),
@@ -133,20 +135,17 @@ class Forms:
 	"""Normal-form text and JSON of loaded models, per kind."""
 
 	@staticmethod
-	def Text(ws: Workspace, entry: Entry, model: Any, whole: bool = False) -> str:
-		"""Normal text of `entry`; for a file of a multi-file model, of that file only, unless `whole`."""
-		group = ws.group(entry)
-		single = whole or len(group) == 1
+	def Text(ws: Workspace, entry: Entry, model: Any) -> str:
+		"""Normal text of a loaded model, as `onto text` prints it."""
 		match model:
 			case Ontology():
-				ontology = model if single else parseOntology([ws.source(entry)])
-				return printOntology(normaliseOntology(ontology))
+				return printOntology(normaliseOntology(model))
 			case Observations():
 				return printObservationsLog(ws.context(entry).ontology, model)
 			case FunctionLibrary():
-				return printFunctions(model if single else loadFunctions(ws.context(entry).ontologies, [ws.source(entry)]))
+				return printFunctions(model)
 			case Referential():
-				return printReferential(model if single else loadReferential(ws.context(entry).ontologies, [ws.source(entry)]))
+				return printReferential(model)
 			case Binding():
 				return printBinding(model)
 			case Mapping():
@@ -194,7 +193,7 @@ class Commands:
 		return Result(checked=len(entries))
 
 	def cmdFmt(self) -> Result:
-		"""Print, rewrite, list or diff normal forms."""
+		"""Print, rewrite, list or diff the layout of files; their content is kept as written."""
 		mode = "write" if self.args.write else "check" if self.args.check else "diff" if self.args.diff else "print"
 		if sum(map(bool, (self.args.write, self.args.check, self.args.diff))) > 1:
 			raise UsageError("use only one of --write, --check and --diff", "fmt")
@@ -208,18 +207,13 @@ class Commands:
 				self.ws.error("cli.kind", "fmt formats text files; use 'onto text' for JSON", entry.path, 0)
 				continue
 			if mode == "write" and entry.path == STDIN:
-				self.ws.error("cli.read", "cannot rewrite standard input; omit --write to print its normal form")
+				self.ws.error("cli.read", "cannot rewrite standard input; omit --write to print it laid out")
 				continue
-			model = load(self.ws, entry)
-			if model is None or isinstance(model, Observations) and not textual(self.ws, entry, model):
-				continue
-			try:
-				normal = Forms.Text(self.ws, entry, model)
-			except FormatError as error:
-				# NOTE: One file of a multi-file model may not validate alone.
-				self.ws.report(error.diagnostics)
+			# NOTE: Only files that validate are laid out, so that layout never hides an error.
+			if load(self.ws, entry) is None:
 				continue
 			current = self.ws.indexer.texts.get(entry.path, "")
+			normal = layoutText(current, entry.kind in DOC_KINDS)
 			if mode == "print":
 				outputs.append((entry.path, normal))
 			elif normal != current:
@@ -238,7 +232,7 @@ class Commands:
 			result.data = changed
 			if mode == "check" and changed:
 				result.failed = True
-				result.hint = f"{len(changed)} file{'s' if len(changed) != 1 else ''} not in normal form; run 'onto fmt -w' to rewrite {'it' if len(changed) == 1 else 'them'}"
+				result.hint = f"{len(changed)} file{'s' if len(changed) != 1 else ''} not laid out; run 'onto fmt -w' to rewrite {'it' if len(changed) == 1 else 'them'}"
 		return result
 
 	def cmdJson(self) -> Result:
@@ -262,7 +256,7 @@ class Commands:
 		model = load(self.ws, entry) if entry else None
 		if model is None:
 			return Result(checked=1)
-		return Result(text=Forms.Text(self.ws, entry, model, whole=True), checked=1)
+		return Result(text=Forms.Text(self.ws, entry, model), checked=1)
 
 	def cmdLs(self) -> Result:
 		"""One row per model: kind, namespace, revision and files."""

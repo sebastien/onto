@@ -20,6 +20,8 @@ PATH = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*")
 TOKEN = re.compile(r"[^\s{},=]+")
 RE_ANNOTATION = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)(?:\s*=\s*(.*))?")
 RE_ARGUMENT = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=(.+)")
+# NOTE: Normal form starts a trailing ` -- doc` at this 0-based column, or one space after longer code.
+DOC_COLUMN = 48
 
 
 @dataclass(slots=True, frozen=True)
@@ -239,6 +241,34 @@ def parseArguments(text: str, loc: Loc | None, diag: Diagnostics) -> list[tuple[
 			continue
 		pairs.append((match.group(1), match.group(2)))
 	return pairs
+
+
+def withDoc(code: str, doc: str | None) -> str:
+	"""`code` (indentation included) followed by ` -- doc` aligned at `DOC_COLUMN`, or `code` alone."""
+	return f"{code:<{DOC_COLUMN - 1}} -- {doc}" if doc else code
+
+
+def layoutText(text: str, docs: bool = True) -> str:
+	"""Fix the layout of hand-edited `text`, keeping its content, order and comments.
+
+	Lines end with LF and carry no trailing whitespace, the file ends with one
+	newline and, when the format has `docs`, each trailing ` -- doc` is aligned as
+	`withDoc` does. Nothing is reordered, normalised or removed.
+	"""
+	lines = []
+	for raw in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+		line = raw.rstrip()
+		code = stripComment(line)
+		comment = line[len(code):]
+		body, doc = splitDoc(code.rstrip()) if docs else (code.rstrip(), None)
+		if doc is not None and body.strip():
+			# NOTE: A trailing comment keeps its own spacing after the realigned doc.
+			gap = code[len(code.rstrip()):] or " "
+			line = withDoc(body, doc) + (gap + comment if comment else "")
+		lines.append(line)
+	while lines and not lines[-1]:
+		lines.pop()
+	return "\n".join(lines) + "\n" if lines else ""
 
 
 def printArguments(pairs: list[tuple[str, str]]) -> str:

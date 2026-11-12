@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from onto import Source, loadFunctions, loadMapping, loadOntology, mappingReverse, mappingToJson
 from onto.referential import loadReferential
 from tests._helpers import _specExample

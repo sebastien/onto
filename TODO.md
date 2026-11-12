@@ -382,7 +382,7 @@ Follow-up decisions (also written):
 Spec-02 additions (identity links, `@implicit`, `by`-scoped retractions, link
 application in the state form) affect the phase-2 observations implementation.
 
-## hexa integration (2026-11-12): specified, not implemented
+## hexa integration (2026-11-12): specified; implemented except the deferred items (see steps 4–6 progress)
 
 onto bindings and mappings are to run as [hexa](../hexa/README.md) shape
 pipelines through an optional integration. hexa stays domain-free; onto depends on it, never the reverse.
@@ -608,6 +608,58 @@ conformance audit and review; the user approved starting this handoff.
   remains unavailable locally. Binding/mapping execution, claim provenance,
   reversal restrictions, registries and hexa remain deferred. Next: step 4,
   static coverage/inventories, default bindings and mapping reversal/loss reports.
+
+### Steps 4–6 progress (2026-11-12): static operations and the hexa integration
+
+- **Step 4 (onto core, no hexa).** `inventory/` (`parseInventory`, `printInventory`,
+  `documentFields`, `inventoryFromDocuments`, `defaultBinding`), `formats/`
+  (`parseFormats`, `printFormats`, `formatsUpdate`: tallies, most frequent chosen
+  unless pinned, changes listed), coverage rows and `printCoverageTable` in
+  `coverage.py`, `bindingCoverage` (ontology side, document side against an
+  inventory, uninventoried reads) and `mappingCoverage` (statuses ranked direct >
+  transformed > condition > ambiguous, view-restricted, unassigned `To` elements),
+  `mappingReverse` → `(Mapping, [LossyLine])` with the generated forms of spec-06.
+  The spec tables/examples are reproduced (coverage table, lossy lists of both
+  example mappings). Tests `T04-006-coverage-static.py`, `T04-007-mapping-reversal.py`.
+- **Step 5 (hexa).** Not modified: `../hexa` already provides what the integration
+  needs (another session is moving it to `src/py/hexa`; pytest's `pythonpath`
+  now includes `../hexa/src/py`). hexa ships no runner for vocabulary examples, so
+  `vocabularyConformance()` runs every `Onto` codec/transform example instead.
+- **Step 6 (integration)**, `src/py/onto/integrations/hexa/`, tests `T06-001..005`
+  (skipped without hexa): vocabulary (codes, constraints, codecs, transforms
+  wrapping `FunctionEvaluator`); binding compiler and `BindingRead` (spec-06
+  Dividend record and `DatePattern.Invalid` hole reproduced); `$format` reading,
+  format tallies, observed fields, writing-format discovery; `BindingRun`/
+  `MappingRun` re-running (stale slots, completeness, deleted records, ceiling,
+  empty input, older snapshots, `replaces`/`of`, lenient confirmation, lapsing,
+  person approval, `Outcome`); mappings (`HandlesResolve` key-derived/source-
+  qualified, unfolding with metadata tables, conflict variants, mixed provenance,
+  qualifier/integer/vocabulary conversions, `MappingRun`); writing
+  (`compileWrite`/`BindingWrite`, originals, formats, nested placement, CSV
+  columns, parentless records, null policies) and reverse mappings run end to end
+  (Finance → Sheet CSV → Sheet → Finance trades through `Isin`).
+- **Deviations from spec-06 forced by hexa, to confirm or fold into the spec:**
+  1. Positions are `either(Null, tolerant(P))`, not `tolerant(P | Null)`: hexa reports
+     a union whose branches fail differently as `Issue.Mismatch`, hiding codec reasons.
+  2. Nested scope paths are selected level by level: hexa's selector fails as a whole
+     on one missing path, which lost every dividend when one instrument had none.
+  3. Stages are named but not registered (`StageNamespace`, not hexa `stages`): hexa
+     registers stage and namespace names process-wide, so two programs with the same
+     scope types (or a recompile) would clash.
+  4. hexa derivations cannot leave a key out without a hole, so transforms return a
+     marker (`{"absent": true}`) that `ClaimsEmit` drops; `Onto.Ref` values carry an
+     internal `type` (stripped before claims) to type implicit instances.
+  5. Integer attributes read through `Onto.IntegerText` (hexa refuses `DecimalText`'s
+     canonical `Decimal` for a `Decimal where Integral` slot). Extra transforms:
+     `Read`, `Set`, `Field`, `Nullable`, `At`, `Given`, `Members`.
+  6. Transform gap codes live under the transform (`Onto.Handle.KeyMissing`); reports
+     map them to `Binding.*`/`Mapping.*`. Library/local function transforms dispatch
+     through a process-wide table (last compiled program wins).
+  7. Facet claims share their header's `n` (or carry an existence claim): `h[F]` in
+     spec-02 text also asserts existence, so JSON otherwise fails its round trip.
+  8. Writing formats discovered: `decimals:N`, `trim`, `padded` (case is not learned).
+- Still deferred: contextual facets in mappings, registry identities (minted,
+  alternate keys), index steps, `key=A,B` policies, hexa-side conformance runner.
 
 Work in this order; each step is test-first and leaves `make test` green.
 

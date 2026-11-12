@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
-import re
 
 import pytest
 
@@ -102,11 +101,9 @@ def testCompleteExchangeImportFromTheSpecification():
 	assert data["maps"][0]["path"] == "AssetClassFromCode"
 	assert data["maps"][0]["from"] == "Exchange/ClassCode"
 	assert data["maps"][0]["to"] == "Dimensions/AssetClass"
-	# Like the spec-01 example, this fixture aligns docs; canonical text uses one separator.
-	canonical = re.sub(r"[ \t]+--", " --", text)
-	assert ops.print(mapping) == canonical
+	assert ops.print(mapping) == text
 	assert ops.toJson(ops.fromJson(data)) == data
-	assert ops.format(Source("t", text)) == canonical
+	assert ops.format(Source("t", text)) == text
 
 
 def testCompleteFinanceSheetProjectionFromTheSpecification():

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
-import re
 
 import pytest
 
@@ -59,7 +58,7 @@ def testCompleteSpecReferentialAndJsonExcerptRoundTrip():
 	data = referentialToJson(ref)
 	_schemaValidator("referential").validate(data)
 	assert data["policies"][-1]["minted"] is True
-	assert printReferential(ref) == re.sub(r"[ \t]+--", " --", text)
+	assert printReferential(ref) == text
 	assert referentialToJson(referentialFromJson([FINANCE, EXCHANGE], data)) == data
 	excerpt = json.loads(_specExample("spec-05-identities", kind="json"))
 	assert referentialToJson(referentialFromJson([FINANCE, EXCHANGE], excerpt)) == excerpt

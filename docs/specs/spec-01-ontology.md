@@ -31,7 +31,7 @@ Data moves between systems and ontologies through
 @use Dimensions as D
 
 // Types
-D/AssetClass = Bond|Cash|Derivative|Equity|Fund|...  -- Open: values are examples
+D/AssetClass = Bond|Cash|Derivative|Equity|Fund|... -- Open: values are examples
 D/InterestFrequency = Monthly|Quarterly|Biannually|Yearly {ordered}
 D/Money/USD = Amount {cur=USD}
 
@@ -348,7 +348,7 @@ Household -hasMember/memberOf-> Person 1:*
 
 ```text
 @map Budget/FreqToBasis D/Freq -> D/Basis {rule=x26} -- Pay frequency to budget basis
-  Fortnightly broader Monthly -- approximate
+  Fortnightly broader Monthly                   -- approximate
   Monthly exact Monthly
 ```
 
@@ -479,14 +479,15 @@ Within declarations:
   binary endpoints keep subject/object order.
 - Cardinality equal to the default is omitted. Annotation keys follow the table
   order above; flags follow the same order.
-- Tokens are separated by single spaces. Sections are separated by one blank line.
+- Tokens are separated by single spaces. A doc's ` -- ` starts at column 48
+  (counting from 0, indentation included), padding the code with spaces, or one
+  space after code that reaches column 47. Sections are separated by one blank line.
   Within a section, a declaration with a body is surrounded by one blank line;
   consecutive bodiless declarations are adjacent.
 - Comments are dropped; docs are kept.
 - A type is written as declared (inline vocabularies stay inline).
 
-The [example](#example) is in normal form, except for its comments and the
-alignment of its docs.
+The [example](#example) is in normal form, except for its comments.
 
 ## Identity sidecar
 
