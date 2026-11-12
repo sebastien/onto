@@ -11,7 +11,7 @@ requires-python = ">=3.14"
 dependencies = []
 
 [project.scripts]
-onto = "onto.cli:main"
+onto = "onto.main:main"
 
 [dependency-groups]
 dev = ["pytest>=8", "jsonschema>=4.18"]
