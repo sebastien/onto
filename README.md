@@ -16,12 +16,14 @@ markers, `by`-scoped retractions and `approved` metadata are implemented. Spec-0
 implementation has started with shared expressions, function-library, binding and mapping
 declarations, canonical printing and strict JSON import. `onto.functions`
 supports concrete built-in/named signatures, typed examples and inverse-signature
-checks; unrestricted `any` is reserved for the built-in contracts. Functions are
-not executed. Bindings and mappings support declaration loading, static
+checks; unrestricted `any` is reserved for the built-in contracts. Pure function
+execution and executable example/inverse conformance are available. Bindings and
+mappings support declaration loading, static
 validation and text/JSON normal forms; execution is not implemented yet.
-Overlays (spec-03), referential policies and registries
-(spec-05), the identity sidecar file, `OntologyDiff`, the CLI and a JavaScript backend are not
-implemented yet.
+Referential declarations (spec-05) now support policy validation, inheritance and
+mapping key checks. Registries, minted allocation, alternate-key matching and
+implicit-age run warnings remain unimplemented, as do overlays (spec-03), the
+identity sidecar file, `OntologyDiff`, the CLI and a JavaScript backend.
 
 ## Integrations
 
@@ -39,7 +41,7 @@ one loads its library only when it is itself imported.
 
 ## Layout
 
-The `ontology/`, `observations/`, `functions/`, `binding/` and `mapping/` packages under
+The `ontology/`, `observations/`, `functions/`, `binding/`, `mapping/` and `referential/` packages under
 `src/py/onto/` each contain
 `model.py`, `parser.py`, `formatter.py` and `operations.py`, plus a public
 `__init__.py`. Models hold types, constants and shared value/claim helpers;
@@ -52,7 +54,8 @@ Existing `onto`, `onto.ontology` and `onto.observations` imports are preserved.
 Each feature also exports an `Operator`: `OntologyOperator(ontology)` and
 `ObservationsOperator(ontology, mode="strict")`, plus
 `FunctionsOperator(ontologies)`, `BindingOperator(ontology)` and
-`MappingOperator(fromOntology, toOntology)` from the top-level package.
+`MappingOperator(fromOntology, toOntology)` and `ReferentialOperator(ontologies)`
+from the top-level package.
 Binding/mapping operators optionally retain imported libraries and extra type
 ontologies as well.
 Operators retain the ontology/mode context across calls; the functional API
@@ -138,6 +141,44 @@ implementation or check executable inverse round trips. Declared signatures use
 concrete types (`Text`, `Integer`, named types/references, or `T*` collections);
 `any` and `any*` are built-in notation only. Invalid libraries raise `FormatError`.
 
+### Function execution and conformance
+
+```python
+from onto import FunctionEvaluator
+
+evaluator = FunctionEvaluator()
+result, = evaluator.evaluate("sum", ["0.1", "0.2"])
+assert result.reason is None and result.value == "0.3"
+
+# Implementations take observations-encoded values, not Python floats.
+evaluator = FunctionEvaluator(
+    [dimensionsOntology], [library], implementations=implementations,
+)
+checked = evaluator.conformance(library)  # all examples plus f(inverse(y)) = y
+```
+
+Register library implementations by full path (`Markets/FrequencyFromInterval`),
+and local implementations by name. Supply local declarations with
+`functions=binding.functions` or `functions=mapping.functions`; local value maps
+use `maps=mapping.maps`. Ontology value maps are found in the supplied ontologies.
+Calls use already-resolved names, not file-local aliases. `FunctionsOperator`
+also exposes `evaluator(...)` and `conformance(library, implementations)`.
+
+`evaluate` returns one `FunctionResult` per Cartesian application. Each result
+has a typed, detached `value`, or a gap `reason`; `partial` records incomplete
+lifted inputs. Collection-typed arguments/results stay observations-encoded
+collections. Claim assembly and merging application outcomes remain the future
+binding/mapping executor's responsibility. Unknown names, wrong arity and missing
+implementations raise `ValueError`; domain errors (including implementation
+exceptions and invalid output encodings/types) return gap reasons. Conformance
+collects located failures in `FormatError`; loading declarations stays non-executing.
+
+Arithmetic never uses binary floats or the caller's decimal precision: sums,
+products, subtraction and terminating quotients are exact; non-terminating
+quotients use 16 significant digits, half-even. `null` propagates before `?`,
+unless the declaration has `{nulls}`. `count`/`join` reject incomplete collections.
+`ref` requires the deferred binding execution context and currently returns a gap.
+
 ### Binding declarations (spec-04)
 
 ```python
@@ -180,10 +221,38 @@ imported functions, conditions, contexts, candidates, exclusions, `src` and
 execution would produce a gap; ambiguous correspondence is an error.
 
 Optional `libraries` and extra `ontologies` supply imported declarations.
-For declaration-only loading, `referentials={"MarketIds"}` supplies known
-referential **names only**. Policies and required key assignments are not yet
-validated; this is not referential/registry support. The APIs do not execute
+`referentials=[marketIds]` supplies **loaded referentials**, not names. Policies
+are revalidated against the actual target ontology revision. A target with an
+effective inherited key policy must assign at least one of its keys; disabled
+candidate lines do not count. This static check also applies to `from`-restricted
+key policies; that restriction controls handle derivation later, not whether a
+key is assigned. Minted and implicit-only declarations do not impose this check.
+The temporary names-only API is no longer accepted. These APIs do not execute
 mappings, propagate claim metadata, reverse mappings or produce observations.
+
+### Referential policy declarations (spec-05)
+
+```python
+from onto import Source, loadReferential, referentialToJson, referentialPolicy, referentialImplicit
+
+ontologies = [financeOntology, exchangeOntology]
+marketIds = loadReferential(ontologies, [Source("market-ids.ref", referentialText)])
+data = referentialToJson(marketIds)             # onto.referential/1
+policy = referentialPolicy(ontologies, marketIds, "Finance/Instrument")
+age = referentialImplicit(ontologies, marketIds, "Finance/Instrument")
+```
+
+`parseReferential`, `validateReferential`, `printReferential`, `formatReferential`
+and `referentialFromJson` expose the stages. Files share a namespace/revision and
+have file-local aliases. Keys must name `{key}` attributes, including inherited
+ones; the first key stays primary. Identity policies cannot override a base's
+policy. Implicit-age declarations inherit independently, nearest first, and do
+not mask an inherited identity policy. Queries use fully qualified type paths.
+
+The complete spec example round-trips, including minted/alternate-key declaration
+metadata. No registry is read, no handle is allocated and no alternate key is
+matched. Implicit ages are returned as metadata only; no clock or age-warning
+processor is implemented.
 
 ### Observations (spec-02)
 

@@ -16,6 +16,12 @@ from ..text import Annotations, Diagnostic, Loc
 
 FUNCTIONS_FORMAT = "onto.functions/1"
 
+BUILTIN_ARITIES = {
+	"concat": (1, None), "split": (2, 2), "join": (2, 2), "trim": (1, 1), "lower": (1, 1), "upper": (1, 1),
+	"number": (1, 1), "text": (1, 1), "date": (1, 2), "datetime": (2, 2), "epoch": (1, 1), "format": (2, 2),
+	"sum": (1, None), "multiply": (1, None), "subtract": (2, 2), "divide": (2, 2), "count": (1, 1), "ref": (2, 2),
+}
+
 
 @dataclass(slots=True)
 class SignatureType:
@@ -90,6 +96,15 @@ class FunctionLibrary:
 	uses: dict[str, str] = field(default_factory=dict)
 	functions: list[Function] = field(default_factory=list)
 	diagnostics: list[Diagnostic] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class FunctionResult:
+	"""One application outcome; `reason` marks a gap, `partial` marks incomplete lifted inputs."""
+
+	value: Any = None
+	reason: str | None = None
+	partial: bool = False
 
 
 # EOF

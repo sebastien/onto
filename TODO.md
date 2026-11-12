@@ -442,9 +442,9 @@ conformance audit and review; the user approved starting this handoff.
   schema validation, nested/escaped strings, context boundaries, malformed input,
   non-canonical JSON and non-mutating independent copies. Tests were written
   before implementation. Full `make test`: **636 passed** on Python 3.15.
-- The shared expression helpers alone are syntax/interchange only; binding and
-  mapping declaration resolution is implemented below. Referential policies,
-  evaluation/execution and integration remain unimplemented.
+- The shared expression helpers alone are syntax/interchange only; binding,
+  mapping and referential declaration validation are implemented below.
+  Evaluation/execution and integration remain unimplemented.
 - Added `src/py/onto/functions/` with the required model/parser/formatter/operations
   layout and public facade. `parseFunctions` retains locations and raw examples;
   `resolveFunctions`/`loadFunctions` resolve signature types against supplied
@@ -526,10 +526,44 @@ conformance audit and review; the user approved starting this handoff.
   binding and mapping contexts. Existing feature tests remain green.
 - `tests/T04-004-mapping-parsing.py`: 67 tests. Fresh full `make test`:
   **843 passed** on Python 3.15; `git diff --check` passes. Minimum-version
-  testing still needs Python 3.14. Referential names are checked only for
-  declaration interchange: policy/key checks remain step 2. Execution, inverse
+  testing still needs Python 3.14. At this checkpoint, referential names were
+  checked only for declaration interchange; loaded policy/key checks follow below.
+  Execution, inverse
   conformance, coverage/reversal, formats, run policies and hexa remain deferred.
-  Next: spec-05 referential policy models/parsers and their mapping key checks.
+- Added `src/py/onto/referential/` with the required feature layout. Public APIs
+  from `onto` and `onto.referential`: `parseReferential`, `validateReferential`,
+  `loadReferential`, `formatReferential`, `printReferential`, `referentialToJson`,
+  `referentialFromJson`, `referentialPolicy`, `referentialImplicit`, `Referential`
+  and `ReferentialOperator`. The root policy type is `ReferentialPolicy` (the
+  feature model calls it `Policy`). All runtime code remains standard-library-only.
+- Full spec-05 text and JSON examples round-trip, preserving key order, source
+  restrictions, minted/alternate-key declaration metadata, fractional-second
+  implicit durations and docs. Multi-file headers/revisions agree; aliases are
+  file-local and cannot redefine one alias to another namespace across files.
+  Normal form is independent of file order. Strict JSON validates exact members,
+  non-null optionals, true flags and policy variants before text replay.
+- Policy validation checks entity/association types, `{key}` attributes (including
+  inherited keys), known source ontologies, duplicate identities/ages and forbidden
+  subclass identity overrides. Age-only declarations do not introduce an identity
+  policy or mask a base policy; ages inherit independently from the nearest base.
+  Separate identity/age rows retain their docs instead of being merged silently.
+  Revision warnings concern ontologies supplying covered types, not unrelated
+  input-provider ontologies; revalidation recomputes them without duplication.
+- Mappings now require `referentials=[loadedReferential]`; the temporary name-set
+  input no longer pretends to validate policies. Selected policies are revalidated
+  against the actual target revision (including changed key annotations). Duplicate
+  referential names fail. An effective inherited key policy requires some assigned
+  policy key, including for `from`-restricted policies as spec-04 validation states;
+  candidate-only assignments count only when enabled. Minted/age-only rows do not
+  require derived keys. Updated mapping spec fixtures to provide actual policies
+  and the JSON excerpt's omitted `Isin` assignment.
+- `tests/T05-002-referential-policies.py`: 63 tests covering declarations, inheritance,
+  strict JSON, purity, context isolation, lookup metadata and mapping key checks.
+  Fresh full `make test`: **906 passed** on Python 3.15; `git diff --check` passes.
+  Python 3.14 remains unavailable locally. No registries, minted allocation,
+  alternate-key resolution, handle generation, implicit-age run warnings or hexa
+  were implemented. Next: step 3, exact-decimal built-in/function evaluation and
+  executable example/inverse conformance.
 
 Work in this order; each step is test-first and leaves `make test` green.
 

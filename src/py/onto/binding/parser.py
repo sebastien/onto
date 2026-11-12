@@ -116,7 +116,7 @@ def readDoc(value: dict[str, Any]) -> str | None:
 		return None
 	doc = value["doc"]
 	if not isinstance(doc, str) or not doc or "\r" in doc or "\n" in doc:
-		raise ValueError("Invalid binding doc string")
+		raise ValueError("Invalid doc string")
 	return doc
 
 

@@ -1,4 +1,4 @@
-"""Module: onto — ontology/observation formats and mapping-language foundations."""
+"""Module: onto — ontology/observation formats, mapping declarations and identity policies."""
 
 from __future__ import annotations
 
@@ -37,8 +37,10 @@ from .functions import (
 	Operator as FunctionsOperator,
 	Function,
 	FunctionDeclaration,
+	FunctionEvaluator,
 	FunctionExample,
 	FunctionLibrary,
+	FunctionResult,
 	FunctionsDocument,
 	SignatureType,
 	formatFunctions,
@@ -79,6 +81,20 @@ from .mapping import (
 	printMapping,
 	resolveMapping,
 )
+from .referential import (
+	Operator as ReferentialOperator,
+	Policy as ReferentialPolicy,
+	Referential,
+	formatReferential,
+	loadReferential,
+	parseReferential,
+	printReferential,
+	referentialFromJson,
+	referentialImplicit,
+	referentialPolicy,
+	referentialToJson,
+	validateReferential,
+)
 
 __all__ = [
 	"Binding",
@@ -93,8 +109,10 @@ __all__ = [
 	"FormatError",
 	"Function",
 	"FunctionDeclaration",
+	"FunctionEvaluator",
 	"FunctionExample",
 	"FunctionLibrary",
+	"FunctionResult",
 	"FunctionsDocument",
 	"FunctionsOperator",
 	"Gap",
@@ -110,6 +128,9 @@ __all__ = [
 	"Observations",
 	"ObservationsDocument",
 	"ObservationsOperator",
+	"Referential",
+	"ReferentialOperator",
+	"ReferentialPolicy",
 	"Source",
 	"SignatureType",
 	"expressionFromJson",
@@ -120,6 +141,7 @@ __all__ = [
 	"formatObservations",
 	"formatFunctions",
 	"formatMapping",
+	"formatReferential",
 	"functionsFromJson",
 	"functionsToJson",
 	"loadOntology",
@@ -127,6 +149,7 @@ __all__ = [
 	"loadFunctions",
 	"loadBinding",
 	"loadMapping",
+	"loadReferential",
 	"mappingFromJson",
 	"mappingToJson",
 	"normaliseOntology",
@@ -140,20 +163,27 @@ __all__ = [
 	"parseFunctions",
 	"parseBinding",
 	"parseMapping",
+	"parseReferential",
 	"parseObservations",
 	"printOntology",
 	"printExpression",
 	"printFunctions",
 	"printBinding",
 	"printMapping",
+	"printReferential",
 	"printObservationsLog",
 	"printObservationsState",
 	"reconcileObservations",
+	"referentialFromJson",
+	"referentialImplicit",
+	"referentialPolicy",
+	"referentialToJson",
 	"resolveObservations",
 	"resolveFunctions",
 	"resolveBinding",
 	"resolveMapping",
 	"validateOntology",
+	"validateReferential",
 ]
 
 # EOF

@@ -538,7 +538,8 @@ Each output claim derives from the input claims its expression reads:
   outputs to one source, where they would supersede each other and the
   conflict would be lost.
 - `?` and `null` inputs give `?` and `null` outputs, except for functions declared
-  `{nulls}`.
+  `{nulls}`. With both kinds of input, `null` takes precedence: any `null` gives
+  `null`; otherwise any `?` gives `?`.
 - Contextual facet claims keep their context, translated through the instance
   correspondence; `{ctx=expr}` replaces it.
 
@@ -646,8 +647,12 @@ functions, and fails on any difference.
   decimal arithmetic.
 - **Failure** (a value outside the function's domain) returns a gap with a short
   reason. It never aborts the run: the claim is omitted and the gap reported.
+- Unless declared `{nulls}`, functions propagate `null` before `?`: any `null`
+  argument gives `null`; otherwise any `?` argument gives `?`.
 - A function applied to a collection where it expects a single value is applied
-  to each member.
+  to each member. When several arguments need this application, it runs on every
+  combination of their members (the Cartesian product), not on positional pairs:
+  collections are unordered sets. Arguments declared as collections remain whole.
 
 ### Built-in functions
 
@@ -672,6 +677,10 @@ functions, and fails on any difference.
 
 `Number` arguments accept any numeric type (Integer, Number, Amount, Percent);
 results are `Number`, converted on assignment by the [typing](#typing) rules.
+When a numeric result is rounded, ties use round-half-to-even.
+`count` and `join` require complete collections. An incomplete collection
+(`{"set": [...], "partial": true}`) gives a gap, not a count or join of only the
+known members.
 
 Every inverse in the table satisfies the round trip of [Declarations](#declarations)
 within these limits, which reversal reports as gaps when they are not met:

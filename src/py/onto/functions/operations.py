@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TYPE_CHECKING
 
 from ..observations.model import ObservationsDocument, Statement
 from ..observations.parser import _Resolver
-from ..ontology.model import Attr, Model, Ontology, ResolvedType, TypeExpr, isAssociation
+from ..ontology.model import Attr, Decl, Model, Ontology, ResolvedType, TypeExpr, isAssociation
 from ..text import Diagnostics, FormatError, Loc, Source, annotation
 from .formatter import functionsToJson, printFunctions
 from .model import Function, FunctionExample, FunctionLibrary, FunctionsDocument, SignatureType
 from .parser import _readFunctionsJson, parseFunctions
+
+if TYPE_CHECKING:
+	from .runtime import FunctionEvaluator
 
 # -----------------------------------------------------------------------------
 #
@@ -73,6 +77,16 @@ class Operator:
 	def fromJson(self, data: Any, name: str = "functions.json") -> FunctionLibrary:
 		"""Validate library JSON through its text and signatures."""
 		return functionsFromJson(self.ontologies, data, name)
+
+	def evaluator(self, libraries: list[FunctionLibrary] | None = None, functions: list[Function] | None = None,
+		maps: list[Decl] | None = None, implementations: dict[str, Callable[..., Any]] | None = None) -> FunctionEvaluator:
+		"""Create a pure evaluator sharing the signature ontologies, without executing examples implicitly."""
+		from .runtime import FunctionEvaluator
+		return FunctionEvaluator(self.ontologies, libraries, functions, maps, implementations)
+
+	def conformance(self, library: FunctionLibrary, implementations: dict[str, Callable[..., Any]]) -> int:
+		"""Check all library examples and executable inverse round trips; return the example count."""
+		return self.evaluator(libraries=[library], implementations=implementations).conformance(library)
 
 
 # -----------------------------------------------------------------------------

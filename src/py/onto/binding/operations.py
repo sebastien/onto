@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..expressions import Expression
-from ..functions.model import Function, FunctionLibrary, FunctionsDocument
+from ..functions.model import BUILTIN_ARITIES, Function, FunctionLibrary, FunctionsDocument
 from ..functions.operations import _resolveSignature, resolveFunctions
 from ..ontology.model import Model, Ontology, ResolvedType, TypeExpr, isAssociation
 from ..text import Diagnostics, FormatError, Loc, Source, annotation
@@ -24,11 +24,6 @@ from .parser import parseBinding, qualifyPath, readBindingJson
 
 type Inferred = tuple[ResolvedType | None, bool]
 
-BUILTIN_ARITIES = {
-	"concat": (1, None), "split": (2, 2), "join": (2, 2), "trim": (1, 1), "lower": (1, 1), "upper": (1, 1),
-	"number": (1, 1), "text": (1, 1), "date": (1, 2), "datetime": (2, 2), "epoch": (1, 1), "format": (2, 2),
-	"sum": (1, None), "multiply": (1, None), "subtract": (2, 2), "divide": (2, 2), "count": (1, 1), "ref": (2, 2),
-}
 BUILTIN_RESULTS = {
 	"concat": "Text", "split": "Text", "join": "Text", "trim": "Text", "lower": "Text", "upper": "Text", "text": "Text", "format": "Text",
 	"number": "Number", "date": "Date", "datetime": "DateTime", "epoch": "Integer", "sum": "Number", "multiply": "Number", "subtract": "Number", "divide": "Number", "count": "Integer",

@@ -10,6 +10,7 @@ import pytest
 
 import onto.mapping as mappingApi
 from onto import FormatError, Source, loadFunctions, loadOntology, MappingOperator, formatMapping, loadMapping, mappingFromJson, mappingToJson, parseMapping, printMapping, resolveMapping
+from onto.referential import loadReferential
 from tests._helpers import _schemaValidator, _specExample
 
 # -----------------------------------------------------------------------------
@@ -89,7 +90,8 @@ def load(text: str):
 
 def testCompleteExchangeImportFromTheSpecification():
 	markets = loadFunctions([FINANCE], [Source("markets.fn", _specExample("spec-04-mapping", 3))])
-	ops = MappingOperator(EXCHANGE, FINANCE, libraries=[markets], referentials={"MarketIds"})
+	ref = loadReferential([FINANCE, EXCHANGE], [Source("market-ids.ref", _specExample("spec-04-mapping", 4))])
+	ops = MappingOperator(EXCHANGE, FINANCE, libraries=[markets], referentials=[ref])
 	text = _specExample("spec-04-mapping", 5)
 	doc = ops.parse(Source("exchange-finance.map", text))
 	assert doc.scopes[0].loc.file == "exchange-finance.map"
@@ -119,12 +121,15 @@ def testCompleteFinanceSheetProjectionFromTheSpecification():
 
 
 def testSpecificationJsonExcerptLoadsWithItsReferencedLocalMap():
-	# The published JSON is an excerpt: supply the declarations it calls before semantic loading.
+	# Supply the excerpt's omitted local map, reference correspondence and referential key assignment.
 	data = json.loads(_specExample("spec-04-mapping", 1, "json"))
 	markets = loadFunctions([FINANCE], [Source("markets.fn", _specExample("spec-04-mapping", 3))])
-	ops = MappingOperator(EXCHANGE, FINANCE, libraries=[markets], referentials={"MarketIds"})
+	ref = loadReferential([FINANCE, EXCHANGE], [Source("market-ids.ref", _specExample("spec-04-mapping", 4))])
+	ops = MappingOperator(EXCHANGE, FINANCE, libraries=[markets], referentials=[ref])
 	complete = ops.toJson(ops.load(Source("t", _specExample("spec-04-mapping", 5))))
 	data["maps"] = complete["maps"]
+	instrument = next(item for item in complete["scopes"] if item["source"] == "Exchange/Instrument")
+	data["scopes"][0]["lines"].insert(-1, next(line for line in instrument["lines"] if line.get("target") == "Isin"))
 	data["scopes"] += [item for item in complete["scopes"] if item["source"] == "Exchange/Issuer"]
 	_schemaValidator("mapping").validate(data)
 	assert ops.toJson(ops.fromJson(data)) == data

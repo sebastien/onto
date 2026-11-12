@@ -12,6 +12,8 @@ from ..functions.model import Function, FunctionLibrary, FunctionsDocument
 from ..functions.operations import resolveFunctions
 from ..ontology.model import Model, Ontology, ResolvedType, TypeExpr, isAssociation
 from ..ontology.operations import _checkAnnotations, _validateMap
+from ..referential.model import Referential
+from ..referential.operations import policyFor, validateReferential
 from ..text import Diagnostics, FormatError, Loc, Source, annotation
 from .formatter import mappingToJson, printMapping
 from .model import Mapping, MappingDocument, MappingScope
@@ -164,14 +166,14 @@ class MappingExpressionResolver(ExpressionResolver):
 
 
 class Operator:
-	"""Mapping declarations sharing two ontologies, imported declarations and known referential names."""
+	"""Mapping declarations sharing two ontologies, imported declarations and loaded referentials."""
 
-	def __init__(self, fromOntology: Ontology, toOntology: Ontology, libraries: list[FunctionLibrary] | None = None, ontologies: list[Ontology] | None = None, referentials: set[str] | None = None):
+	def __init__(self, fromOntology: Ontology, toOntology: Ontology, libraries: list[FunctionLibrary] | None = None, ontologies: list[Ontology] | None = None, referentials: list[Referential] | None = None):
 		self.fromOntology = fromOntology
 		self.toOntology = toOntology
 		self.libraries = list(libraries or [])
 		self.ontologies = list(ontologies or [])
-		self.referentials = set(referentials or ())
+		self.referentials = list(referentials or [])
 
 	def parse(self, source: Source) -> MappingDocument:
 		"""Parse one source file without typing its assignments."""
@@ -209,8 +211,8 @@ class Operator:
 # -----------------------------------------------------------------------------
 
 
-def resolveMapping(fromOntology: Ontology, toOntology: Ontology, doc: MappingDocument, libraries: list[FunctionLibrary] | None = None, ontologies: list[Ontology] | None = None, referentials: set[str] | None = None) -> Mapping:
-	"""Validate declarations and static reach; referential names do not establish identity policies."""
+def resolveMapping(fromOntology: Ontology, toOntology: Ontology, doc: MappingDocument, libraries: list[FunctionLibrary] | None = None, ontologies: list[Ontology] | None = None, referentials: list[Referential] | None = None) -> Mapping:
+	"""Validate declarations, static reach and effective referential key assignments, without executing them."""
 	diag = Diagnostics(list(doc.diagnostics))
 	if (doc.fromNamespace, doc.toNamespace) != (fromOntology.namespace, toOntology.namespace):
 		diag.error("header", "Mapping namespaces do not match the loaded ontologies", doc.loc)
@@ -226,7 +228,15 @@ def resolveMapping(fromOntology: Ontology, toOntology: Ontology, doc: MappingDoc
 	for key, ontology in (("from", fromOntology), ("to", toOntology)):
 		if key in doc.header and doc.header[key] != dict(ontology.header).get("rev"):
 			diag.warn("revision", f"Mapping {key} revision differs from the loaded ontology", doc.loc)
-	if "referential" in doc.header and doc.header["referential"] not in (referentials or set()):
+	references: dict[str, Referential] = {}
+	for ref in referentials or []:
+		if not isinstance(ref, Referential):
+			diag.error("reference", "Mappings require loaded Referential models, not referential names", doc.loc)
+		elif ref.namespace in references:
+			diag.error("reference", f"Duplicate loaded referential '{ref.namespace}'", doc.loc)
+		else:
+			references[ref.namespace] = ref
+	if "referential" in doc.header and doc.header["referential"] not in references:
 		diag.error("reference", f"Unknown referential '{doc.header['referential']}'", doc.loc)
 	mapping = Mapping(doc.fromNamespace, doc.toNamespace, dict(doc.header), dict(doc.uses), maps=deepcopy(doc.maps), scopes=deepcopy(doc.scopes), exclusions=deepcopy(doc.exclusions), loc=doc.loc)
 	selections = None
@@ -242,6 +252,12 @@ def resolveMapping(fromOntology: Ontology, toOntology: Ontology, doc: MappingDoc
 		_validateMap(model, decl, diag, targetModel)
 		_checkAnnotations(model, decl.ann, {"map"}, decl.loc, diag)
 	diag.check()
+	referential = references.get(str(doc.header.get("referential", "")))
+	if referential is not None:
+		# Policies describe the actual target revision, even for same-namespace migrations.
+		refContexts = [toOntology] + [context for context in contexts if context.namespace != toOntology.namespace]
+		referential = validateReferential(refContexts, referential)
+		diag.items.extend(referential.diagnostics)
 	if doc.functions:
 		uses = {alias: namespace for alias, namespace in doc.uses.items() if namespace in model.namespaces()}
 		mapping.functions = resolveFunctions(contexts, FunctionsDocument(doc.fromNamespace, uses=uses, functions=doc.functions)).functions
@@ -320,21 +336,27 @@ def resolveMapping(fromOntology: Ontology, toOntology: Ontology, doc: MappingDoc
 					line.target, line.verb = None, name
 			except ValueError as error:
 				diag.error("mapping", str(error), line.loc)
+		if referential is not None:
+			policy = policyFor(targetModel, referential, scope.target)
+			if policy is not None and not policy.minted:
+				assigned = {line.target for line in scope.lines if not line.candidate or mapping.header.get("candidates", False)}
+				if not assigned.intersection(policy.keys):
+					diag.error("key", f"Scope '{scope.target}' must assign a policy key: {', '.join(policy.keys)}", scope.loc)
 	mapping.diagnostics = diag.check()
 	return mapping
 
 
-def loadMapping(fromOntology: Ontology, toOntology: Ontology, source: Source, libraries: list[FunctionLibrary] | None = None, ontologies: list[Ontology] | None = None, referentials: set[str] | None = None) -> Mapping:
+def loadMapping(fromOntology: Ontology, toOntology: Ontology, source: Source, libraries: list[FunctionLibrary] | None = None, ontologies: list[Ontology] | None = None, referentials: list[Referential] | None = None) -> Mapping:
 	"""Parse and statically resolve a mapping; this does not execute its declarations."""
 	return resolveMapping(fromOntology, toOntology, parseMapping(source), libraries, ontologies, referentials)
 
 
-def formatMapping(fromOntology: Ontology, toOntology: Ontology, source: Source, libraries: list[FunctionLibrary] | None = None, ontologies: list[Ontology] | None = None, referentials: set[str] | None = None) -> str:
+def formatMapping(fromOntology: Ontology, toOntology: Ontology, source: Source, libraries: list[FunctionLibrary] | None = None, ontologies: list[Ontology] | None = None, referentials: list[Referential] | None = None) -> str:
 	"""Load and canonically print a mapping source."""
 	return printMapping(loadMapping(fromOntology, toOntology, source, libraries, ontologies, referentials))
 
 
-def mappingFromJson(fromOntology: Ontology, toOntology: Ontology, data: Any, name: str = "mapping.json", libraries: list[FunctionLibrary] | None = None, ontologies: list[Ontology] | None = None, referentials: set[str] | None = None) -> Mapping:
+def mappingFromJson(fromOntology: Ontology, toOntology: Ontology, data: Any, name: str = "mapping.json", libraries: list[FunctionLibrary] | None = None, ontologies: list[Ontology] | None = None, referentials: list[Referential] | None = None) -> Mapping:
 	"""Validate exact JSON members and lossless ontology-backed text replay."""
 	try:
 		read = readMappingJson(data)
