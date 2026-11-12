@@ -31,7 +31,7 @@ from .observations import (
 	reconcileObservations,
 	resolveObservations,
 )
-from .coverage import CoverageItem, observationsCoverage
+from .coverage import CoverageItem, CoverageReport, CoverageRow, observationsCoverage, printCoverageTable
 from .expressions import Expression, expressionFromJson, parseExpression, printExpression
 from .functions import (
 	Operator as FunctionsOperator,
@@ -65,6 +65,7 @@ from .binding import (
 	parseBinding,
 	printBinding,
 	resolveBinding,
+	bindingCoverage,
 )
 from .mapping import (
 	Operator as MappingOperator,
@@ -80,7 +81,12 @@ from .mapping import (
 	parseMapping,
 	printMapping,
 	resolveMapping,
+	LossyLine,
+	mappingCoverage,
+	mappingReverse,
 )
+from .inventory import Inventory, InventoryField, defaultBinding, documentFields, inventoryFromDocuments, parseInventory, printInventory
+from .formats import FormatChange, Formats, FormatsEntry, formatsUpdate, parseFormats, printFormats
 from .referential import (
 	Operator as ReferentialOperator,
 	Policy as ReferentialPolicy,
@@ -104,6 +110,14 @@ __all__ = [
 	"BindingScope",
 	"BindingOperator",
 	"CoverageItem",
+	"CoverageReport",
+	"CoverageRow",
+	"FormatChange",
+	"Formats",
+	"FormatsEntry",
+	"Inventory",
+	"InventoryField",
+	"LossyLine",
 	"Diagnostic",
 	"Expression",
 	"FormatError",
@@ -184,6 +198,18 @@ __all__ = [
 	"resolveMapping",
 	"validateOntology",
 	"validateReferential",
+	"bindingCoverage",
+	"defaultBinding",
+	"documentFields",
+	"formatsUpdate",
+	"inventoryFromDocuments",
+	"mappingCoverage",
+	"mappingReverse",
+	"parseFormats",
+	"parseInventory",
+	"printCoverageTable",
+	"printFormats",
+	"printInventory",
 ]
 
 # EOF

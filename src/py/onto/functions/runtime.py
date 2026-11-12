@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from copy import deepcopy
 from datetime import date, datetime, timedelta
-from decimal import Context, Decimal, DecimalException, MAX_EMAX, MIN_EMIN, ROUND_HALF_EVEN, localcontext
+from decimal import Context, Decimal, DecimalException, Inexact, MAX_EMAX, MIN_EMIN, ROUND_HALF_EVEN, Underflow, localcontext
 from fractions import Fraction
 from itertools import product
 import json
@@ -49,6 +49,7 @@ def numeric(value: Any) -> Decimal:
 
 def arithmetic(name: str, args: list[Any]) -> str:
 	values = [numeric(value) for value in args]
+	exact = True
 	if name == "divide":
 		if not values[1]:
 			raise ValueError("Division by zero")
@@ -62,12 +63,17 @@ def arithmetic(name: str, args: list[Any]) -> str:
 			denominator //= 5
 			fives += 1
 		precision = len(Decimal(ratio.numerator).as_tuple().digits) + max(twos, fives) + 1 if denominator == 1 else 16
+		exact = denominator == 1
 	elif name == "multiply":
 		precision = sum(len(value.as_tuple().digits) for value in values) + 1
 	else:
 		# Include every aligned decimal place plus carry digits, even across cancellation.
 		precision = max(value.adjusted() for value in values) - min(value.as_tuple().exponent for value in values) + len(str(len(values))) + 2
-	with localcontext(Context(prec=max(1, precision), rounding=ROUND_HALF_EVEN, Emin=MIN_EMIN, Emax=MAX_EMAX)):
+	context = Context(prec=max(1, precision), rounding=ROUND_HALF_EVEN, Emin=MIN_EMIN, Emax=MAX_EMAX)
+	# Outside Decimal's representable range, report a gap instead of silently underflowing to zero.
+	context.traps[Inexact] = exact
+	context.traps[Underflow] = True
+	with localcontext(context):
 		if name == "divide":
 			result = values[0] / values[1]
 		elif name == "subtract":

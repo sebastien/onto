@@ -24,4 +24,5 @@ include = ["onto*"]
 python_files = ["T*.py"]
 addopts = "--import-mode=importlib"
 testpaths = ["tests"]
-pythonpath = ["src/py"]
+# NOTE: The optional hexa integration is tested against the sibling checkout when present.
+pythonpath = ["src/py", "../hexa/src/py"]

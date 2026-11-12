@@ -329,7 +329,9 @@ logical section headers, explicit `# EOF`. Do not delegate without authorization
 - Bindings/mappings/functions (spec-04) and the hexa integration (spec-06): see
   the implementation handoff below.
 - Identities (spec-05): referentials, registry, identity links, resolution.
-- Overlays (spec-03), semantic diff and CLI.
+- Overlays (spec-03) and semantic diff.
+- CLI (spec-07, `docs/specs/spec-07-cli.md`): specified, not implemented.
+  Static tooling first; `bind`/`map` runs come with the hexa integration.
 - JavaScript backend sharing JSON contracts and conformance examples.
 
 ## Spec-04 design review (2026-11-11): decided and written into the specs
@@ -444,7 +446,8 @@ conformance audit and review; the user approved starting this handoff.
   before implementation. Full `make test`: **636 passed** on Python 3.15.
 - The shared expression helpers alone are syntax/interchange only; binding,
   mapping and referential declaration validation are implemented below.
-  Evaluation/execution and integration remain unimplemented.
+  Pure function calls and conformance are implemented below; expression/claim
+  execution and integration remain unimplemented.
 - Added `src/py/onto/functions/` with the required model/parser/formatter/operations
   layout and public facade. `parseFunctions` retains locations and raw examples;
   `resolveFunctions`/`loadFunctions` resolve signature types against supplied
@@ -564,6 +567,46 @@ conformance audit and review; the user approved starting this handoff.
   alternate-key resolution, handle generation, implicit-age run warnings or hexa
   were implemented. Next: step 3, exact-decimal built-in/function evaluation and
   executable example/inverse conformance.
+- Completed the core function-execution slice in `functions/runtime.py`.
+  `FunctionEvaluator` and `FunctionResult` are exported from `onto` and
+  `onto.functions`; `FunctionsOperator.evaluator(...)` shares its ontology
+  context and `.conformance(library, implementations)` runs explicit checks.
+  Declaration loading still never executes implementation code.
+- User-approved spec-04 clarifications: rounded results use half-even; scalar
+  application over several collection arguments uses their Cartesian product,
+  not positional pairing. Follow-up execution questions were approved too:
+  `null` takes precedence over `?` (except `{nulls}`), and `count`/`join` give gaps
+  for incomplete collections rather than pretending the known members are all.
+- Built-ins cover text/Unicode transforms, split/join/count, numeric/text
+  conversion, date-pattern parsing/formatting and epoch/date conversion. Decimal
+  arithmetic is isolated from ambient precision/rounding: sum, multiply and
+  subtract are exact; terminating division is exact, otherwise 16 significant
+  digits with half-even. No arithmetic computes through binary floats.
+  Exact operations trap inexactness/underflow beyond Decimal's representable
+  range, returning a gap instead of silently producing zero.
+- Registered library functions use full paths, local functions use names;
+  loaded ontology maps and explicit local maps support lookup. Arguments and
+  results are validated with observations encoding and concrete ontology-backed
+  signatures. Implementation inputs/results are detached. Domain exceptions,
+  invalid result types and missing/ambiguous map entries become reasoned gaps;
+  unresolved names, arity errors and missing implementations are configuration
+  errors. `ref` explicitly returns a gap without binding execution context; no
+  handle generation or registry work was added.
+- `evaluate` returns an individual `FunctionResult` for every Cartesian
+  application, including individual failures and incomplete-input metadata;
+  collection-typed arguments/results remain whole encoded values. It deliberately
+  does not assemble claims or merge fan-out outcomes; that belongs to the later
+  binding/mapping executor. Conformance checks every example, compares numeric
+  values and sets semantically, and checks `f(inverse(y)) = y` without requiring
+  restoration of input spelling. Failures are accumulated with example locations.
+- `tests/T04-005-function-execution.py`: 69 tests, including the complete Markets
+  library, explicit inverse-only failures, ambient decimal-context isolation,
+  cancellation, exact long quotients, Cartesian calls, partial collections,
+  nulls, malformed values, output signatures, local functions/maps and purity.
+  Fresh full `make test`: **975 passed**; `git diff --check` passes. Python 3.14
+  remains unavailable locally. Binding/mapping execution, claim provenance,
+  reversal restrictions, registries and hexa remain deferred. Next: step 4,
+  static coverage/inventories, default bindings and mapping reversal/loss reports.
 
 Work in this order; each step is test-first and leaves `make test` green.
 

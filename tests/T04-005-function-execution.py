@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from decimal import Decimal, localcontext
+from decimal import Decimal, MIN_EMIN, localcontext
 
 import pytest
 
@@ -236,6 +236,11 @@ def testNumericRoundingAcrossSignsAndTinyValues():
 	assert Decimal(value("divide", "1e-100", "3")) == Decimal("3.333333333333333e-101")
 	assert Decimal(value("divide", "2469135780246913.000000000000000001", "2.000000000000000000000000000000000003")) == Decimal("1234567890123457")
 	assert Decimal(value("divide", "2469135780246913", "2.000000000000000000000000000000000003")) == Decimal("1234567890123456")
+
+
+def testUnrepresentableExactProductsAreGapsRatherThanSilentZero():
+	tiny = f"1e{MIN_EMIN // 2 - 100}"
+	assert FunctionEvaluator().evaluate("multiply", [tiny, tiny])[0].reason
 
 
 def testDatePatternsHaveLiteralCharactersAndDoNotUseLocaleOrStrftimeEscapes():

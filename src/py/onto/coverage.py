@@ -1,4 +1,4 @@
-"""Module: coverage — report observation coverage of ontology views (spec-02)."""
+"""Module: coverage — observation coverage of views (spec-02) and the static coverage of bindings and mappings (spec-04)."""
 
 from __future__ import annotations
 
@@ -17,6 +17,9 @@ from .text import Diagnostics, annotation, lastSegment
 
 
 STATUSES = ("supplied", "unknown", "absent", "missing")
+# NOTE: Static (spec-04) statuses, strongest first: a source read several ways reports its strongest reads.
+LINE_STATUSES = ("direct", "transformed", "condition", "ambiguous")
+TABLE_HEADER = "source\ttarget\tstatus\tnote"
 
 
 @dataclass(slots=True, frozen=True)
@@ -29,6 +32,25 @@ class CoverageItem:
 	statuses: tuple[str, ...]
 	conflict: bool = False
 	partial: bool = False
+
+
+@dataclass(slots=True, frozen=True)
+class CoverageRow:
+	"""One line of a coverage table: a source element or field, what it feeds and how (spec-04)."""
+
+	source: str
+	target: str | None
+	status: str
+	note: str | None = None
+
+
+@dataclass(slots=True)
+class CoverageReport:
+	"""Static coverage: `rows` by source, the elements no line assigns, and paths read but not inventoried."""
+
+	rows: list[CoverageRow]
+	unassigned: list[str]
+	uninventoried: list[str]
 
 
 @dataclass(slots=True, frozen=True)
@@ -108,6 +130,128 @@ def _selections(model: Model, view: Decl) -> set[_Selection]:
 
 	include(view)
 	return selected
+
+
+class Elements:
+	"""Ontology elements of instance types, keyed by declaring path: `T.Attr`, `T.F.Attr`, `T[F]`, `T.verb`, `R.Role`."""
+
+	def __init__(self, model: Model, namespace: str | None):
+		self.model = model
+		self.namespace = namespace
+
+	def display(self, key: str) -> str:
+		"""A key without its ontology's namespace prefix."""
+		prefix = f"{self.namespace}/"
+		return key[len(prefix):] if self.namespace and key.startswith(prefix) else key
+
+	def instanceTypes(self) -> list[Decl]:
+		"""Entities and identity-bearing relations, in declaration order."""
+		return [decl for decl in self.model.ontology.decls if decl.kind == "entity" or decl.kind == "relation" and decl.arrow is None]
+
+	def leaves(self, owner: str, member: str, seen: frozenset[str] = frozenset()) -> list[str]:
+		attr = self.model.lookup(owner, member)
+		structure = self.model.structOf(attr.type) if attr else None
+		if not structure or not structure.fields or structure.path in seen:
+			return [member]
+		return [leaf for field in structure.fields for leaf in self.leaves(owner, f"{member}.{field.name}", seen | {structure.path})]
+
+	def declared(self, path: str) -> list[str]:
+		"""Elements declared on `path` itself (not inherited), structures as their leaves."""
+		decl = self.model.get(path)
+		keys = [f"{path}.{leaf}" for attr in decl.attrs if not attr.derived for leaf in self.leaves(path, attr.name)]
+		if decl.kind == "relation":
+			keys += [f"{path}.{participant.role}" for participant in decl.participants]
+			return keys
+		for facet in self.model.facetsOf(path):
+			name = lastSegment(facet.path)
+			keys.append(f"{path}[{name}]")
+			keys += [f"{path}.{leaf}" for attr in facet.attrs if not attr.derived for leaf in self.leaves(path, f"{name}.{attr.name}")]
+		for relation in self.model.ontology.decls:
+			if relation.kind == "relation" and relation.arrow and relation.participants[0].type == path:
+				keys.append(f"{path}.{relation.arrow.verb}")
+		return keys
+
+	def owner(self, path: str, name: str) -> str:
+		"""The type in `path`'s lineage declaring attribute or facet `name`."""
+		for entity in self.model.lineage(path):
+			decl = self.model.get(entity)
+			if any(attr.name == name for attr in decl.attrs) or any(lastSegment(facet.path) == name for facet in self.model.facetsOf(entity)):
+				return entity
+		return path
+
+	def verb(self, path: str, verb: str) -> tuple[str, str] | None:
+		"""The element key of a binary verb read from `path`, and the type it leads to."""
+		for relation, inverse in self.model.verbs(path, verb):
+			subject, other = relation.participants[0].type, relation.participants[1].type
+			return f"{subject}.{relation.arrow.verb}", subject if inverse else other
+		return None
+
+	def read(self, path: str, steps: list[str]) -> list[str]:
+		"""Elements read by attribute `steps` from an instance of `path`, through references."""
+		keys: list[str] = []
+		current, index = path, 0
+		while index < len(steps) and current:
+			name = steps[index]
+			facet = self.model.facetOf(current, name)
+			if facet is not None and index + 1 < len(steps):
+				member, index = f"{name}.{steps[index + 1]}", index + 2
+			elif self.model.lookup(current, name):
+				member, index = name, index + 1
+			elif found := self.verb(current, name):
+				keys.append(found[0])
+				current, index = found[1], index + 1
+				continue
+			else:
+				break
+			attr = self.model.lookup(current, member)
+			while index < len(steps) and self.model.structOf(attr.type if attr else None):
+				member, index = f"{member}.{steps[index]}", index + 1
+				attr = self.model.lookup(current, member)
+			keys.append(f"{self.owner(current, member.split('.')[0])}.{member}")
+			resolved = self.model.resolveType(attr.type, attr.ann) if attr else None
+			current = resolved.path if resolved and resolved.kind in ("entity", "relation") else None
+		return keys
+
+	def assigned(self, path: str, target: str | None = None, facet: str | None = None, verb: str | None = None) -> str | None:
+		"""The element a line of a scope of type `path` assigns."""
+		if facet:
+			return f"{self.owner(path, facet)}[{facet}]"
+		if verb:
+			found = self.verb(path, verb)
+			return found[0] if found else None
+		if target:
+			return f"{self.owner(path, target.split('.')[0])}.{target}"
+		return None
+
+
+def coverageRows(keys: list[str], reads: dict[str, list[tuple[str | None, str, str | None]]], excluded: dict[str, tuple[str, str | None]]) -> list[CoverageRow]:
+	"""One status per source: its strongest reads, else its exclusion, else `unmapped`."""
+	rows: list[CoverageRow] = []
+	for key in keys:
+		found = reads.get(key, [])
+		strongest = min((LINE_STATUSES.index(status) for _, status, _ in found), default=None)
+		if strongest is None:
+			reason, doc = excluded.get(key, ("unmapped", None))
+			rows.append(CoverageRow(key, None, reason, doc))
+			continue
+		chosen = [item for item in found if item[1] in LINE_STATUSES[:2]] if strongest < 2 else [item for item in found if LINE_STATUSES.index(item[1]) == strongest]
+		if LINE_STATUSES[strongest] == "condition":
+			chosen = [(None, "condition", None)]
+		seen: set[tuple[str | None, str]] = set()
+		for target, status, note in sorted(chosen, key=lambda item: (item[0] or "", LINE_STATUSES.index(item[1]))):
+			if (target, status) not in seen:
+				seen.add((target, status))
+				rows.append(CoverageRow(key, target, status, note))
+	return rows
+
+
+def printCoverageTable(rows: list[CoverageRow]) -> str:
+	"""The tab-separated coverage table of spec-04, sorted by source path."""
+	lines = [TABLE_HEADER] + [
+		"\t".join([row.source, row.target or "", row.status] + ([row.note] if row.note else []))
+		for row in sorted(rows, key=lambda item: (item.source, item.target or ""))
+	]
+	return "\n".join(lines) + "\n"
 
 
 def _activeHandles(claims: list[Claim]) -> set[str]:
