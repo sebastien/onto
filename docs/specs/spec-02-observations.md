@@ -201,7 +201,7 @@ Interpretation follows the ontology type, not the spelling.
 | Kind | Encoding |
 | --- | --- |
 | Text | Bare text to end of line (or to ` {`). Use a JSON string `"..."` when the text has leading/trailing spaces, contains ` {`, a line break or `,`/`]` inside a collection, or would read as `?`, `null`, `[` or `"`. |
-| Category | A vocabulary value. Closed vocabularies are enforced; open ones accept other names. |
+| Category | A vocabulary value. Closed vocabularies are enforced; open ones accept other names. Hierarchical vocabularies use full value paths, e.g. `Food/Fruit/Apple`. |
 | Integer, Number, Amount, Percent | Decimal number, optionally signed, optional exponent, no grouping separators |
 | Boolean | `true` / `false` |
 | Date / DateTime | ISO 8601 (`2026-11-10`, `2026-11-10T09:30:00+13:00`) |
@@ -214,6 +214,12 @@ Interpretation follows the ontology type, not the spelling.
 
 - A local measurement qualifier may follow the value: `92000 {cur=USD}`. It may
   fill an unknown qualifier, never contradict a fixed one. No conversion is implied.
+- For [hierarchical vocabularies](spec-01-ontology.md#hierarchical-vocabularies-taxonomies),
+  any declared node (including an inferred ancestor) is a valid category.
+  Values are full paths, never ambiguous leaf names: `Food/Fruit/Apple`, not
+  `Apple`. A value does not assert additional values for its ancestors, and
+  collections do not expand to include ancestors. JSON encodes the full path
+  as a string.
 - On a multi-valued attribute, a bare value claims **one member**. A bracketed
   collection claims the **membership**: complete, or incomplete with `...`.
 - Collections are unordered, duplicate-free and do not nest.

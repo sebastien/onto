@@ -12,6 +12,7 @@ from ..text import (
 	Diagnostic,
 	Loc,
 	annotation,
+	isPath,
 	lastSegment,
 )
 
@@ -38,6 +39,7 @@ ANNOTATION_PLACES: dict[str, set[str] | None] = {
 	"objectRole": {"binary"},
 	"ctx": {"facet"},
 	"ordered": {"vocabulary"},
+	"hierarchical": {"vocabulary"},
 	"cur": {"type", "attribute"},
 	"unit": {"type", "attribute"},
 	"period": {"type", "attribute"},
@@ -79,7 +81,7 @@ RE_USE = re.compile(r"@use\s+(\S+)\s+as\s+(\S+)")
 RE_VIEW = re.compile(r"@view\s+(\S+)")
 RE_DOMAIN = re.compile(r"@domain\s+(\S+)")
 RE_MAP = re.compile(r"@map\s+(\S+)\s+(\S+)\s+->\s+(\S+)")
-RE_MAP_LINE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s+([a-z]+)\s+([A-Za-z_][A-Za-z0-9_]*)")
+RE_MAP_LINE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*)\s+([a-z]+)\s+([A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*)")
 RE_TYPE_DECL = re.compile(r"([^\s=(]+)\s*=\s*(.*)")
 RE_FACET_DECL = re.compile(r"(\S+)\s+of\s+(\S+)")
 RE_ARROW_DECL = re.compile(
@@ -217,6 +219,7 @@ class ResolvedType:
 	values: list[str] | None = None
 	open: bool = False
 	ordered: bool = False
+	hierarchical: bool = False
 	qualifiers: dict[str, str] = field(default_factory=dict)
 	conflicts: list[str] = field(default_factory=list)
 
@@ -230,6 +233,28 @@ class ResolvedType:
 
 def _typeKey(type: TypeExpr) -> str:
 	return f"{type.path}.{type.attr}" if type.attr else str(type.path)
+
+
+def vocabularyValues(values: list[str], ordered: bool = False) -> list[str]:
+	"""Expand taxonomy ancestors and return depth-first paths, sorting siblings unless `ordered`."""
+	# NOTE: Preserve malformed input for validation rather than building cyclic empty paths.
+	if not all(isPath(value) for value in values):
+		return list(values)
+	children: dict[str, dict[str, None]] = {"": {}}
+	for value in values:
+		parent = ""
+		for segment in value.split("/"):
+			path = f"{parent}/{segment}" if parent else segment
+			children.setdefault(parent, {})[path] = None
+			children.setdefault(path, {})
+			parent = path
+	result: list[str] = []
+	pending = list(reversed(list(children[""]) if ordered else sorted(children[""])))
+	while pending:
+		path = pending.pop()
+		result.append(path)
+		pending.extend(reversed(list(children[path]) if ordered else sorted(children[path])))
+	return result
 
 
 # -----------------------------------------------------------------------------
@@ -432,6 +457,11 @@ class Model:
 				)
 				break
 			current = definition
+		if resolved.kind == "vocab":
+			resolved.ordered = any(annotation(pairs, "ordered") is True for pairs in sources)
+			resolved.hierarchical = any(annotation(pairs, "hierarchical") is True for pairs in sources)
+			if resolved.hierarchical:
+				resolved.values = vocabularyValues(resolved.values or [], resolved.ordered)
 		for name in QUALIFIERS:
 			values = [value for pairs in sources if isinstance(value := annotation(pairs, name), str)]
 			fixed = [value for value in values if value != "?"]

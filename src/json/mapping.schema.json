@@ -221,7 +221,7 @@
                   "additionalProperties": false,
                   "properties": {
                     "from": {
-                      "$ref": "#/$defs/name"
+                      "$ref": "#/$defs/path"
                     },
                     "match": {
                       "enum": [
@@ -232,7 +232,7 @@
                       ]
                     },
                     "to": {
-                      "$ref": "#/$defs/name"
+                      "$ref": "#/$defs/path"
                     },
                     "doc": {
                       "$ref": "#/$defs/doc"

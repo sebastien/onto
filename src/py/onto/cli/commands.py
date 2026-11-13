@@ -19,6 +19,7 @@ from ..coverage import CoverageReport, observationsCoverage
 from ..formats import Formats, printFormats
 from ..functions import FunctionEvaluator, FunctionLibrary, functionsToJson, printFunctions
 from ..inventory import Inventory, defaultBinding, inventoryFromDocuments, printInventory
+from ..meta import META_DOMAIN, metaDeclarations, metaObservations
 from ..mapping import Mapping, mappingCoverage, mappingReverse, mappingToJson, printMapping
 from ..observations import Observations, observationsToJson, printObservationsLog, printObservationsState, reconcileObservations
 from ..ontology import Ontology, normaliseOntology, ontologyToJson, printOntology
@@ -270,6 +271,19 @@ class Commands:
 			rows.append({"kind": kind, "namespace": first.key or "", "rev": first.rev or "", "files": " ".join(entry.path for entry in entries)})
 		hint = None if rows else f"No onto files found (searched: {self.ws.searched()}). Add directories with -I DIR."
 		return Result(columns=("kind", "namespace", "rev", "files"), rows=rows, header=False, hint=hint)
+
+	def cmdMeta(self) -> Result:
+		"""The ontology as observations of its `Meta` domain, or that domain's declarations."""
+		entry = one(self.ws, self.args, ("ontology",))
+		ontology = load(self.ws, entry) if entry else None
+		if ontology is None:
+			return Result(checked=1)
+		if self.args.decl:
+			return Result(text=metaDeclarations(ontology), checked=1)
+		hint = None if any(decl.kind == "domain" and decl.path == f"{ontology.namespace}/{META_DOMAIN}" for decl in ontology.decls) else (
+			f"{ontology.namespace} has no {META_DOMAIN} domain; add it with 'onto meta --decl {entry.path} > meta.onto'"
+		)
+		return Result(text=metaObservations(ontology), hint=hint, checked=1)
 
 	# -- Observations ----------------------------------------------------------
 

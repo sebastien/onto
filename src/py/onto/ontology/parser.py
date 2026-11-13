@@ -17,6 +17,7 @@ from ..text import (
 	Line,
 	Loc,
 	Source,
+	annotation,
 	isName,
 	isPath,
 	lastSegment,
@@ -118,7 +119,7 @@ def _parseAnn(text: str | None, ctx: _Context, loc: Loc | None) -> Annotations:
 	return pairs
 
 
-def _parseTypeExpr(text: str, ctx: _Context, loc: Loc | None) -> TypeExpr | None:
+def _parseTypeExpr(text: str, ctx: _Context, loc: Loc | None, hierarchical: bool = False) -> TypeExpr | None:
 	value = re.sub(r"\s*\|\s*", "|", text.strip())
 	if not value:
 		return None
@@ -131,7 +132,7 @@ def _parseTypeExpr(text: str, ctx: _Context, loc: Loc | None) -> TypeExpr | None
 		isOpen = parts[-1] == "..."
 		if isOpen:
 			parts = parts[:-1]
-		if not parts or not all(isName(part) for part in parts):
+		if not parts or not all((isPath if hierarchical else isName)(part) for part in parts):
 			ctx.diag.error("vocabulary", f"Invalid vocabulary '{text}'", loc)
 			return None
 		if len(set(parts)) != len(parts):
@@ -196,7 +197,7 @@ def _parseAttribute(line: Line, ctx: _Context) -> Attr | None:
 		name=name,
 		card=card,
 		derived=bool(derived),
-		type=_parseTypeExpr(typeText, ctx, line.loc),
+		type=_parseTypeExpr(typeText, ctx, line.loc, annotation(ann, "hierarchical") is True),
 		deps=None if depsText is None else _parseDeps(depsText, ctx, line.loc),
 		ann=ann,
 		doc=doc,
@@ -245,7 +246,7 @@ def _parseDeclaration(line: Line, ctx: _Context) -> Decl | None:
 		path = _resolveDeclared(match.group(1), ctx, loc)
 		if not path:
 			return None
-		return Decl(kind="type", path=path, definition=_parseTypeExpr(match.group(2), ctx, loc), ann=ann, doc=doc, loc=loc)
+		return Decl(kind="type", path=path, definition=_parseTypeExpr(match.group(2), ctx, loc, annotation(ann, "hierarchical") is True), ann=ann, doc=doc, loc=loc)
 	if match := RE_FACET_DECL.fullmatch(text):
 		path = _resolveDeclared(match.group(1), ctx, loc)
 		subject = _resolvePath(match.group(2), ctx, loc)
@@ -297,6 +298,34 @@ def _parseDeclaration(line: Line, ctx: _Context) -> Decl | None:
 
 
 def _bodyParser(decl: Decl, ctx: _Context) -> Callable[[Line], None]:
+	tree = decl.kind == "type" and annotation(decl.ann, "hierarchical") is True and decl.definition is None
+	parents: list[str] = []
+	nodes: set[str] = set()
+	if tree:
+		decl.definition = TypeExpr(values=[])
+
+	def parseNode(line: Line) -> None:
+		definition = decl.definition
+		depth = line.indent // 2
+		if line.indent % 2 or depth > len(parents) + 1:
+			ctx.diag.error("indent", "Taxonomy indentation must increase by exactly two spaces", line.loc)
+			return
+		if definition.open:
+			ctx.diag.error("vocabulary", "'...' must be the final taxonomy line", line.loc)
+			return
+		if line.text == "..." and depth == 1:
+			definition.open = True
+			return
+		if not isName(line.text):
+			ctx.diag.error("vocabulary", "A taxonomy tree line must contain one name", line.loc)
+			return
+		parents[depth - 1:] = [line.text]
+		path = "/".join(parents)
+		if path in nodes:
+			ctx.diag.error("vocabulary", f"Duplicate vocabulary value '{path}'", line.loc)
+		nodes.add(path)
+		definition.values.append(path)
+
 	def parseField(line: Line) -> None:
 		if decl.definition is not None:
 			ctx.diag.error("syntax", "Only structures (`T =` with no right side) have a body", line.loc)
@@ -310,7 +339,7 @@ def _bodyParser(decl: Decl, ctx: _Context) -> Callable[[Line], None]:
 		if attr:
 			decl.attrs.append(attr)
 
-	return parseField if decl.kind == "type" else parseAttr
+	return parseNode if tree else parseField if decl.kind == "type" else parseAttr
 
 
 def _parseDirective(line: Line, position: int, ctx: _Context, ontology: Ontology, seen: dict[str, Decl]) -> Callable[[Line], None] | None:
@@ -412,6 +441,7 @@ def _parseDirective(line: Line, position: int, ctx: _Context, ontology: Ontology
 def _parseFile(source: Source, ontology: Ontology, seen: dict[str, Decl], diag: Diagnostics) -> None:
 	ctx = _Context(diag)
 	current = None
+	currentTree = False
 	if "\r" in source.text:
 		diag.error("syntax", "Line endings must be LF", Loc(source.name, source.text[: source.text.index("\r")].count("\n") + 1))
 	for position, line in enumerate(sourceLines(source)):
@@ -421,13 +451,14 @@ def _parseFile(source: Source, ontology: Ontology, seen: dict[str, Decl], diag: 
 		if position == 0 and not line.text.startswith("@ontology"):
 			diag.error("header", "File must start with @ontology", line.loc)
 			continue
-		if line.indent == 2:
+		if line.indent == 2 or (line.indent > 0 and currentTree):
 			if current is None:
 				diag.error("indent", "Body line without a declaration that accepts one", line.loc)
 			else:
 				current(line)
 			continue
 		current = None
+		currentTree = False
 		if line.indent != 0:
 			diag.error("indent", "Body lines are indented by exactly two spaces", line.loc)
 			continue
@@ -443,6 +474,7 @@ def _parseFile(source: Source, ontology: Ontology, seen: dict[str, Decl], diag: 
 		seen[decl.path] = decl
 		ontology.decls.append(decl)
 		current = _bodyParser(decl, ctx)
+		currentTree = decl.kind == "type" and annotation(decl.ann, "hierarchical") is True
 
 
 # -----------------------------------------------------------------------------

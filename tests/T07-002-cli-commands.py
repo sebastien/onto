@@ -215,3 +215,59 @@ def test_lossy_lines_carry_their_own_location(workspace):
 	_, _, err = onto("reverse", "finance/exchange-finance.map")
 	lines = [line for line in err.splitlines() if "map.lossy" in line]
 	assert lines and all(not line.startswith("finance/exchange-finance.map:1:") for line in lines)
+
+
+# -----------------------------------------------------------------------------
+#
+# META
+#
+# -----------------------------------------------------------------------------
+
+
+EXTRA = "Rating = Low|Medium|High {ordered} -- A rating\nScore = Number\nThing -- A thing\n  1 Name Text -- Its name\n  * Ratings Rating\n  Score Score\n  State On|Off|...\n  Other Thing\n"
+
+
+def test_meta_declarations_and_observations_validate(workspace):
+	status, declarations, _ = onto("meta", "--decl", "finance/finance.onto")
+	assert status == 0 and declarations.startswith("@ontology Finance")
+	(workspace / "finance/meta.onto").write_text(declarations)
+	assert onto("fmt", "--check", "finance/meta.onto") == (0, "", "")
+	status, observations, err = onto("meta", "finance/finance.onto")
+	assert status == 0 and err == ""
+	(workspace / "finance/finance-meta.obs").write_text(observations)
+	status, _, err = onto("check", "finance/finance-meta.obs")
+	assert status == 0, err
+
+
+def test_meta_describes_concepts_attributes_and_dimensions(workspace):
+	(workspace / "finance/meta.onto").write_text(onto("meta", "--decl", "finance/finance.onto")[1])
+	(workspace / "finance/extra.onto").write_text((workspace / "finance/finance.onto").read_text().splitlines()[0] + "\n" + EXTRA)
+	status, out, _ = onto("meta", "finance/finance.onto")
+	assert status == 0
+	for text in (
+		"Thing:Meta/Concept\n  Path Thing\n  Kind Entity\n  Description A thing\n",
+		"Thing__Name:Meta/Attribute\n  Path Thing.Name\n  IsRequired true\n  IsMultiple false\n  Description Its name\n",
+		"Thing__Ratings:Meta/Attribute\n  Path Thing.Ratings\n  IsRequired false\n  IsMultiple true\n",
+		"Rating:Meta/Dimension\n  Path Rating\n  Kind Vocabulary\n  Values [Low, Medium, High]\n  IsOpen false\n  IsOrdered true\n  Description A rating\n",
+		"Thing__State__Values:Meta/Dimension\n  Path Thing.State\n  Kind Vocabulary\n  Values [On, Off]\n  IsOpen true\n",
+		"Score:Meta/Dimension\n  Path Score\n  Kind Value\n",
+		"Score isBasedOn Number\n",
+		"Thing hasAttribute Thing__Name\n",
+		"Thing__Name hasDimension Text\n",
+		"Thing__Ratings hasDimension Rating\n",
+		"Thing__State hasDimension Thing__State__Values\n",
+		# NOTE: The Meta domain describes itself, as any other domain.
+		"Meta_Concept__Kind hasDimension Meta_Concept_Kind\n",
+	):
+		assert text in out, text
+	# NOTE: An attribute that refers to a concept has no dimension.
+	assert "Thing__Other hasDimension" not in out
+	(workspace / "finance/finance-meta.obs").write_text(out)
+	status, _, err = onto("check", "finance/finance-meta.obs")
+	assert status == 0, err
+
+
+def test_meta_without_the_domain_hints_at_the_declarations(workspace):
+	status, out, err = onto("meta", "finance/finance.onto")
+	assert status == 0 and out.startswith("@obs Finance")
+	assert err == "Finance has no Meta domain; add it with 'onto meta --decl finance/finance.onto > meta.onto'\n"

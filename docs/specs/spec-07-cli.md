@@ -228,6 +228,16 @@ Context comes from the workspace, as for text files.
 List the workspace, one row per model: kind, namespace key, `rev` and files,
 sorted by kind then namespace. Index diagnostics (`cli.kind`) are reported.
 
+#### `onto meta [--decl] FILE.onto`
+
+Print the ontology as observations of its own
+[`Meta` domain](spec-01-ontology.md#meta-domain): its concepts, attributes and
+dimensions, so that data can refer to them. Files sharing the namespace are
+described together. With `--decl`, print the `Meta` domain declarations instead,
+as an ontology file with the same header as `FILE.onto`, to keep among the files
+of the ontology. Without the domain, the observations are still printed, with a
+hint: they validate once the declarations are added.
+
 ### Observations
 
 #### `onto state FILE.obs`

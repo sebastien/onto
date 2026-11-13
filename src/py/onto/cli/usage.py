@@ -132,6 +132,16 @@ COMMANDS = (
 		("onto ls", "onto ls ontology functions", "onto -I ../shared ls"),
 	),
 	Command(
+		"meta", "Files", "[--decl] FILE.onto",
+		"Describe an ontology as Meta observations",
+		"Print the ontology as observations of its own Meta domain (spec-01): one Meta/Concept per entity, facet "
+		"and relation, one Meta/Attribute per attribute and one Meta/Dimension per type, so that data can refer to "
+		"them. With --decl, print the Meta domain declarations instead, to keep as a file of the ontology. Files "
+		"sharing the ontology namespace are described together.",
+		(Argument("file"),), (Option(("--decl",), "Print the Meta domain declarations, as an ontology file"), KIND),
+		("onto meta --decl finance.onto > meta.onto", "onto meta finance.onto > finance-meta.obs"),
+	),
+	Command(
 		"state", "Observations", "FILE.obs",
 		"Print the reconciled state form",
 		"Print observations in state form (spec-02): retractions applied, superseded claims removed, conflicts "

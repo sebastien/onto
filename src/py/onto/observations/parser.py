@@ -189,7 +189,7 @@ class _Resolver:
 			self.references.append((handle, resolved.path, loc))
 			return {"ref": handle}
 		if resolved.kind == "vocab":
-			if quoted or not isName(text) or (not resolved.open and text not in resolved.values):
+			if quoted or not (isPath if resolved.hierarchical else isName)(text) or (not resolved.open and text not in resolved.values):
 				raise ValueError(f"'{text}' is not a vocabulary value")
 			return text
 		builtin = resolved.builtin

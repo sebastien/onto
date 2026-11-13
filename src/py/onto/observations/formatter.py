@@ -44,6 +44,13 @@ from .model import (
 # -----------------------------------------------------------------------------
 
 
+def printText(value: str, inSet: bool = False) -> str:
+	"""A text value as observations write it: bare, or a JSON string when bare text would read as something else."""
+	# NOTE: Match the annotation parser's whitespace rule, including the separator before a value.
+	unsafe = not value or value != value.strip() or any(char in value for char in '\n\r"') or re.search(r"(^|\s)(\{|//)", value) or value in ("?", "null") or value.startswith("[") or inSet and (value == "..." or any(char in value for char in ",]"))
+	return json.dumps(value, ensure_ascii=False) if unsafe else value
+
+
 def _defaults(observations: Observations) -> dict[str, Any]:
 	return {key: float(value) if key == "conf" else value for key, value in observations.obs.items() if key in ("src", "at", "by", "conf")}
 
@@ -98,9 +105,7 @@ class _Printer:
 			if value.get("partial"):
 				parts.append("...")
 			return f"[{', '.join(parts)}]"
-		# NOTE: Match the annotation parser's whitespace rule, including the separator before a value.
-		unsafe = not value or value != value.strip() or any(char in value for char in '\n\r"') or re.search(r"(^|\s)(\{|//)", value) or value in ("?", "null") or value.startswith("[") or inSet and (value == "..." or any(char in value for char in ",]"))
-		return json.dumps(value, ensure_ascii=False) if unsafe else value
+		return printText(value, inSet)
 
 	def meta(self, claim: Claim, defaults: dict[str, Any]) -> str:
 		pairs = [(key, claim[key]) for key in META_KEYS if key in claim and (key not in defaults or claim[key] != defaults[key])]

@@ -14,6 +14,7 @@ from ..text import (
 	Source,
 	annotation,
 	isName,
+	isPath,
 	lastSegment,
 )
 from .formatter import (
@@ -65,7 +66,7 @@ def _checkAnnotations(model: Model, ann: Annotations, places: set[str], loc: Loc
 			diag.error("annotation", "deps must be candidate", loc)
 		elif key == "elided" and not (isinstance(value, str) and value.isdigit()):
 			diag.error("annotation", "elided must be a count", loc)
-		elif key in ("key", "ordered") and value is not True:
+		elif key in ("key", "ordered", "hierarchical") and value is not True:
 			diag.error("annotation", f"{key} is a flag", loc)
 		elif key == "id" and value not in IDENTIFIERS:
 			diag.error("annotation", f"id must be {', '.join(IDENTIFIERS)}", loc)
@@ -105,6 +106,12 @@ def _typeCycle(model: Model, type: TypeExpr | None) -> bool:
 
 
 def _checkType(model: Model, type: TypeExpr | None, ann: Annotations, loc: Loc | None, what: str, diag: Diagnostics) -> None:
+	if type and type.values is not None:
+		valid = isPath if annotation(ann, "hierarchical") is True else isName
+		if not type.values or not all(valid(value) for value in type.values):
+			diag.error("vocabulary", f"{what}: invalid vocabulary values", loc)
+		if len(set(type.values)) != len(type.values):
+			diag.error("vocabulary", f"{what}: duplicate vocabulary values", loc)
 	for conflict in model.resolveType(type, ann).conflicts:
 		diag.error("qualifier", f"{what}: {conflict}", loc)
 	if not type or type.builtin or type.values is not None or type.unknown:
@@ -427,6 +434,7 @@ def ontologyFromJson(data: Any, name: str = "ontology.json") -> Ontology:
 
 	try:
 		read = _fromJson(data)
+		validateOntology(read)
 		normal = normaliseOntology(read)
 		text = printOntology(normal)
 		expected = _toJson(normal, None)

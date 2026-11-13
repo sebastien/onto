@@ -114,7 +114,8 @@ Trade(Account, Counterparty: * Party, Instrument, Trader: + Person) {kind=event}
 - UTF-8, LF line endings. Trailing whitespace is insignificant; blank lines separate
   nothing and are ignored.
 - Declarations start in column 0. Body lines are indented by exactly two spaces.
-  Bodies have one level; they never nest.
+  Bodies have one level, except hierarchical vocabulary trees, whose indentation
+  increases by two spaces per level.
 - `//` to end of line is a comment and is discarded. A comment must be the whole
   line or be preceded by whitespace.
 - ` -- text` at the end of a declaration or body line is a doc string attached to
@@ -183,6 +184,7 @@ through other namespaces; an unresolved name is an error.
 | `T = Entity` | Reference type: a reference to an instance, not a copy |
 | `T = A\|B\|C` | Closed vocabulary |
 | `T = A\|B\|...` | Open vocabulary: values are examples, others are allowed |
+| `T = A/B\|A/C {hierarchical}` | Hierarchical vocabulary; also accepts an indented tree body |
 | `T = ...` | Categorical with unknown vocabulary |
 | `T =` + body | Structure: named fields, no identity of its own |
 | `T =` (no body) | Type with unspecified detail |
@@ -212,7 +214,8 @@ Cycles in aliases or specialisation are errors.
 
 ### Vocabularies
 
-- Values are names. `A|B` is exhaustive; a trailing `|...` makes it open.
+- Values are names, or value paths with `{hierarchical}` (see below).
+  `A|B` is exhaustive; a trailing `|...` makes it open.
 - A single-value vocabulary starts with `|` (`|TrialPeriod`), so it is not read
   as a type name. Spaces around `|` are allowed when parsing; normal form has none.
 - Values are sorted in normal form unless the type is annotated `{ordered}`
@@ -220,6 +223,54 @@ Cycles in aliases or specialisation are errors.
 - A vocabulary may be declared inline as an attribute type
   (`Side Buy|Sell`). It then has no path of its own; declare a
   named type when it is shared or needs annotations.
+
+#### Hierarchical vocabularies (taxonomies)
+
+`{hierarchical}` gives vocabulary values a parent–child hierarchy. It does not
+change the namespace meaning of declaration paths. These declarations are
+equivalent:
+
+```text
+Category = Food/Fruit/Apple|Food/Fruit/Pear|Food/Vegetables|Clothing/Shirts {hierarchical}
+```
+
+```text
+Category = {hierarchical}
+  Food
+    Fruit
+      Apple
+      Pear
+    Vegetables
+  Clothing
+    Shirts
+```
+
+- A value is a `/`-separated sequence of names. Its full path identifies it
+  within the vocabulary; `Food/Fruit/Apple` is not a reference to a declaration.
+  Empty segments, leading or trailing `/` and non-name segments are invalid.
+  Without `{hierarchical}`, vocabulary values remain single names.
+- Each proper path prefix is an ancestor and an allowed value. Compact paths
+  infer missing ancestors: `Food/Fruit/Apple` also declares `Food` and
+  `Food/Fruit`. Intermediate nodes can be selected just like leaves.
+- A tree body starts at two spaces. Each line contains one name; each deeper
+  level adds exactly two spaces and appends that name to its parent's path.
+  Indentation may not skip a level. Duplicate full paths in the tree are errors;
+  the same name under different parents is allowed.
+- A declaration uses either compact values or a tree body, never both. A body
+  requires an explicit `{hierarchical}` flag and at least one node. This
+  distinguishes it from a structure. Multiline vocabularies are named types;
+  inline attribute vocabularies may use compact paths with `{hierarchical}`.
+  A compact single-value vocabulary keeps the leading `|` rule:
+  `Category = |Food/Fruit/Apple {hierarchical}`.
+- A trailing `|...` makes the compact form open. In a tree, a final `...` line
+  at two spaces does the same; it is not a node and cannot occur deeper.
+  Open vocabularies accept other well-formed value paths, including new roots;
+  observing one does not extend the declared vocabulary.
+- Each node has at most one parent. Multiple roots are allowed; multiple
+  parents require an explicit entity-and-relation model instead.
+- Values match exactly. The hierarchy describes ancestry, not automatic
+  ancestor observations, descendant matching or aggregation.
+- Aliases retain the vocabulary's hierarchy, openness and ordering.
 
 ### Structures
 
@@ -357,6 +408,8 @@ Household -hasMember/memberOf-> Person 1:*
   (equivalent), `broader`, `narrower`, `related` (SKOS), read "To is *match*
   than From". Values must be listed in their vocabularies (open ones included).
   A `(From, To)` pair appears once.
+  For hierarchical vocabularies, use full value paths; inferred ancestors count
+  as declared values. Map lines do not implicitly apply to descendants.
 - Annotations: `rule` (e.g. a scalar conversion token), `status`, `src`, `check`.
 - In [mappings](spec-04-mapping.md#mappings), a map is also a function from
   `From` values to `To` values.
@@ -404,6 +457,7 @@ Keys, in normal-form order:
 | `subjectRole`, `objectRole` | context-backed binary relation | Role names on the context selecting the subject and object |
 | `ctx` | facet | Entity or association whose instances the facet's values hold within ([contextual facets](#contextual-facets)); written shortest, stored as a full path |
 | `ordered` | vocabulary | Value order is meaningful |
+| `hierarchical` | vocabulary | Values are taxonomy paths; prefixes are ancestors |
 | `cur` | type, attribute | Currency code, or `?` |
 | `unit` | type, attribute | Unit, or `?` |
 | `period` | type, attribute | Reporting/payment basis (`Month`, `Year`, ...), or `?` |
@@ -474,7 +528,7 @@ Within declarations:
 - Sorting uses fully resolved paths (`Dimensions/...` before `Finance/Years`),
   while names are written in their shortest form: relative to `@ontology` when
   possible, otherwise through a `@use` alias, otherwise fully qualified.
-- Attributes and view lines are sorted by name. Vocabulary values are sorted
+- Attributes and view lines are sorted by name. Flat vocabulary values are sorted
   unless `{ordered}` (on the type, or on the attribute for an inline vocabulary).
   Dependencies are sorted as written, `$Inputs` first and `...` last. Relation
   association participants sort by role name (their order is non-semantic);
@@ -488,6 +542,13 @@ Within declarations:
   consecutive bodiless declarations are adjacent.
 - Comments are dropped; docs are kept.
 - A type is written as declared (inline vocabularies stay inline).
+- Named hierarchical vocabularies are always written as indented trees, with
+  every inferred ancestor explicit. Roots and siblings are sorted by name,
+  unless `{ordered}`, then their first-appearance order is kept. In compact
+  input, ancestors first appear with their first descendant. Parents precede
+  their children (depth-first traversal). An open tree ends with `...` at two
+  spaces. Inline hierarchical vocabularies remain compact, with every ancestor
+  explicit in the same traversal order.
 
 The [example](#example) is in normal form, except for its comments.
 
@@ -514,6 +575,9 @@ Finance/Instrument.Bond.CouponRate	019d2783-...
 | Facet attribute | `Subject.Facet.Attr` |
 | Relation role | `Relation.Role` |
 | Vocabulary value | `Type:Value` |
+
+For a hierarchical value, `Value` is the full path, for example
+`Dimensions/Category:Food/Fruit/Apple`. Ancestors may have their own identifiers.
 
 The sidecar is not part of the agent-facing text. Paths without a source
 identifier are omitted or marked `(overlay)`/`(authored)` for elements that do not
@@ -575,6 +639,24 @@ convert losslessly (comments excepted); the structure is defined by
 - Type expressions: `{"builtin": "Text"}`; `{"path": P}` for a declared type or an
   entity (a reference); `{"path": P, "attr": "A.B"}` reuses an attribute's type;
   `{"values": [...], "open": bool}` for a vocabulary; `{"unknown": true}` for `...`.
+- Hierarchical vocabularies use the same flat `values` array with full value
+  paths and `"hierarchical": true` in the declaration's `ann` (or the attribute's
+  `ann` for an inline vocabulary). Every ancestor is explicit; values follow
+  the tree's normal-form traversal order. JSON input may omit ancestors, which
+  are inferred as in compact text. No nested JSON tree is needed. For example:
+
+  ```json
+  {
+    "kind": "type",
+    "path": "Finance/Category",
+    "def": {
+      "values": ["Food", "Food/Fruit", "Food/Fruit/Apple"],
+      "open": false
+    },
+    "ann": { "hierarchical": true }
+  }
+  ```
+
 - Dependencies: `{"local": "A"}`, `{"input": "AsOf"}` (`$AsOf`),
   `{"path": P, "attr": "A"}`, `{"ellipsis": true}` (`...`), in normal-form order.
 - Annotations are an object in normal-form key order; values are tokens (strings)
@@ -583,7 +665,8 @@ convert losslessly (comments excepted); the structure is defined by
   form; both are written out so consumers need not derive them.
 - `{"kind": "domain", "path", "doc"?}`; `{"kind": "map", "path", "from", "to",
   "lines": [{"from", "match", "to", "doc"?}], "ann"?, "doc"?}` (`from`/`to` are
-  full type paths; line values are names).
+  full type paths; line values are names, or full value paths for hierarchical
+  vocabularies).
 - `ann.context` and `ann.ctx` are full paths.
 - `ids` optionally carries the identity sidecar (same paths and identifiers).
 
@@ -591,6 +674,62 @@ Reading JSON prints its normal-form text and parses that, so every rule of this
 spec applies; JSON that does not survive the round trip (invalid names, tokens,
 or a `path`/role inconsistent with the participants) is rejected. The schema is
 structural only: references, collisions and cycles are checked by loading.
+
+## Meta domain
+
+Data sometimes refers to the ontology itself: a questionnaire question to the
+attribute its answer populates, a rule to the vocabulary it ranges over. The
+`Meta` domain describes an ontology as instances of itself, so that such
+references are relations to instances rather than paths copied as text.
+
+```text
+Meta/Concept {layer=Reference}
+  1 Path Meta/Path {id=key}
+  1 Kind Meta/Concept/Kind
+  ? Description Text
+Meta/Attribute {layer=Reference}
+  1 Path Meta/Path {id=key}
+  1 IsRequired Boolean
+  1 IsMultiple Boolean
+  ? Description Text
+Meta/Dimension {layer=Reference}
+  1 Path Meta/Path {id=key}
+  ? Kind Meta/Dimension/Kind
+  * Values Text
+  ? IsOpen Boolean
+  ? IsOrdered Boolean
+  ? Description Text
+Meta/Concept -hasAttribute/isAttributeOf-> Meta/Attribute 1:*
+Meta/Attribute -hasDimension/isDimensionOf-> Meta/Dimension *:?
+Meta/Dimension -isBasedOn/isBaseOf-> Meta/Dimension *:?
+```
+
+Neither the declarations nor the instances are written by hand.
+`onto meta --decl` prints the declarations as a file of the ontology (same
+namespace and header); `onto meta` prints the instances as
+[observations](spec-02-observations.md):
+
+| Instance | One per | Notes |
+| --- | --- | --- |
+| `Meta/Concept` | Entity, facet, n-ary relation, binary relation with attributes | `Kind` is `Entity`, `Facet` or `Relation` |
+| `Meta/Attribute` | Attribute, on the concept that declares it | `IsRequired` for `1` and `+`, `IsMultiple` for `*` and `+`; roles are not attributes |
+| `Meta/Dimension` | Built-in type in use, type declaration, vocabulary written in an attribute | `Kind` is `Builtin`, `Vocabulary`, `Value` (a named scalar) or `Structure`; an alias takes the kind and values of what it names |
+
+- `Path` is relative to the ontology namespace: `Person`, `Person.Email`,
+  `D/AssetClass`, `Household.hasMember.Person.Role`. A built-in's path is its
+  name. A vocabulary written in an attribute has the attribute's path.
+- The handle of an instance is its path with `/` written `_` and `.` written
+  `__` (`D_AssetClass`, `Person__Email`); a vocabulary written in an attribute
+  adds `__Values`. The document declares `@scope onto:<Namespace>`, so the
+  handles are stable and other documents of that scope can refer to them.
+- `hasDimension` links an attribute to the dimension of its type; attribute
+  reuse (`Owner.Attr`) takes the reused attribute's dimension. An attribute that
+  refers to a concept has none.
+- `isBasedOn` links a named type to the type it is defined as
+  (`D/Money/USD = Amount`).
+- `Description` is the element's doc string.
+- Inherited attributes are not repeated on specialisations, structure fields
+  are not described, and the `Meta` domain describes itself as any other domain.
 
 ## Changes
 

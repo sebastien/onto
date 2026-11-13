@@ -29,6 +29,7 @@ from .model import (
 	SECTIONS,
 	TypeExpr,
 	ViewLine,
+	vocabularyValues,
 )
 
 # -----------------------------------------------------------------------------
@@ -59,9 +60,10 @@ def _depKey(dep: Dep) -> tuple[int, int, str]:
 	return (1, 0, dep.local or f"{dep.path}.{dep.attr}")
 
 
-def _normaliseType(type: TypeExpr | None, ordered: bool) -> TypeExpr | None:
-	if type and type.values is not None and not ordered:
-		return replace(type, values=sorted(type.values))
+def _normaliseType(type: TypeExpr | None, ordered: bool, hierarchical: bool = False) -> TypeExpr | None:
+	if type and type.values is not None:
+		values = vocabularyValues(type.values, ordered) if hierarchical else list(type.values) if ordered else sorted(type.values)
+		return replace(type, values=values)
 	return type
 
 
@@ -145,7 +147,8 @@ class Printer:
 		"""A declaration's header line without its doc."""
 		short = self.short
 		if decl.kind == "type":
-			return self._Join([f"{short(decl.path)} =", self.typeText(decl.definition)] + self._tail(decl.ann))
+			tree = decl.definition and decl.definition.values is not None and annotation(decl.ann, "hierarchical") is True
+			return self._Join([f"{short(decl.path)} =", "" if tree else self.typeText(decl.definition)] + self._tail(decl.ann))
 		if decl.kind == "entity":
 			return self._Join([short(decl.path), f"< {short(decl.base)}" if decl.base else ""] + self._tail(decl.ann))
 		if decl.kind == "facet":
@@ -188,6 +191,10 @@ class Printer:
 			body = [f"  {self.viewLine(line)}" for line in decl.viewLines]
 		elif decl.kind == "map":
 			body = [self.mapLine(line, indent="  ") for line in decl.mapLines]
+		elif decl.kind == "type" and decl.definition and decl.definition.values is not None and annotation(decl.ann, "hierarchical") is True:
+			body = ["  " * (path.count("/") + 1) + lastSegment(path) for path in decl.definition.values]
+			if decl.definition.open:
+				body.append("  ...")
 		else:
 			body = [self.attr(item, indent="  ") for item in (decl.fields or [] if decl.kind == "type" else decl.attrs)]
 		return [self.head(decl)] + body
@@ -310,7 +317,7 @@ def normaliseOntology(ontology: Ontology) -> Ontology:
 			attr,
 			card=None if attr.card == defaultCard else attr.card,
 			ann=_sortAnnotations(attr.ann),
-			type=_normaliseType(attr.type, annotation(attr.ann, "ordered") is True),
+			type=_normaliseType(attr.type, annotation(attr.ann, "ordered") is True, annotation(attr.ann, "hierarchical") is True),
 			deps=sorted(attr.deps, key=_depKey) if attr.deps else attr.deps,
 		)
 
@@ -322,7 +329,7 @@ def normaliseOntology(ontology: Ontology) -> Ontology:
 		if decl.kind == "type":
 			return replace(
 				base,
-				definition=_normaliseType(decl.definition, annotation(decl.ann, "ordered") is True),
+				definition=_normaliseType(decl.definition, annotation(decl.ann, "ordered") is True, annotation(decl.ann, "hierarchical") is True),
 				fields=normaliseAttrs(decl.fields) if decl.fields is not None else None,
 			)
 		if decl.kind == "view":
