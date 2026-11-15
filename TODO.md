@@ -334,6 +334,50 @@ logical section headers, explicit `# EOF`. Do not delegate without authorization
   `tests/T07-*`. Deferred: `bind`/`map` runs (with the hexa integration),
   `diff`, overlays, `formats update`, `.ids`/`.reg` readers.
 - JavaScript backend sharing JSON contracts and conformance examples.
+- Skills: `docs/skills/` (modeling, review) and `docs/ref/ref-onto-cheatsheet.md`;
+  their `onto` blocks are loaded by `tests/T00-001-docs-examples.py`. Install with
+  `make install-skills`.
+
+### Modeling gaps (2026-11-16): proposed, not decided
+
+Writing the modeling skills (`docs/skills/onto-modeling`, `onto-review`) showed
+three shapes the modeling rules ask for and spec-01 cannot express. The skills
+document a workaround for each; remove it from the rule file when the gap
+closes. Nothing below is specified or implemented.
+
+1. **Ranges** (rule 2.4; workaround: one `T/Range` structure per element type).
+   Proposal: a built-in type constructor, not user-defined generics:
+   `Price Range<D/Money/USD>`, `Age Range<Years>`.
+   - `T` is orderable: `Integer`, `Number`, `Amount`, `Percent`, `Date`,
+     `DateTime`, `Duration`, their aliases, or an `{ordered}` vocabulary.
+     Qualifiers of `T` apply to both bounds.
+   - Values reuse the `valid=` interval syntax: `10..20`, `10..`, `..20`.
+   - JSON type expression `{"range": <type>}`.
+   - Open: bound inclusivity (and whether it matches `valid=`); whether a
+     single value `10` is the range `10..10`; `Meta/Dimension/Kind`.
+2. **Partial dates** (rule 2.4; workaround: `PartialDate = Text`).
+   Proposal: a `precision` measurement qualifier on `Date` rather than a new
+   built-in, which would reserve a name: `Built Date {precision=Month}` accepts
+   `2019-03`; `{precision=?}` accepts `2019`, `2019-03` or `2019-03-15` and the
+   spelling decides. A `Date` without it stays a full day.
+   - Reuses the qualifier rules (inherited through aliases, `?` filled per
+     value, never contradicted).
+   - Open: comparison and supersession (reading `2019-03` as the interval
+     `2019-03-01..2019-03-31`); whether `valid=` accepts reduced precision;
+     qualifier values (`Year|Month|Day`). General union types are not proposed.
+3. **More than one supertype** (rules 7.2, 4.6; workaround: chain the
+   supertypes, most generic at the root, or `{check=supertype}`). A linear chain
+   works today; a cross-cutting capability (`Subject`, `Asset`, `Insurable`) on
+   entities with unrelated bases does not.
+   - Option A (preferred): multi-subject facets, usable as participant and
+     reference types: `Subject of Customer, Order, Shipment`, then
+     `Note -concerns-> Subject` meaning any instance the facet applies to. Fits
+     "a role is a facet"; spec-01 already marks the single subject "(v1)".
+     Open: whether domains may add subjects to a facet declared elsewhere;
+     addressing (`Subject.Facet.Attr`) is unchanged; the verb-clash rule must
+     treat a facet target as related to each of its subjects.
+   - Option B: multiple inheritance `E < A, B`. Familiar, but needs rules for
+     inherited attribute and facet collisions and widens the verb-clash rule.
 
 ## Spec-04 design review (2026-11-11): decided and written into the specs
 
