@@ -475,6 +475,37 @@ Body lines of entities, facets, relations and structures:
   evaluation time. Dependencies never imply a formula.
 - Attributes are unique by name within their owner; in a facet, within the facet.
 
+### History
+
+A status or stage whose past values matter is flagged `{history}`. The flag
+generates, for attribute `Attr` of `Owner`, a change concept and the relation to
+it:
+
+```text
+Policy {layer=Holding}
+  Status Policy/Status {history}
+
+// generated, never written:
+Policy/StatusChange {layer=Holding}             -- Policy reaching a value of Status
+  1 Status Policy/Status
+  OccurredDate Date                             -- When the value was reached
+  Reason Text                                   -- Why, as stated
+Policy -hasChange/isChangeOf-> Policy/StatusChange 1:*
+```
+
+- The attribute keeps the current value; each `Owner/AttrChange` is one value
+  reached, with when and why. Observations use the generated concept and
+  relation like declared ones, and `onto meta` describes them.
+- The owner is an entity, a facet or an association. A facet's change concept
+  is under the facet's path and the relation starts from the facet's subject.
+  The change concept takes the owner's `layer`, or its subject's for a facet.
+- The attribute is single-valued and not derived.
+- Declaring the generated concept is an error: the flag is the only source.
+  A history that needs more than a date and a reason is declared by hand,
+  without the flag.
+- Normal form and JSON keep the flag only; the generated declarations are
+  derived again when the ontology is loaded.
+
 ## Annotations
 
 `{key=value, flag, ...}`. Values are unquoted tokens (no whitespace, `{}`, `,`,
@@ -500,6 +531,7 @@ Keys, in normal-form order:
 | `scale` | type, attribute | Percent scale `1` or `100`, or `?` |
 | `status` | any | `stated`, `inferred`, `assumed` |
 | `cards` | attribute | Evidence status of this attribute's cardinality, overriding `@ontology cards=` |
+| `history` | attribute | Flag: each value reached is dated; generates a change concept ([history](#history)) |
 | `deps` | derived attribute | `candidate`: dependencies are proposed, not confirmed |
 | `rule` | derived attribute | Rule reference token, or `?` |
 | `src` | any | Provenance; overrides the inherited value |

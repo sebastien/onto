@@ -76,24 +76,36 @@ Order
   StatusWhenCancelled Order/Status
 ```
 
-DO: the current status on the thing, and one concept for every transition.
+DO: the current status on the thing, flagged `{history}`. onto generates one
+concept for every transition, `Order/StatusChange` (the status, `OccurredDate`,
+`Reason`), and `Order -hasChange/isChangeOf-> Order/StatusChange 1:*`.
 
 ```onto
 Order/Status = Draft|Placed|Fulfilled|Cancelled {ordered}
 
 Order
-  Status Order/Status
-
-Order/StatusChange
-  At DateTime
-  Status Order/Status
-
-Order -hasChange/isChangeOf-> Order/StatusChange 1:*
+  Status Order/Status {history}
 ```
 
 "Status when X happened" is then a query, not an attribute. A new status adds a
-value, not an attribute. When a transition has an actor or a reason, they are
-attributes or relations of the change.
+value, not an attribute. When a transition needs more than a date and a reason
+(an actor, a channel), declare the change concept and its relation by hand,
+without the flag:
+
+```onto
+Order/Status = Draft|Placed|Fulfilled|Cancelled {ordered}
+Person
+
+Order
+  Status Order/Status
+
+Order/StatusChange
+  1 Status Order/Status
+  At DateTime
+
+Order -hasChange/isChangeOf-> Order/StatusChange 1:*
+Order/StatusChange -isMadeBy/makesChange-> Person
+```
 
 ## 5.4 Use intervals for things that last
 

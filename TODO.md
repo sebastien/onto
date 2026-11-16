@@ -379,6 +379,118 @@ closes. Nothing below is specified or implemented.
    - Option B: multiple inheritance `E < A, B`. Familiar, but needs rules for
      inherited attribute and facet collisions and widens the verb-clash rule.
 
+Further gaps found applying the rules to the AdviceOS ontology (adviceos-data,
+`ONTO_REVIEW.md`, "Limits of onto met in this work"). Proposed, not decided.
+Ranked by cost: 4 and 8 are checks only (no syntax), now implemented as
+described below, with these differences: the binary-relation rule replaced the
+"declared in the later domain" check (a binary relation belongs to the latest of
+its ends and its `context`); all `@domain` lines must be in one file and normal
+form keeps their order; the `Meta` domain ranks first wherever it is declared;
+`Meta/Path` values also resolve to any path `onto meta` generates. 9 and 10
+reuse existing machinery; 5, 6 and 7 add syntax.
+
+4. **Implemented (2026-11-16): spec-01 "Layering", `T01-006`.** **Domain layering is not checked** (rule 8.1; workaround: `@domain` lines in
+   dependency order by hand and a script listing upward references).
+   Proposal: `@ontology layering=declared` makes `@domain` declaration order the
+   dependency order. `onto check` then reports, as errors:
+   - a reference from an element of domain A to an element of a later domain B,
+     in a type, base, facet subject, `ctx=`, participant or `Owner.Attr` reuse;
+   - a relation or facet whose two domains differ and which is not declared in
+     the later one (for a facet: its namespace is the contributing domain).
+   Not references: vocabulary value paths (`Lending/Mortgage` as a value of a
+   hierarchical vocabulary), map line values, docs. Elements outside any
+   declared domain are exempt. Touchpoints: `ontology/operations.py`
+   (`_validate`, one pass after the existing checks; `Model` knows each decl's
+   domain from its first segment); spec-01 "Directives" (`layering` header key)
+   and a diagnostic code `layering`. JSON: the header key only.
+   Open: whether `layering` also orders the file loading or formatting (it
+   should not); warning versus error by default.
+
+8. **Implemented (2026-11-16): spec-01 "Meta domain", `T01-007`.** **Observations about the ontology itself are not resolved** (workaround: a
+   script comparing `X:Meta/...` handles in `.obs` files with `onto meta`).
+   `onto meta` generates `Meta/Concept`, `Meta/Attribute` and `Meta/Dimension`
+   records with deterministic handles (`Society_Person__BirthDate`), but an
+   observation file that refers to them (`q populates
+   Advice_EstatePlanning__Instruments:Meta/Attribute`) only declares an empty
+   instance, so a renamed attribute leaves a dangling reference silently.
+   Proposal: when the ontology an observation file is checked against declares
+   the Meta domain (`metaDeclarations`), the loader treats the generated
+   records (`metaObservations`) as part of its context. A handle typed
+   `Meta/...` that is not generated is an error (`meta.unresolved`); a value
+   of type `Meta/Path` must resolve to a concept, an attribute
+   (`Concept.Attr`), a facet attribute (`Concept.Facet.Attr`) or a structure
+   field (`Type.Field`), else `meta.path`. Touchpoints:
+   `observations/operations.py` (load with an extra resolved context),
+   `meta.py` (expose the handle set and a path resolver), `cli/workspace.py`
+   (context of `.obs` entries). Open: whether structure fields get their own
+   `Meta/Field` records (then `ItemField` could be a reference instead of a
+   path); whether `onto meta --decl` output should be checked for staleness by
+   `onto check` (`meta.onto` differs from the generated declarations).
+
+9. **A derived rule is only a token** (workaround: `~ Level <- Score {rule=?}`
+   with the thresholds in the doc). Spec-04 already has function libraries
+   (`.fn`, `@fn` with signature and examples). Proposal: `{rule=Lib.fn}` on a
+   derived attribute names a function of a library; `onto check` with the
+   library in context verifies that the function exists, that its arity matches
+   the `<-` inputs, and that its result type is compatible with the attribute
+   type. The library's examples are the rule's documentation and tests. A
+   token without a library stays a free reference (`rule=x26`), as today.
+   Touchpoints: `ontology/operations.py` (`_checkAnnotations` for `rule`),
+   `functions/operations.py` (`resolveFunctions`), spec-01 annotation table and
+   spec-04 "Function library". Open: how an ontology names its libraries
+   (`@use Lib` of a `.fn` namespace, or the workspace); evaluation of derived
+   attributes stays out of scope.
+
+10. **Implemented (2026-11-16): generated concept, spec-01 "History", `T01-008`; fields `1 Attr`, `OccurredDate Date`, `Reason Text`; declaring the generated concept is an error.** **Dated history of a status is declared by hand** (rules 5.1-5.3;
+    workaround: one `X/StatusChange` concept per lifecycle, seven in AdviceOS,
+    each `1 Status T`, `OccurredDate Date`, `Reason Text` and a
+    `X -hasChange-> X/StatusChange 1:*` relation). Proposal: an attribute flag
+    `Status X/Status {history}` meaning "each value reached is an event with a
+    date": `onto` derives the change concept `X/StatusChange` (or
+    `X/<Attr>Change`) and its relation, visible in `onto meta` and JSON as
+    derived declarations. Observations need nothing new: `valid=` already
+    dates values, so the alternative is to state that `{history}` attributes
+    are always observed with `valid=` and no concept is generated. Open:
+    which of the two (generated concept versus required `valid=`); where a
+    reason or actor goes; this is open decision 3 of the AdviceOS review.
+
+5. **A later domain cannot add values to an earlier vocabulary** (rule 2.7;
+   workaround: generic values renamed, country names in comments, or a
+   country vocabulary with an `@map` to the generic one). Proposal:
+   `Finance/Income/Measure += Paye|Esct -- NZ income measures` in a later
+   domain's file, allowed only on open vocabularies (`|...`), recorded with
+   the contributing domain (the values belong to `Nz`, the vocabulary stays
+   `Finance`). Hierarchical vocabularies accept `+=` with a tree. Touchpoints:
+   parser (`RE_` for `+=` declarations), `Model` (merge after loading, keep
+   the contributor per value), `meta.py` (`Values` per contributor), spec-01
+   "Vocabularies", JSON (`{"extends": path, "values": [...]}`). Open: whether
+   an extension may refine an existing value (children under `Investment`);
+   interaction with `{ordered}` (extensions append).
+
+6. **A facet cannot be restricted to some instances of its subject** (workaround:
+   `Property/Ownership of Finance/Holding` applies to any holding;
+   `Insurance/Insured.Object` is any position). Proposal: a `when` annotation
+   on facets of associations naming a participant and a type:
+   `Property/Ownership of Finance/Holding {when=Position:Property/Property}`;
+   for an entity subject, `{when=Property/Property}` is the subject's own
+   specialisation, which is better written as a facet of that specialisation.
+   Observations of the facet on a non-matching instance are errors when the
+   participant's type is known. Touchpoints: `_validate` (facet branch: role
+   exists, type is a specialisation of the role's type), observation loading
+   (type check), spec-01 "Facets". Open: one condition or several; conditions
+   on attribute values (`when=Type:Joint`) are not proposed.
+
+7. **A structure cannot say "exactly one of these fields"** (workaround:
+   `Insurance/Benefit` documents "Amount or PeriodicAmount, not both").
+   Fields carry their own types, so an alternation on one line does not fit.
+   Proposal: a group annotation on the fields: `Amount Core/Money {one=Value}` and
+   `PeriodicAmount Core/MoneyFlow {one=Value}`, where fields sharing a `one=`
+   group are mutually exclusive and the group's cardinality is the first
+   field's (`1` required, `?` optional). Touchpoints: `_checkAttrs` (group
+   consistency), observation validation (more than one of a group is an
+   error), spec-01 annotation table. Open: whether the same applies to entity
+   attributes; the name of the key (`one`, `xor`, `choice`).
+
 ## Spec-04 design review (2026-11-11): decided and written into the specs
 
 The eight open semantics were reviewed with the user and resolved:

@@ -352,7 +352,7 @@ def normaliseOntology(ontology: Ontology) -> Ontology:
 			normal.participants = participants
 		return normal
 
-	decls = [normaliseDecl(decl) for decl in ontology.decls]
+	decls = [normaliseDecl(decl) for decl in ontology.decls if not decl.generated]
 
 	def byPath(kind: str) -> list[Decl]:
 		return sorted((decl for decl in decls if decl.kind == kind), key=lambda decl: decl.path)

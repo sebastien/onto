@@ -46,6 +46,7 @@ ANNOTATION_PLACES: dict[str, set[str] | None] = {
 	"scale": {"type", "attribute"},
 	"status": None,
 	"cards": {"attribute"},
+	"history": {"attribute"},
 	"deps": {"derived"},
 	"rule": {"derived", "map"},
 	"src": None,
@@ -196,6 +197,8 @@ class Decl:
 	mapLines: list[MapLine] = field(default_factory=list)
 	mapFrom: str | None = None
 	mapTo: str | None = None
+	# NOTE: Derived from a `{history}` attribute when the ontology is validated; never written in normal form or JSON.
+	generated: bool = False
 
 
 @dataclass(slots=True)
