@@ -162,7 +162,8 @@ def _valueIdentity(value: Any, numeric: bool) -> tuple:
 
 def _useType(model: Model, attr: Attr, meta: dict[str, Any]) -> ResolvedType:
 	qualifiers = [(key, meta[key]) for key in QUALIFIERS if key in meta]
-	return model.resolveType(attr.type, qualifiers + attr.ann)
+	# NOTE: Observed qualifiers are a nearer source than the attribute's, so that contradicting a fixed one is reported.
+	return model.resolveType(attr.type, attr.ann, qualifiers)
 
 
 def _slot(claim: Claim) -> tuple[str, str, str]:

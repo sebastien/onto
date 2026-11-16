@@ -43,6 +43,7 @@ from .model import (
 	ONTOLOGY_FORMAT,
 	Ontology,
 	PATH_KEYS,
+	QUALIFIERS,
 	Participant,
 	RE_ARROW_DECL,
 	RE_ATTRIBUTE,
@@ -116,6 +117,8 @@ def _parseAnn(text: str | None, ctx: _Context, loc: Loc | None) -> Annotations:
 	for key, value in parseAnnotations(text, loc, ctx.diag):
 		if key in PATH_KEYS and isinstance(value, str):
 			value = _resolvePath(value, ctx, loc) or value
+		elif key in QUALIFIERS and isinstance(value, str) and value.startswith("?:"):
+			value = "?:" + (_resolvePath(value[2:], ctx, loc) or value[2:])
 		pairs.append((key, value))
 	return pairs
 
@@ -126,6 +129,12 @@ def _parseTypeExpr(text: str, ctx: _Context, loc: Loc | None, hierarchical: bool
 		return None
 	if value == "...":
 		return TypeExpr(unknown=True)
+	if value.startswith("Range<") and value.endswith(">"):
+		element = _parseTypeExpr(value[6:-1], ctx, loc)
+		if element and (element.builtin or element.path) and not element.range:
+			return TypeExpr(range=element)
+		ctx.diag.error("range", f"Range<T> takes a built-in or a named type: '{text}'", loc)
+		return None
 	if "|" in value:
 		parts = value.split("|")
 		if parts[0] == "":
@@ -547,9 +556,14 @@ def _typeFromJson(value: Any, what: str) -> TypeExpr:
 			raise ValueError(f"{what}.open must be a boolean")
 		values = [_string(item, f"{what}.values") for item in _array(value["values"], f"{what}.values", True)]
 		return TypeExpr(values=values, open=value["open"])
+	if keys == {"range"}:
+		element = _typeFromJson(value["range"], f"{what}.range")
+		if not (element.builtin or element.path):
+			raise ValueError(f"{what}.range must be a built-in or a path")
+		return TypeExpr(range=element)
 	if keys in ({"path"}, {"path", "attr"}):
 		return TypeExpr(path=_string(value["path"], what), attr=_optional(value, "attr", _string, what))
-	raise ValueError(f"{what} must be one type expression: builtin, path[+attr], values+open or unknown")
+	raise ValueError(f"{what} must be one type expression: builtin, path[+attr], values+open, unknown or range")
 
 
 def _depFromJson(value: Any, what: str) -> Dep:

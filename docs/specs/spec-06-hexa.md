@@ -73,8 +73,14 @@ log, report = ops.result(program, result)
   binding's [formats file](spec-04-mapping.md#formats) and the document format's
   [inventory](spec-04-mapping.md#inventories). It returns a
   `BindingProgram` with `slots`, `shapes`, `templates`, `vocabulary` and `stages`,
-  a frozen hexa stage namespace. Compiling is pure; it never reads documents.
-  Compiling the same inputs twice gives programs whose hexa encodings are equal.
+   a frozen, program-local `StageNamespace`. Its stages carry names for traces
+   without registering them process-wide, so programs can share scope names.
+   Compiling never reads documents or executes functions.
+   Compiling the same inputs twice gives programs whose hexa encodings are equal.
+   Declared function transforms and codecs also retain program-local evaluators:
+   compiling another program must not change an existing program's behavior.
+   A function may be a codec in one program and a transform in another without
+   a registry name collision.
 - `documents` is a list of `{src, document}`: the provenance token and the parsed
   JSON value (or, for CSV, the list of row objects) of each document of the run.
   Hosts usually produce it with their own `Retrieve` stage, piped before
@@ -200,6 +206,7 @@ pair of stages `<Type>RecordsSelect = select(Selector)` and
 `<Type>RecordsProject = each(project(Shape, Template, {outer}), Policy)`. A type
 with several scope lines gets one pair per line, numbered in normal-form order
 (`Instrument1RecordsSelect`, ...).
+`select(Selector)` here is shorthand for the level-by-level selection below.
 
 ### Selector
 
@@ -214,7 +221,12 @@ The scope path becomes a hexa selector: `.` and `[*]` become `/` and `/*`, and
 - `^` used as a whole reads the enclosing scope line's `id` inputs, so they are
   captured the same way.
 - `@at <- expr` and `$`-rooted paths are captured by a block opening the selector:
-  `{asOf?: $Bind.At}/instruments/*`.
+   `{asOf?: $Bind.At}/instruments/*`.
+- Nested selectors execute one list level at a time. A missing child path
+  reports a gap below that parent, without discarding other parents' children.
+  Child locations are joined to the parent's document-root location and retain
+  enclosing captures and origins. The whole selector remains available in the
+  program's encoding.
 - Index steps (`a[0]`) are not supported: hexa selectors and shapes have no
   index access, so compiling a binding that uses one fails with
   `Binding.PathUnsupported`.
@@ -225,7 +237,7 @@ The shape is a loose struct of every path the scope's lines read, nested as in t
 document, with every key optional. Each leaf is a **position**:
 
 ```text
-key?: tolerant(P | Null)
+key?: either(Null, tolerant(P))
 P   = $Slot                 a direct read
     | $Slot via Codec       a read through a codec (below)
     | either(P1, P2, ...)   $format: the chosen format first, then the others seen
@@ -237,15 +249,18 @@ P   = $Slot                 a direct read
 - A JSON `null` matches the `Null` branch and binds nothing, so it says nothing.
   A line annotated `{null=absent}` or `{null=unknown}`, or a binding header with
   `null=`, instead compiles its position as
-  `tolerant(P | $Bind.<Type>.Nulls.<Attr>)`, a marker slot whose canonical
+  `either($Bind.<Type>.Nulls.<Attr>, tolerant(P))`, a marker slot whose canonical
   shape is `Null`; the template turns it into `null` or `{unknown: true}`.
+- The null branch is outside `tolerant` so a failed codec retains its own reason
+  rather than being reduced to a union mismatch.
 - A path read by several lines is one position. When the lines need different
   slots, the position captures the field slot and each line reads it through its
   own derivation.
 - Paths and quoted field names keep their source spelling as struct keys.
 - A body path through `[*]` nests a list in the shape and gathers the position
-  below it: `a[*].b` becomes `a?: tolerant([{b?: gather(P), ...}] | Null)`, and
-  `a[*].b[*]` becomes `a?: tolerant([{b?: [gather(P)], ...}] | Null)`. The slot is
+  below it: `a[*].b` becomes
+  `a?: either(Null, tolerant([{b?: either(Null, gather(P)), ...}]))`, and
+  `a[*].b[*]` nests another list around the gathered position. The slot is
   a collection slot. A missing `a` leaves it unbound (no claim); an empty `a`
   binds `[]`, the known-empty collection.
 
@@ -265,7 +280,13 @@ The record template produces one **record** per occurrence:
   its own reason. Either way `handle` is a hole, and `ClaimsEmit` skips a record
   without a handle: its gap is already in the ledger.
 - `values`, `facets` and `links` hold one key per body line. Absent and hole keys
-  are left out; the claim is not made.
+  make no claim. Since hexa derivations cannot omit a key without reporting a
+  hole, a derivation's expected absence uses the internal marker
+  `{"absent": true}`, which `ClaimsEmit` drops without a gap. It never becomes
+  an observation value.
+- `Onto.Ref` results additionally carry an internal `type` alongside `ref`.
+  `ClaimsEmit` uses it to type referenced-only handles and strips it before
+  observation interchange; public reference values remain `{"ref": handle}`.
 - `source` is `$Location` and `origin` is `$Origin?`. Both are value-free.
 - `{when=path:value}` wraps the line's value: `Onto.When(Onto.TextEquals($F, "value"),
   Value)`, which is absent when the condition fails. On a `[Facet]` line it
@@ -292,7 +313,8 @@ The record template produces one **record** per occurrence:
 
 - **Read codecs** implement spec-04's rule that document scalars are read in the
   observations value encoding of the target type. Numeric types read through
-  `DecimalText`, which accepts JSON numbers and decimal text. Other types read
+  `DecimalText`, which accepts JSON numbers and decimal text; Integer uses
+  `Onto.IntegerText`, whose canonical shape also guarantees `Integral`. Other types read
   directly, since their JSON and canonical forms coincide.
 - **Functions with an inverse** compile to codecs so that the writing pass,
   when it is specified, reuses them. Built-in pairs map to codecs as follows:
@@ -321,12 +343,18 @@ its codes under `Binding` and `Mapping`:
 | Kind | Names |
 | --- | --- |
 | Constraints | `Integral`, `IsoDuration` |
-| Codecs | `EpochDate`, `SplitText(Separator)`, `DateTimePattern(Pattern)`, `DecimalNumber`, `DecimalPlaces(Places)`, `Case(Case)` |
-| Transforms | `Handle`, `SourceHandle`, `Ref`, `Correspond`, `Coalesce`, `When`, `TextEquals`, `Valid`, `Set`, `FormatName`, `QualifierConvert`, `ToInteger`, `ToVocabulary`, `HandleKey`, and the spec-04 built-in functions in PascalCase (`Concat`, `Trim`, `Multiply`, ...) |
+| Codecs | `EpochDate`, `IntegerText`, `SplitText(Separator)`, `DateTimePattern(Pattern)`, `DecimalNumber`, `DecimalPlaces(Places)`, `Case(Case)` |
+| Transforms | `Handle`, `SourceHandle`, `Ref`, `Correspond`, `Coalesce`, `When`, `TextEquals`, `Valid`, `Read`, `Set`, `Field`, `Nullable`, `At`, `Given`, `Members`, `FormatName`, `QualifierConvert`, `ToInteger`, `ToVocabulary`, `HandleKey`, and the spec-04 built-in functions in PascalCase (`Concat`, `Trim`, `Multiply`, ...) |
 | Codes | `Binding.KeyMissing`, `Binding.TypeMismatch`, `Binding.PathUnsupported`, `Binding.InputEmpty`, `Binding.SnapshotOlder`, `Binding.ParentMissing`; `Mapping.InputConflicting`, `Mapping.ReferenceUnmapped`, `Mapping.NotIntegral`, `Mapping.ValueUnmapped`, `Mapping.KeyReference`, `Mapping.ContextUnsupported`, `Mapping.PolicyUnsupported` |
 
 Each has examples. Built-in functions keep their spec-04 examples and add those
 the table in spec-04 implies.
+
+Auxiliary transforms read typed values (`Read`, `Set`), navigate captured fields
+(`Field`), apply null policies (`Nullable`), validate timestamps (`At`), write
+conditions only for present values (`Given`) and materialize collection members
+(`Members`). Registered generic function prototypes are copied into program-local
+transforms/codecs with their declared names, reason codes and evaluators.
 
 ## Run
 
@@ -359,7 +387,13 @@ DocumentRecordsCollect: <Type>RecordsSelect → <Type>RecordsProject, for each s
   observed fields as `fields`. In the log, `obs` names the source ontology with
   the binding's `scope`; each document's `src` becomes a source alias; each record's existence claim, values, facets and links follow in record
   order, with ordinals `n` assigned in that order. A deleted record produces the
-  retraction `- h` instead.
+   retraction `- h` instead.
+- Ordinals identify source statements, not individual expanded claims.
+  A facet claim shares the existence statement's `n` when their metadata
+  (excluding `valid` and `ctx`) agrees. Otherwise it carries a new existence
+  claim with the same `n` and non-contextual metadata as that facet statement:
+  spec-02's `h[F]` also asserts existence. Facet applicability itself has no
+  `valid`; a contextual facet's `ctx` never applies to existence.
 - Metadata: `src` is the document's token, `at` the record's `at` or the run's
   time from the `ClockRead` effect (so replay reproduces it), `by` is
   `bind:<Namespace>`, and `valid` comes from the record. A record's `ctx` is a
@@ -394,6 +428,11 @@ contains source values.
 The report keeps holes separate from absent fields. This is the distinction
 spec-04 [removals](spec-04-mapping.md#removals-and-gaps) needs: a later run must
 keep a claim whose input produced a gap, and retract one whose input is gone.
+
+Transform reasons live under their transform (for example
+`Onto.Handle.KeyMissing`). Report conversion maps recognized reason suffixes to
+the declared `Binding.*` or `Mapping.*` codes; other codec/function reasons are
+retained. The hexa ledger keeps the original transform reason.
 
 ## Formats
 
@@ -572,11 +611,11 @@ compiles to:
 ```text
 DividendRecordsSelect = select(instruments/*/{isin?: $Bind.Dividend.Fields.Outer.Isin}/dividends/*)
 
-DividendRow = {exDate?:      tolerant($Bind.Dividend.Fields.ExDate | Null),
-               amount?:      tolerant(($Exchange.Dividend.Amount via DecimalText) | Null),
-               currency?:    tolerant($Exchange.Dividend.Currency | Null),
-               payableDate?: tolerant(($Exchange.Dividend.PayableDate via DatePattern("YYYYMMDD")) | Null),
-               taxCredit?:   tolerant(($Exchange.Dividend.TaxCredit via DecimalText) | Null), ...}
+DividendRow = {exDate?:      either(Null, tolerant($Bind.Dividend.Fields.ExDate)),
+               amount?:      either(Null, tolerant($Exchange.Dividend.Amount via DecimalText)),
+               currency?:    either(Null, tolerant($Exchange.Dividend.Currency)),
+               payableDate?: either(Null, tolerant($Exchange.Dividend.PayableDate via DatePattern("YYYYMMDD"))),
+               taxCredit?:   either(Null, tolerant($Exchange.Dividend.TaxCredit via DecimalText)), ...}
 
 DividendRecord = {type: "Exchange/Dividend",
                   handle: Onto.Handle("Dividend", Onto.Concat($Bind.Dividend.Fields.Outer.Isin?, "/",
@@ -707,7 +746,7 @@ A scope compiles as a binding scope line does, over trees instead of documents:
   is `Onto.Date`); `@fn`, `@map` and library functions are transforms under their
   names. Reversal will use the inverse pairs, not the compiled codecs.
 - `?` and `null` arguments make an `Onto` transform return `?` or `null`
-  (`?` when both occur), except for functions declared `{nulls}`, which receive
+  (`null` when both occur), except for functions declared `{nulls}`, which receive
   them. Bindings never pass them, so the same transforms serve both.
 - Typing conversions from spec-04 [typing](spec-04-mapping.md#typing) become
   transforms when a check at compile time does not suffice:
@@ -958,6 +997,14 @@ field of each document and classifies its raw values: `decimals:N` for decimal
 text, `case:upper` or `case:lower` for text, `trim` or `padded`. It
 returns names and counts only. `formatsUpdate` folds them into the formats file
 like date patterns, so a field's writing format follows what the system writes.
+
+Each raw text value contributes one format: decimal text first contributes
+`decimals:N`; otherwise leading or trailing whitespace contributes `padded`,
+before any case check. Unpadded text whose cased characters are all uppercase
+contributes `case:upper`, or `case:lower` when all are lowercase. Mixed-case text
+and text without cased characters (including empty text) contribute `trim`.
+Digits and punctuation do not affect the case check. Original spellings still
+take precedence over the chosen format when the canonical value is unchanged.
 
 ### Materializing
 

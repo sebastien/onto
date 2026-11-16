@@ -189,8 +189,7 @@ class Calls:
 		else:
 			if name not in self.evaluator.functions and name not in self.evaluator.maps:
 				raise CompileError(V.BindingCodes.PathUnsupported, f"Unknown function '{name}'")
-			result = V.functionTransform(name)
-			V.registerCall(name, self.evaluator, lambda: result.Invalid)
+			result = V.functionTransform(name, self.evaluator)
 		self.used.add(result.name)
 		return result
 
@@ -202,9 +201,7 @@ class Calls:
 			return None
 		namespace = name.rpartition("/")[0]
 		inverseName = f"{namespace}/{inverse}" if namespace else str(inverse)
-		result = V.functionCodec(name, inverseName, canonical)
-		V.registerCall(name, self.evaluator, lambda: result.Invalid)
-		V.registerCall(inverseName, self.evaluator, lambda: result.Invalid)
+		result = V.functionCodec(name, inverseName, canonical, self.evaluator)
 		self.used.add(result.name)
 		return result
 

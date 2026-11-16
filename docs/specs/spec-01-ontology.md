@@ -216,6 +216,7 @@ through other namespaces; an unresolved name is an error.
 | Form | Declares |
 | --- | --- |
 | `T = Builtin {qualifiers}` | Scalar type |
+| `T = Range<E>` | [Range](#ranges) of an orderable type |
 | `T = OtherType {qualifiers}` | Alias: same values, its own meaning; qualifiers inherited |
 | `T = Entity` | Reference type: a reference to an instance, not a copy |
 | `T = A\|B\|C` | Closed vocabulary |
@@ -247,6 +248,23 @@ Cycles in aliases or specialisation are errors.
 - `Percent` is numeric; its scale (`1` for `0..1`, `100` for `0..100`) is a qualifier.
 - `Duration` is an elapsed length; its unit is a qualifier.
 - `Years`, `Months`, `Days` are not built in; declare them, e.g. `Years = Duration {unit=Year}`.
+
+### Ranges
+
+`Range<T>` is a band of values of `T`, with a low and a high bound. It is a type
+expression, usable wherever a type is: `Age Range<Years>`, or named,
+`Money/Range = Range<Money>`.
+
+- `T` is orderable: `Integer`, `Number`, `Amount`, `Percent`, `Date`,
+  `DateTime`, `Duration`, a type based on one of them, or a flat `{ordered}`
+  vocabulary. Ranges do not nest, and `T` is not written in place (`Range<A|B>`).
+- Qualifiers of `T`, of the range's aliases and of its uses apply to both bounds:
+  a range has one currency, unit and period.
+- Values are written as in `valid=`: `low..high`, `low..` (no high bound),
+  `..high` (no low bound); a single value `v` is the range `v..v`. Bounds are
+  inclusive, and `low <= high` (in declared order for a vocabulary), except
+  between durations without a known unit.
+- `Range` is not a declarable name pattern: `Range<...>` is only read as a range.
 
 ### Vocabularies
 
@@ -575,9 +593,9 @@ Keys, in normal-form order:
 | `extends` | named vocabulary | Open vocabulary whose values this one adds to ([extensions](#extensions)); written shortest, stored as a full path |
 | `ordered` | vocabulary | Value order is meaningful |
 | `hierarchical` | vocabulary | Values are taxonomy paths; prefixes are ancestors |
-| `cur` | type, attribute | Currency code, or `?` |
-| `unit` | type, attribute | Unit, or `?` |
-| `period` | type, attribute | Reporting/payment basis (`Month`, `Year`, ...), or `?` |
+| `cur` | type, attribute | Currency code, `?`, or `?:V` to take it per value from vocabulary `V` |
+| `unit` | type, attribute | Unit, `?`, or `?:V` |
+| `period` | type, attribute | Reporting/payment basis (`Month`, `Year`, ...), `?`, or `?:V` |
 | `scale` | type, attribute | Percent scale `1` or `100`, or `?` |
 | `status` | any | `stated`, `inferred`, `assumed` |
 | `cards` | attribute | Evidence status of this attribute's cardinality, overriding `@ontology cards=` |
@@ -592,6 +610,18 @@ Keys, in normal-form order:
 **Measurement qualifiers** (`cur`, `unit`, `period`, `scale`) belong on type
 declarations and are inherited through aliases and uses. A use may fill a `?` but
 must not contradict a fixed value. Qualifiers do not cascade into structure fields.
+
+`cur`, `unit` and `period` may also be `?:V`: left to each value, like `?`, and
+taken from `V`, a flat vocabulary resolved like any name. Every fixed value of
+that qualifier on the type, its aliases, its uses and observed values must then be
+a value of `V` (unless `V` is open). The nearest `?:V` applies; it is a reference
+for [layering](#layering) and is stored as a full path.
+
+```text
+Currency = EUR|NZD|USD                          -- ISO 4217 codes
+Money = Amount {cur=?:Currency}                 -- An amount in any listed currency
+Price Money                                     -- An observed `12 {cur=NZ}` is an error
+```
 
 **Provenance** `src` inherits ontology → declaration → attribute. `cards`
 defaults to `@ontology cards=`. Other annotations are local.
@@ -757,7 +787,8 @@ convert losslessly (comments excepted); the structure is defined by
   no `attrs` means none, no `base`/`doc`/`ann`/`inverse`.
 - Type expressions: `{"builtin": "Text"}`; `{"path": P}` for a declared type or an
   entity (a reference); `{"path": P, "attr": "A.B"}` reuses an attribute's type;
-  `{"values": [...], "open": bool}` for a vocabulary; `{"unknown": true}` for `...`.
+  `{"values": [...], "open": bool}` for a vocabulary; `{"unknown": true}` for `...`;
+  `{"range": <type>}` for `Range<T>`.
 - Hierarchical vocabularies use the same flat `values` array with full value
   paths and `"hierarchical": true` in the declaration's `ann` (or the attribute's
   `ann` for an inline vocabulary). Every ancestor is explicit; values follow
@@ -786,7 +817,8 @@ convert losslessly (comments excepted); the structure is defined by
   "lines": [{"from", "match", "to", "doc"?}], "ann"?, "doc"?}` (`from`/`to` are
   full type paths; line values are names, or full value paths for hierarchical
   vocabularies).
-- `ann.context`, `ann.ctx` and `ann.extends` are full paths.
+- `ann.context`, `ann.ctx` and `ann.extends` are full paths, and so is the `V`
+  of a `?:V` qualifier.
 - `ids` optionally carries the identity sidecar (same paths and identifiers).
 
 Reading JSON prints its normal-form text and parses that, so every rule of this
@@ -833,7 +865,7 @@ namespace and header); `onto meta` prints the instances as
 | --- | --- | --- |
 | `Meta/Concept` | Entity, facet, n-ary relation, binary relation with attributes | `Kind` is `Entity`, `Facet` or `Relation` |
 | `Meta/Attribute` | Attribute, on the concept that declares it | `IsRequired` for `1` and `+`, `IsMultiple` for `*` and `+`; roles are not attributes |
-| `Meta/Dimension` | Built-in type in use, type declaration, vocabulary written in an attribute | `Kind` is `Builtin`, `Vocabulary`, `Value` (a named scalar) or `Structure`; an alias takes the kind and values of what it names |
+| `Meta/Dimension` | Built-in type in use, type declaration, vocabulary written in an attribute | `Kind` is `Builtin`, `Vocabulary`, `Value` (a named scalar), `Structure` or `Range`; an alias takes the kind and values of what it names. `Range<T>` written in an attribute is one dimension per `T`, with path `Range<T>` and handle `<T handle>__Range` |
 
 - `Path` is relative to the ontology namespace: `Person`, `Person.Email`,
   `D/AssetClass`, `Household.hasMember.Person.Role`. A built-in's path is its
@@ -846,7 +878,7 @@ namespace and header); `onto meta` prints the instances as
   reuse (`Owner.Attr`) takes the reused attribute's dimension. An attribute that
   refers to a concept has none.
 - `isBasedOn` links a named type to the type it is defined as
-  (`D/Money/USD = Amount`).
+  (`D/Money/USD = Amount`), and a range to the type of its bounds.
 - `extends` links a vocabulary [extension](#extensions) to the vocabulary it
   extends, whose `Values` include the extension's.
 - `Description` is the element's doc string.

@@ -135,6 +135,43 @@ def test_conditions_qualifiers_and_existence_validity():
 	assert dividend["valid"] == "2026-09-01"
 
 
+@pytest.mark.parametrize(("code", "name", "expected"), [
+	(None, {"unknown": True}, None),
+	({"unknown": True}, None, None),
+	({"unknown": True}, "Name", {"unknown": True}),
+])
+def test_mapping_functions_propagate_null_before_unknown(code, name, expected):
+	text = _specExample("spec-04-mapping", 5).replace("  Name <- Name\n", "  Name <- concat(Code, Name)\n")
+	mapping = loadMapping(EXCHANGE, FINANCE, Source("m", text), libraries=[MARKETS], referentials=[REFERENTIAL])
+	data = state()
+	for claim in data["claims"]:
+		if claim.get("s") == BOND and claim.get("p") in ("Code", "Name"):
+			claim["v"] = code if claim["p"] == "Code" else name
+	before = json.dumps(data, sort_keys=True)
+	ops = operator()
+	program = ops.compile(mapping)
+	log, report = ops.result(program, asyncio.run(run(CLOCK, program.stages.MappingRead, data)))
+	assert values(log, BOND)["Name"] == expected
+	assert report.gaps == []
+	assert json.dumps(data, sort_keys=True) == before
+
+
+@pytest.mark.parametrize("differentSource", [False, True])
+def test_mapping_facet_statements_share_an_existence_ordinal(differentSource):
+	data = state()
+	if differentSource:
+		data["sources"]["classes"] = "classifications:1"
+		for claim in data["claims"]:
+			if claim.get("s") == BOND and claim.get("p") == "Class":
+				claim["src"] = "classes"
+	_, _, log, _ = mapped(data)
+	facet = next(claim for claim in log.claims if claim.get("s") == BOND and claim.get("facet") == "Bond")
+	existence = next(claim for claim in log.claims if claim.get("s") == BOND and claim.get("exists") and claim["n"] == facet["n"])
+	assert {key: value for key, value in facet.items() if key != "facet"} == {key: value for key, value in existence.items() if key != "exists"}
+	assert "valid" not in facet and "ctx" not in existence
+	assert observationsToJson(log)["sources"][facet["src"]] == ("classifications:1" if differentSource else SRC)
+
+
 def test_conflicting_class_fans_out_asset_class_and_gaps_the_bond_lines():
 	other = json.loads(json.dumps(FEED))
 	other["instruments"][1]["class"] = "E"

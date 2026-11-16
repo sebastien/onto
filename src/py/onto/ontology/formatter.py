@@ -26,6 +26,7 @@ from .model import (
 	ONTOLOGY_FORMAT,
 	Ontology,
 	PATH_KEYS,
+	QUALIFIERS,
 	SECTIONS,
 	TypeExpr,
 	ViewLine,
@@ -105,8 +106,18 @@ class Printer:
 		self.short = Namer(ontology.namespace, ontology.uses)
 
 	def _tail(self, ann: Annotations) -> list[str]:
-		pairs = [(key, self.short(value)) if key in PATH_KEYS and isinstance(value, str) else (key, value) for key, value in ann]
+		pairs = [(key, self._value(key, value)) for key, value in ann]
 		return [part for part in (printAnnotations(pairs, ANNOTATION_KEYS),) if part]
+
+	def _value(self, key: str, value: str | bool) -> str | bool:
+		"""Annotation `value` with its paths in shortest form: path keys, and the vocabulary of a `?:V` qualifier."""
+		if not isinstance(value, str):
+			return value
+		if key in PATH_KEYS:
+			return self.short(value)
+		if key in QUALIFIERS and value.startswith("?:"):
+			return "?:" + self.short(value[2:])
+		return value
 
 	@staticmethod
 	def _Join(parts: list[str]) -> str:
@@ -120,6 +131,8 @@ class Printer:
 			return type.builtin
 		if type.unknown:
 			return "..."
+		if type.range:
+			return f"Range<{self.typeText(type.range)}>"
 		if type.values is not None:
 			prefix = "|" if len(type.values) == 1 and not type.open else ""
 			return prefix + "|".join(type.values) + ("|..." if type.open else "")
@@ -211,6 +224,8 @@ def _typeToJson(type: TypeExpr) -> dict[str, Any]:
 		return {"builtin": type.builtin}
 	if type.unknown:
 		return {"unknown": True}
+	if type.range:
+		return {"range": _typeToJson(type.range)}
 	if type.values is not None:
 		return {"values": list(type.values), "open": type.open}
 	return {"path": type.path, "attr": type.attr} if type.attr else {"path": type.path}

@@ -237,6 +237,45 @@ def test_functions_from_libraries_and_collections():
 	assert {(gap.target, gap.reason) for gap in report.gaps} == {("HexT/Item.Kind", "HexLib.KindOf.Invalid"), ("HexT/Item.Size", "Onto.IntegerText.Invalid")}
 
 
+@pytest.mark.parametrize("withInverse", [False, True])
+def test_compiled_programs_keep_their_function_implementations(withInverse):
+	ontology = loadOntology([Source("t.onto", "@ontology Isolated\nItem\n  Label Text\n")])
+	functions = "@functions IsolatedFunctions\n@fn Convert Text -> Text"
+	if withInverse:
+		functions += " {inverse=Restore}\n  hello => first:hello\n@fn Restore Text -> Text\n  first:hello => hello"
+	else:
+		functions += "\n  hello => first:hello"
+	library = loadFunctions([ontology], [Source("t.fn", functions + "\n")])
+	binding = loadBinding(ontology, Source("t.bind", "@binding Isolated\n@use IsolatedFunctions as F\n\nItem <- items[*] {id=id}\n  Label <- F/Convert(label)\n"), libraries=[library])
+	firstOps = HexaBindingOperator(ontology, libraries=[library], implementations={
+		"IsolatedFunctions/Convert": lambda value: "first:" + value,
+		"IsolatedFunctions/Restore": lambda value: value.removeprefix("first:"),
+	})
+	first = firstOps.compile(binding)
+	encoding = programEncoding(first)
+	secondOps = HexaBindingOperator(ontology, libraries=[library], implementations={
+		"IsolatedFunctions/Convert": lambda value: "second:" + value,
+		"IsolatedFunctions/Restore": lambda value: value.removeprefix("second:"),
+	})
+	second = secondOps.compile(binding)
+	assert programEncoding(first) == programEncoding(second) == encoding
+	documents = [{"src": "s", "document": {"items": [{"id": "x", "label": "hello"}]}}]
+
+	async def readBoth():
+		return await asyncio.gather(*(run(CLOCK, program.stages.BindingRead, documents) for program in (first, second, first)))
+
+	results = asyncio.run(readBoth())
+	assert [[claim["v"] for claim in result["value"]["log"]["claims"] if claim.get("p") == "Label"] for result in results] == [
+		["first:hello"], ["second:hello"], ["first:hello"],
+	]
+	if withInverse:
+		writers = [ops.compileWrite(binding) for ops in (firstOps, secondOps)]
+		for writer, result in zip(writers, results):
+			written = asyncio.run(run(CLOCK | {"DocumentPreviousRead": lambda request, context: None}, writer.stages.BindingWrite,
+				{"src": "s", "state": result["value"]["log"]}))
+			assert written["documents"][0]["document"] == {"items": [{"label": "hello"}]}
+
+
 def test_functional_forms_match_the_operator():
 	program = bindingCompile(EXCHANGE, BINDING, mode="lenient")
 	result = asyncio.run(run({}, program.stages.BindingRead, [{"src": SRC, "document": FEED}]))

@@ -11,8 +11,9 @@ pytest.importorskip("hexa.shapes")
 
 from hexa.runtime import run  # noqa: E402
 
-from onto import Source, inventoryFromDocuments, loadBinding, loadOntology, parseFormats, parseInventory, printInventory  # noqa: E402
+from onto import Source, inventoryFromDocuments, loadBinding, loadOntology, observationsToJson, parseFormats, parseInventory, printInventory  # noqa: E402
 from onto.integrations.hexa.operations import HexaBindingOperator, bindingFormatsUpdate, programEncoding  # noqa: E402
+from onto.integrations.hexa.stages import classify  # noqa: E402
 from tests._helpers import _specExample  # noqa: E402
 
 # -----------------------------------------------------------------------------
@@ -108,6 +109,52 @@ def test_writing_formats_are_learned_from_raw_values():
 	assert updated.entries["instruments[*].name"].seen == {"trim": 381, "padded": 36}
 	# Without a formats file only `$format` date patterns are counted.
 	assert set(readRun(ops, ops.compile(BINDING), feed)[1].formats) == {FIELD}
+
+
+@pytest.mark.parametrize(("value", "expected"), [
+	(" UPPER ", "padded"), ("\tlower\n", "padded"), (" Mixed ", "padded"),
+	("UPPER-123", "case:upper"), ("lower-123", "case:lower"),
+	("ÉTÉ", "case:upper"), ("été", "case:lower"),
+	("Mixed", "trim"), ("中文", "trim"), ("---", "trim"), ("", "trim"),
+	(" ", "padded"), ("123", "decimals:0"), ("-1.230", "decimals:3"),
+	(123, None), (None, None), (True, None),
+])
+def test_writing_format_classification_prefers_padding_then_case(value, expected):
+	assert classify(value) == expected
+
+
+@pytest.mark.parametrize(("original", "formatName", "changed"), [
+	("UPPER NAME", "case:upper", "MIXED NAME"),
+	("lower name", "case:lower", "mixed name"),
+	(" PADDED NAME ", "padded", "Mixed Name"),
+	("Mixed Name", "trim", "Mixed Name"),
+])
+def test_learned_case_formats_write_new_values_but_originals_win(original, formatName, changed):
+	ontology = loadOntology([Source("t.onto", "@ontology CaseLearning\nItem\n  Id Text\n  Name Text\n")])
+	binding = loadBinding(ontology, Source("t.bind", "@binding CaseLearning\n\nItem <- items[*] {id=id}\n  Id <- id\n  Name <- trim(name)\n"))
+	ops = HexaBindingOperator(ontology)
+	previous = {"items": [{"id": "x", "name": original}]}
+	clock = {"ClockRead": lambda context: "2026-11-16"}
+	program = ops.compile(binding, formats=parseFormats(Source("f", "path\tformat\tseen\tpin\n")))
+	log, report = ops.result(program, asyncio.run(run(clock, program.stages.BindingRead, [{"src": "s", "document": previous}])))
+	path = "items[*].name"
+	assert report.formats[path] == {formatName: 1}
+	formats, _ = ops.formatsUpdate(None, report)
+	assert formats.entries[path].format == formatName
+	state = observationsToJson(log)
+	for claim in state["claims"]:
+		if claim.get("p") == "Name":
+			claim["v"] = "Mixed Name"
+	writer = ops.compileWrite(binding, formats=formats)
+	written = asyncio.run(run(clock | {"DocumentPreviousRead": lambda request, context: None}, writer.stages.BindingWrite, {"src": "s", "state": state}))
+	assert written["documents"][0]["document"]["items"][0]["name"] == changed
+	# A competing chosen case must not override an unchanged original spelling.
+	formats.entries[path].format = "case:lower" if formatName == "case:upper" else "case:upper"
+	writer = ops.compileWrite(binding, formats=formats)
+	written = asyncio.run(run(clock | {"DocumentPreviousRead": lambda request, context: previous}, writer.stages.BindingWrite,
+		{"src": "s", "state": observationsToJson(log)}))
+	assert written["documents"][0]["document"]["items"][0]["name"] == original
+	assert written["report"]["originals"][path] == 1
 
 
 # -----------------------------------------------------------------------------

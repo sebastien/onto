@@ -25,6 +25,8 @@ from ..text import (
 
 ONTOLOGY_FORMAT = "onto.ontology/1"
 BUILTINS = ("Text", "Integer", "Number", "Boolean", "Date", "DateTime", "Duration", "Amount", "Percent")
+# NOTE: Built-ins whose values have an order, so that `Range<T>` can state `Low <= High`; an `{ordered}` flat vocabulary also has one.
+ORDERABLE = ("Integer", "Number", "Amount", "Percent", "Date", "DateTime", "Duration")
 
 # NOTE: Where each annotation applies (None: anywhere); the key order is the normal-form order.
 ANNOTATION_PLACES: dict[str, set[str] | None] = {
@@ -105,7 +107,7 @@ RE_VIEW_LINE = re.compile(
 
 @dataclass(slots=True)
 class TypeExpr:
-	"""A type expression: built-in, path (with optional attribute reuse), vocabulary or `...`."""
+	"""A type expression: built-in, path (with optional attribute reuse), vocabulary, `...` or `Range<T>`."""
 
 	builtin: str | None = None
 	path: str | None = None
@@ -113,6 +115,7 @@ class TypeExpr:
 	values: list[str] | None = None
 	open: bool = False
 	unknown: bool = False
+	range: TypeExpr | None = None
 
 
 @dataclass(slots=True)
@@ -227,7 +230,9 @@ class ResolvedType:
 	ordered: bool = False
 	hierarchical: bool = False
 	qualifiers: dict[str, str] = field(default_factory=dict)
+	qualifierVocabularies: dict[str, str] = field(default_factory=dict)
 	conflicts: list[str] = field(default_factory=list)
+	element: ResolvedType | None = None
 
 
 # -----------------------------------------------------------------------------
@@ -436,14 +441,22 @@ class Model:
 			return self.typeDecl(decl.definition, seen) or decl
 		return decl
 
-	def resolveType(self, type: TypeExpr | None, ann: Annotations | None = None) -> ResolvedType:
-		"""Resolves a type expression to its final kind; qualifiers come from `ann`, then reused attributes and aliases."""
+	def resolveType(self, type: TypeExpr | None, ann: Annotations | None = None, observed: Annotations | None = None) -> ResolvedType:
+		"""Resolves a type expression to its final kind; qualifiers come from `observed` values, `ann`, then reused attributes and aliases."""
+		return self._resolve(type, ([observed] if observed else []) + [ann or []], set())
+
+	def _resolve(self, type: TypeExpr | None, sources: list[Annotations], seen: set[str]) -> ResolvedType:
 		# NOTE: Qualifier sources are listed nearest first: a nearer fixed value wins, `?` never overrides.
-		sources: list[Annotations] = [ann or []]
-		seen: set[str] = set()
 		resolved = ResolvedType("unspecified")
 		current = type
 		while current:
+			if current.range:
+				# NOTE: The qualifiers of a range, and of its aliases and uses, are those of both bounds.
+				element = self._resolve(current.range, sources, seen)
+				return ResolvedType(
+					"range", element=element, qualifiers=element.qualifiers,
+					qualifierVocabularies=element.qualifierVocabularies, conflicts=element.conflicts,
+				)
 			if current.builtin:
 				resolved = ResolvedType("builtin", builtin=current.builtin)
 				break
@@ -458,7 +471,7 @@ class Model:
 				attr = self.lookup(current.path, current.attr)
 				if not attr:
 					break
-				sources.append(attr.ann)
+				sources = sources + [attr.ann]
 				current = attr.type
 				continue
 			decl = self.get(current.path)
@@ -470,7 +483,7 @@ class Model:
 				break
 			if not decl or decl.kind != "type":
 				break
-			sources.append(decl.ann)
+			sources = sources + [decl.ann]
 			if decl.fields is not None:
 				resolved = ResolvedType("struct", path=decl.path)
 				break
@@ -489,11 +502,18 @@ class Model:
 				resolved.values = vocabularyValues(resolved.values or [], resolved.ordered)
 		for name in QUALIFIERS:
 			values = [value for pairs in sources if isinstance(value := annotation(pairs, name), str)]
-			fixed = [value for value in values if value != "?"]
+			fixed = [value for value in values if not value.startswith("?")]
 			if values:
 				resolved.qualifiers[name] = fixed[0] if fixed else "?"
 			if other := next((value for value in fixed if value != fixed[0]), None):
 				resolved.conflicts.append(f"{name}={fixed[0]} contradicts inherited {name}={other}")
+			# NOTE: `?:V` leaves the qualifier to each value, taken from vocabulary `V`; the nearest one applies.
+			if vocabulary := next((value[2:] for value in values if value.startswith("?:")), None):
+				resolved.qualifierVocabularies[name] = vocabulary
+				allowed = self.resolveType(TypeExpr(path=vocabulary))
+				for value in dict.fromkeys(fixed):
+					if allowed.kind == "vocab" and not allowed.open and value not in (allowed.values or []):
+						resolved.conflicts.append(f"{name}={value} is not a value of '{vocabulary}'")
 		return resolved
 
 	def verbs(self, path: str, verb: str) -> list[tuple[Decl, bool]]:

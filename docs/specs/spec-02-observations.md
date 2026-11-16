@@ -206,6 +206,7 @@ Interpretation follows the ontology type, not the spelling.
 | Boolean | `true` / `false` |
 | Date / DateTime | ISO 8601 (`2026-11-10`, `2026-11-10T09:30:00+13:00`) |
 | Duration | Number in the type's unit; ISO 8601 duration (`P2Y6M`) when the unit is unknown |
+| Range | `low..high`, `low..`, `..high`, or one value `v` (read `v..v`); each bound in the encoding of the range's type, inclusive, `low <= high`. Stored as `low..high` with canonical bounds |
 | Reference | A handle (`p1`) or typed mention (`p2:Person`) |
 | Structure | Field paths `Attr.Field Value`, one line each |
 | Collection | `[a, b]` complete set; `[a, b, ...]` incomplete; `[]` known empty |
@@ -213,7 +214,9 @@ Interpretation follows the ontology type, not the spelling.
 | Absent | `null`: confirmed absence of a single value |
 
 - A local measurement qualifier may follow the value: `92000 {cur=USD}`. It may
-  fill an unknown qualifier, never contradict a fixed one. No conversion is implied.
+  fill an unknown qualifier, never contradict a fixed one, and must be a value
+  of the qualifier's vocabulary when the type declares one (`{cur=?:Currency}`).
+  No conversion is implied.
 - For [hierarchical vocabularies](spec-01-ontology.md#hierarchical-vocabularies-taxonomies),
   any declared node (including an inferred ancestor) is a valid category.
   Values are full paths, never ambiguous leaf names: `Food/Fruit/Apple`, not

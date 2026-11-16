@@ -104,6 +104,21 @@ def _metadata(pairs: list[tuple[str, str | bool]], loc: Loc, diag: Diagnostics) 
 	return result
 
 
+def _rangeOrder(element: ResolvedType) -> Callable[[Any], Any] | None:
+	"""A sort key for the bounds of a range of `element`, or None when its values have no comparable order."""
+	if element.builtin in ("Integer", "Number", "Amount", "Percent"):
+		return Decimal
+	if element.builtin in ("Date", "DateTime"):
+		return _time
+	if element.builtin == "Duration":
+		# NOTE: An ISO 8601 duration (unit unknown) has no comparable magnitude here.
+		return lambda value: None if RE_DURATION.fullmatch(str(value)) else Decimal(value)
+	if element.kind == "vocab" and element.ordered:
+		values = element.values or []
+		return lambda value: values.index(value) if value in values else None
+	return None
+
+
 def _members(text: str) -> tuple[list[str], bool]:
 	if not text.endswith("]"):
 		raise ValueError("Unterminated collection")
@@ -188,6 +203,10 @@ class _Resolver:
 			handle = self.ref(text, loc)
 			self.references.append((handle, resolved.path, loc))
 			return {"ref": handle}
+		if resolved.kind == "range" and resolved.element:
+			if quoted:
+				raise ValueError("A range is written unquoted: low..high, low.. or ..high")
+			return self.range(text, resolved.element, loc)
 		if resolved.kind == "vocab":
 			if quoted or not (isPath if resolved.hierarchical else isName)(text) or (not resolved.open and text not in resolved.values):
 				raise ValueError(f"'{text}' is not a vocabulary value")
@@ -216,6 +235,20 @@ class _Resolver:
 		if resolved.kind == "struct":
 			raise ValueError("Structures require field paths")
 		return text
+
+	def range(self, text: str, element: ResolvedType, loc: Loc) -> str:
+		"""Canonical `low..high` of a `Range<T>` value; a single value `v` is `v..v`. Bounds are inclusive and ordered."""
+		low, separator, high = text.partition("..")
+		if not separator:
+			low = high = text
+		if not low and not high:
+			raise ValueError("A range needs at least one bound")
+		bounds = [self.scalar(bound, element, loc) if bound else None for bound in (low, high)]
+		if None not in bounds and (order := _rangeOrder(element)) is not None:
+			left, right = order(bounds[0]), order(bounds[1])
+			if left is not None and right is not None and left > right:
+				raise ValueError(f"Range '{text}' has its low bound above its high bound")
+		return "..".join("" if bound is None else str(bound) for bound in bounds)
 
 	def value(self, raw: str, attr: Attr, statement: Statement) -> Any:
 		card = attr.card or self.model.defaultCard
@@ -347,6 +380,8 @@ class _Resolver:
 					self.diag.error("meta", f"{key} is only valid on retractions", statement.loc)
 			if statement.form != "value" and any(key in meta for key in QUALIFIERS):
 				self.diag.error("meta", "Measurement qualifiers require a value", statement.loc)
+			if any(str(meta.get(key, "")).startswith("?:") for key in QUALIFIERS):
+				self.diag.error("meta", "An observed qualifier is a value, not ?:V", statement.loc)
 			target = retractions if statement.retract else claims
 			base = {"n": statement.n, "s": statement.s}
 			if statement.form in ("same", "distinct"):

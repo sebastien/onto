@@ -167,12 +167,18 @@ def writingFormats(document: AnyValue, csv: bool, fields: set[str]) -> dict[str,
 
 
 def classify(value: AnyValue) -> str | None:
-	"""A raw value's writing format: `decimals:N` for decimal text, else `trim` or `padded` for text."""
+	"""A raw value's writing format: decimal places, padding, uniform case, then trim."""
 	if not isinstance(value, str):
 		return None
 	if match := RE_DECIMAL_TEXT.fullmatch(value):
 		return f"decimals:{len(match[1] or '')}"
-	return "padded" if value != value.strip() else "trim"
+	if value != value.strip():
+		return "padded"
+	if value.isupper():
+		return "case:upper"
+	if value.islower():
+		return "case:lower"
+	return "trim"
 
 
 # -----------------------------------------------------------------------------

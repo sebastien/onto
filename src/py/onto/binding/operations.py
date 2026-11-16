@@ -70,6 +70,8 @@ def compatible(model: Model, actual: ResolvedType, expected: ResolvedType) -> bo
 			if left != right and "?" not in (left, right) and not any(left in group and right in group for group in (("Second", "Minute", "Hour", "Day", "Week"), ("Month", "Year"))):
 				return False
 		return True
+	if actual.kind == expected.kind == "range":
+		return actual.element is not None and expected.element is not None and compatible(model, actual.element, expected.element)
 	if actual.kind == expected.kind == "vocab":
 		return expected.open or not actual.open and set(actual.values or []) <= set(expected.values or [])
 	if actual.kind == "vocab" and expected.builtin == "Text" or actual.builtin == "Text" and expected.kind == "vocab":

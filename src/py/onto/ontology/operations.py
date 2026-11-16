@@ -33,7 +33,9 @@ from .model import (
 	IDENTIFIERS,
 	MULTI,
 	Model,
+	ORDERABLE,
 	PATH_KEYS,
+	QUALIFIERS,
 	Ontology,
 	STATUSES,
 	TypeExpr,
@@ -68,6 +70,11 @@ def _checkAnnotations(model: Model, ann: Annotations, places: set[str], loc: Loc
 			diag.error("annotation", f"{key} must be stated, inferred or assumed", loc)
 		elif key == "scale" and value not in ("1", "100", "?"):
 			diag.error("annotation", "scale must be 1, 100 or ?", loc)
+		elif key in QUALIFIERS and isinstance(value, str) and value.startswith("?:"):
+			vocabulary = model.get(value[2:])
+			resolved = model.resolveType(TypeExpr(path=value[2:])) if vocabulary and vocabulary.kind == "type" else None
+			if not resolved or resolved.kind != "vocab" or resolved.hierarchical:
+				diag.error("reference", f"{key}=?:V must name a flat vocabulary: '{value[2:]}'", loc)
 		elif key == "deps" and value != "candidate":
 			diag.error("annotation", "deps must be candidate", loc)
 		elif key == "elided" and not (isinstance(value, str) and value.isdigit()):
@@ -124,6 +131,13 @@ def _checkType(model: Model, type: TypeExpr | None, ann: Annotations, loc: Loc |
 			diag.error("vocabulary", f"{what}: duplicate vocabulary values", loc)
 	for conflict in model.resolveType(type, ann).conflicts:
 		diag.error("qualifier", f"{what}: {conflict}", loc)
+	if type and type.range:
+		_checkType(model, type.range, [], loc, what, diag)
+		element = model.resolveType(type, ann).element
+		orderable = element and (element.builtin in ORDERABLE or element.kind == "vocab" and element.ordered and not element.hierarchical)
+		if element and element.kind != "unspecified" and not orderable:
+			diag.error("range", f"{what}: Range<T> needs an orderable T (a number, amount, percent, date, duration or ordered flat vocabulary)", loc)
+		return
 	if not type or type.builtin or type.values is not None or type.unknown:
 		return
 	if _typeCycle(model, type):
@@ -314,15 +328,23 @@ def _checkViewCycles(model: Model, diag: Diagnostics) -> None:
 
 
 def _typeRefs(type: TypeExpr | None) -> list[str]:
-	"""Declaration paths a type expression refers to: a named type, or the owner of a reused attribute."""
+	"""Declaration paths a type expression refers to: a named type, the owner of a reused attribute, or a range's element."""
+	if type and type.range:
+		return _typeRefs(type.range)
 	return [type.path] if type and type.path else []
 
 
+def _annRefs(ann: Annotations) -> list[str]:
+	"""Declaration paths annotations refer to: path keys and the vocabularies of `?:V` qualifiers."""
+	refs = [value for key, value in ann if key in PATH_KEYS and isinstance(value, str)]
+	return refs + [value[2:] for key, value in ann if key in QUALIFIERS and isinstance(value, str) and value.startswith("?:")]
+
+
 def _attrRefs(attrs: list[Attr] | None) -> list[tuple[str, Loc | None]]:
-	"""Declaration paths attributes refer to, through their types and derived inputs."""
+	"""Declaration paths attributes refer to, through their types, derived inputs and annotations."""
 	refs: list[tuple[str, Loc | None]] = []
 	for attr in attrs or []:
-		refs += [(path, attr.loc) for path in _typeRefs(attr.type)]
+		refs += [(path, attr.loc) for path in _typeRefs(attr.type) + _annRefs(attr.ann)]
 		refs += [(dep.path, attr.loc) for dep in attr.deps or [] if dep.path]
 	return refs
 
@@ -339,7 +361,7 @@ def _declRefs(decl: Decl) -> list[tuple[str, Loc | None]]:
 		refs += [(path, decl.loc) for path in (decl.base, decl.subject) if path]
 		refs += [(participant.type, decl.loc) for participant in decl.participants]
 		refs += _attrRefs(decl.attrs)
-	refs += [(value, decl.loc) for key, value in decl.ann if key in PATH_KEYS and isinstance(value, str)]
+	refs += [(path, decl.loc) for path in _annRefs(decl.ann)]
 	return refs
 
 

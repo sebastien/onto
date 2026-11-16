@@ -28,7 +28,7 @@ META_DECLARATIONS = """\
 
 Meta/Path = Text                                -- Path of an element relative to the ontology namespace, e.g. Society/Person or Society/Person.DateOfBirth
 Meta/Concept/Kind = Entity|Facet|Relation
-Meta/Dimension/Kind = Builtin|Vocabulary|Value|Structure -- Builtin: a type of the format, such as Text or Date; Vocabulary: a set of named values; Value: a named scalar based on another dimension; Structure: a composite of fields
+Meta/Dimension/Kind = Builtin|Vocabulary|Value|Structure|Range -- Builtin: a type of the format, such as Text or Date; Vocabulary: a set of named values; Value: a named scalar based on another dimension; Structure: a composite of fields; Range: a low and a high bound of the dimension it is based on
 
 Meta/Concept {layer=Reference}                  -- Something that has attributes: an entity, a facet or a relation; a binary relation is listed when it has attributes
   1 Path Meta/Path {id=key}
@@ -51,7 +51,7 @@ Meta/Attribute {layer=Reference}                -- An attribute of a concept, li
 
 Meta/Concept -hasAttribute/isAttributeOf-> Meta/Attribute 1:*
 Meta/Attribute -hasDimension/isDimensionOf-> Meta/Dimension *:? -- Absent when the attribute refers to a concept or its type is not defined yet
-Meta/Dimension -isBasedOn/isBaseOf-> Meta/Dimension *:? -- The dimension a named type is defined as: Core/Percentage is based on Number
+Meta/Dimension -isBasedOn/isBaseOf-> Meta/Dimension *:? -- The dimension a named type is defined as: Core/Percentage is based on Number; a range is based on the dimension of its bounds
 Meta/Dimension -extends/isExtendedBy-> Meta/Dimension *:? -- The open vocabulary a later domain adds its values to; the extended vocabulary lists them too
 """
 
@@ -110,6 +110,8 @@ class MetaWriter:
 			if type.builtin not in self.dimensions:
 				self.dimensions[type.builtin] = self.Record(type.builtin, "Dimension", [("Path", type.builtin), ("Kind", "Builtin")])
 			return type.builtin
+		if type.range:
+			return self.range(type.range)
 		if type.values is not None or type.unknown:
 			handle = f"{self.Handle(owner)}__Values"
 			self.dimensions[handle] = self.Record(handle, "Dimension", [("Path", owner), *self.vocabulary(type)])
@@ -120,6 +122,18 @@ class MetaWriter:
 			return self.dimension(attr.type, f"{self.path(type.path or '')}.{type.attr}") if attr else None
 		decl = self.model.get(type.path)
 		return self.named(decl) if decl and decl.kind == "type" else None
+
+	def range(self, element: TypeExpr) -> str | None:
+		"""The handle of the dimension `Range<element>`, recording it; one per element type."""
+		base = self.dimension(element, "")
+		if not base:
+			return None
+		handle = f"{base}__Range"
+		if handle not in self.dimensions:
+			name = element.builtin or self.path(element.path or "") + (f".{element.attr}" if element.attr else "")
+			self.dimensions[handle] = self.Record(handle, "Dimension", [("Path", f"Range<{name}>"), ("Kind", "Range")])
+			self.bases.append((handle, base))
+		return handle
 
 	def named(self, decl: Decl) -> str:
 		"""The handle of the dimension of type declaration `decl`, recording it."""
@@ -134,12 +148,14 @@ class MetaWriter:
 		final = self.model.typeDecl(TypeExpr(path=decl.path)) or decl
 		if final.fields is not None:
 			values.append(("Kind", "Structure"))
+		elif final.definition and final.definition.range:
+			values.append(("Kind", "Range"))
 		elif final.definition and (final.definition.values is not None or final.definition.unknown):
 			values += self.vocabulary(final.definition, any(key == "ordered" for key, _ in final.ann), self.model.resolveType(TypeExpr(path=final.path)).values)
 		elif definition:
 			values.append(("Kind", "Value"))
-		if definition and (definition.builtin or definition.path):
-			base = self.dimension(definition, path)
+		if definition and (definition.builtin or definition.path or definition.range):
+			base = self.dimension(definition.range or definition, path)
 			if base:
 				self.bases.append((handle, base))
 		extended = self.model.get(next((value for key, value in decl.ann if key == "extends" and isinstance(value, str)), None))

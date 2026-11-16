@@ -13,11 +13,12 @@
 
 ## Goal and agreed scope
 
-Implement the onto formats in Python, in phases. **The current phase is spec-04
-core models and parsers**, following the implementation handoff below. Spec-01
-has been implemented and reviewed. The user signed off spec-02 observations and
-approved continuation ("OK, continue") after the 525-test conformance review.
-Referential registries, overlays and integration work are not started.
+Implement the onto formats in Python, in phases. **Specs 01/02, spec-04 core,
+referential policies, static operations and the main hexa integration slices are
+implemented**, as detailed in the progress entries below. The current follow-up
+is reviewing integration deviations before the deferred extensions. Referential
+registries and overlays are not started. Earlier checkpoint statements below
+describe their status at that time, not the current backlog.
 
 Current layout follows the conventions above: `src/py/onto/{ontology,observations}/` each has
 `model.py`, `parser.py`, `formatter.py`, `operations.py` and public `__init__.py`.
@@ -345,7 +346,18 @@ three shapes the modeling rules ask for and spec-01 cannot express. The skills
 document a workaround for each; remove it from the rule file when the gap
 closes. Nothing below is specified or implemented.
 
-1. **Ranges** (rule 2.4; workaround: one `T/Range` structure per element type).
+1. **Implemented (2026-11-16): spec-01 "Ranges", `T01-012`.** Decided: bounds
+   inclusive; a single value `v` is `v..v`; `low <= high` checked (not between
+   ISO durations of unknown unit); canonical value `low..high`; `T` is a built-in
+   or named type, not inline, not nested; Meta `Kind Range`, `isBasedOn` the
+   bound type. Prerequisite, also implemented (spec-01 "Annotations",
+   `T01-011`): `{cur=?:V}` (and `unit`, `period`) takes each value's qualifier
+   from vocabulary `V`, so that a structure `Amount` + `Currency` can become a
+   qualified scalar without losing the currency check. Fixed on the way: an
+   observed qualifier contradicting one fixed on the attribute (not the type)
+   was accepted. Open: addressing the bounds (`Attr.Low`, `Attr.High`) in
+   observations and mapping targets, for sources with separate columns.
+   **Ranges** (rule 2.4; workaround: one `T/Range` structure per element type).
    Proposal: a built-in type constructor, not user-defined generics:
    `Price Range<D/Money/USD>`, `Age Range<Years>`.
    - `T` is orderable: `Integer`, `Number`, `Amount`, `Percent`, `Date`,
@@ -803,7 +815,7 @@ conformance audit and review; the user approved starting this handoff.
   (`compileWrite`/`BindingWrite`, originals, formats, nested placement, CSV
   columns, parentless records, null policies) and reverse mappings run end to end
   (Finance → Sheet CSV → Sheet → Finance trades through `Isin`).
-- **Deviations from spec-06 forced by hexa, to confirm or fold into the spec:**
+- **Integration representation differences (folded into spec-06, 2026-11-16):**
   1. Positions are `either(Null, tolerant(P))`, not `tolerant(P | Null)`: hexa reports
      a union whose branches fail differently as `Issue.Mismatch`, hiding codec reasons.
   2. Nested scope paths are selected level by level: hexa's selector fails as a whole
@@ -818,13 +830,56 @@ conformance audit and review; the user approved starting this handoff.
      canonical `Decimal` for a `Decimal where Integral` slot). Extra transforms:
      `Read`, `Set`, `Field`, `Nullable`, `At`, `Given`, `Members`.
   6. Transform gap codes live under the transform (`Onto.Handle.KeyMissing`); reports
-     map them to `Binding.*`/`Mapping.*`. Library/local function transforms dispatch
-     through a process-wide table (last compiled program wins).
+     map them to `Binding.*`/`Mapping.*`. **Function dispatch isolation fixed
+     (2026-11-16):** transforms/codecs now carry their evaluator instead of using
+     a process-wide call table. Compiling another program cannot replace their
+     implementations or inverse functions. Function transforms and codecs can
+     share a name without competing in hexa's registry.
   7. Facet claims share their header's `n` (or carry an existence claim): `h[F]` in
      spec-02 text also asserts existence, so JSON otherwise fails its round trip.
-  8. Writing formats discovered: `decimals:N`, `trim`, `padded` (case is not learned).
+  8. **Resolved (2026-11-16):** writing formats include `decimals:N`, `padded`,
+     `case:upper`, `case:lower` and `trim`, with padding taking precedence over case.
 - Still deferred: contextual facets in mappings, registry identities (minted,
   alternate keys), index steps, `key=A,B` policies, hexa-side conformance runner.
+
+### Integration deviation review (2026-11-16)
+
+- Baseline: 1,368 tests passed. Reproduced the shared-dispatch defect with two
+  programs using different implementations of the same function: both ran the
+  most recently compiled implementation. Also reproduced a hexa name collision
+  when that function was used as a transform and a codec in the same process.
+- Removed the mutable dispatch table and evaluator-dependent caches. Compiled
+  transforms/codecs are program-local copies of registered generic prototypes,
+  with stable names/reason codes and their own evaluator and canonical shape.
+  No hexa files were changed. `T06-001` regressions cover equal encodings,
+  concurrent reads, retained older programs, transform/codec coexistence and
+  inverse writing after another writer compiles.
+- Deviation 1 preserves codec gap reasons; deviation 2 preserves unaffected
+  nested records; deviation 3 avoids process-wide stage-name collisions.
+  These are implementation adaptations, not reasons to weaken the semantics.
+  Their representations are now documented in spec-06, including the compiled
+  Dividend shape example.
+- Deviation 4 uses internal absence/reference-type markers, stripped before
+  observation interchange. Deviation 5 uses an Integer-specific codec and
+  auxiliary transforms. These, deviation 6's report-code translation and
+  deviation 7's facet/existence statement ordinals are now documented in
+  spec-06. The unsafe shared function dispatch is no longer an accepted limitation.
+- Deviation 8 resolved after user approval: decimal text contributes
+  `decimals:N`; otherwise padding wins over uniform case, with mixed-case and
+  uncased text contributing `trim`. Spec-06 documents the single-format
+  precedence. `T06-002` covers Unicode case, uncased/empty text, padding and
+  numeric boundaries, learning/updating and writing with the learned formats.
+  Original spellings still win over a competing chosen case when unchanged.
+  Full `make test`: 1,438 passed; no changes to hexa.
+- Corrected spec-06's stale null/unknown sentence to match the approved spec-04
+  contract: null takes precedence. `T06-004` tests both input orders, unknown
+  without null, input purity and facet/existence ordinals with shared and
+  different provenance.
+- Next: contextual mapping facets. Keep compile guards until context-aware
+  indexing, per-context unfolding, correspondence-based context translation,
+  claim emission and stale-slot reporting work together; removing the guards
+  alone would merge separate contexts into a single input slot. Then continue
+  with registry identities and index paths.
 
 Work in this order; each step is test-first and leaves `make test` green.
 

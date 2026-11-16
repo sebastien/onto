@@ -87,7 +87,8 @@ Salary
 
 ## 2.4 Give ranges, partial dates and taxed amounts their own type
 
-Recurring shapes get one definition, as a structure.
+Recurring shapes get one definition: `Range<T>` for a band of an orderable
+type, a structure for the others.
 
 DON'T
 
@@ -112,30 +113,21 @@ Money = Amount {cur=?}
 Years = Duration {unit=Year}
 PartialDate = Text                              -- ISO 8601 date, year or year and month
 
-Money/Range =
-  High Money
-  Low Money
-
-Years/Range =
-  High Years
-  Low Years
-
 TaxedAmount =
   Net Money
   Tax Money
 
 Listing
-  Age Years/Range
+  Age Range<Years>                              -- Observed 35..44
   Built PartialDate
-  Price Money/Range
+  Price Range<Money>                            -- Observed 500..650 {cur=EUR}: one currency for both bounds
 
 Invoice
   Amount TaxedAmount
 ```
 
-Workarounds, until onto has them: there is no generic `Range<T>`, so declare one
-`T/Range` structure per element type; there is no partial date, so alias `Text`
-once and say so in its doc. Both are registered in `TODO.md` ("Modeling gaps").
+Workaround, until onto has it: there is no partial date, so alias `Text` once
+and say so in its doc. It is registered in `TODO.md` ("Modeling gaps").
 
 ## 2.5 One encoding per fact
 

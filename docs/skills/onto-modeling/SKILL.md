@@ -105,9 +105,8 @@ Each file gives the rule, a DON'T and a DO in onto. Load the one you need.
 
 ## Known gaps in onto
 
-Three shapes have no direct form yet; the rule files give the workaround.
+Two shapes have no direct form yet; the rule files give the workaround.
 
-- No generic range: declare one `T/Range` structure per element type. (2.4)
 - No partial date: alias `Text` once, with the format in its doc. (2.4)
 - Single inheritance: chain the supertypes, most generic at the root. (7.2)
 

@@ -104,7 +104,10 @@ Customs/Code = C6109|C0808|...
 | `@ontology N layering=declared` | Domains declared in dependency order; `onto check` reports references to later ones |
 
 Built-in types: `Text`, `Integer`, `Number`, `Boolean`, `Date`, `DateTime`,
-`Duration`, `Amount`, `Percent`.
+`Duration`, `Amount`, `Percent`. `Range<T>` is a band of an orderable `T` (number,
+amount, percent, date, duration, `{ordered}` vocabulary), observed `low..high`,
+`low..`, `..high` or `v` (`v..v`); bounds inclusive, `low <= high`.
+`{cur=?:V}` (also `unit`, `period`) takes each value's qualifier from vocabulary `V`.
 
 ## Attributes
 

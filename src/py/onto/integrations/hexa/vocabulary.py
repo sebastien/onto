@@ -8,7 +8,8 @@ and returns `ABSENT_VALUE`, the integration's marker for "no value, no gap", whi
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
+from dataclasses import replace
 from decimal import Decimal as Exact, InvalidOperation
 import json
 import math
@@ -39,11 +40,12 @@ BUILTINS = {
 	"number": "Number", "text": "Text", "date": "Date", "datetime": "DateTime", "epoch": "Epoch", "format": "Format",
 	"sum": "Sum", "multiply": "Multiply", "subtract": "Subtract", "divide": "Divide", "count": "Count",
 }
-# NOTE: Implementations of library and local functions by transform name; the last compiled program wins, since hexa registers names process-wide.
-CALLS: dict[str, Callable[[list[AnyValue]], AnyValue]] = {}
-
 BindingCodes = codes("Binding", "KeyMissing", "TypeMismatch", "PathUnsupported", "InputEmpty", "SnapshotOlder", "ParentMissing")
 MappingCodes = codes("Mapping", "InputConflicting", "ReferenceUnmapped", "NotIntegral", "ValueUnmapped", "KeyReference", "ContextUnsupported", "PolicyUnsupported")
+# NOTE: Only these prototypes are registered. Compiled calls carry their own evaluator,
+# like program-local stages, without competing for hexa's process-wide names.
+FUNCTION_TRANSFORM = transform("Onto.Function", lambda *args: None, inputs=[[Any, ...]], output=Any)
+FUNCTION_CODEC = codec("Onto.FunctionCodec", source=Any, canonical=Any, parse=lambda value: value, format=lambda value, original=None: value)
 
 
 # -----------------------------------------------------------------------------
@@ -191,52 +193,29 @@ def builtinTransform(name: str, examples: list[dict]) -> AnyValue:
 	return BUILTIN_TRANSFORMS[title]
 
 
-def functionTransform(name: str) -> AnyValue:
-	"""The transform of a library or local function or map, dispatching through `CALLS` at call time."""
+def functionTransform(name: str, evaluator: FunctionEvaluator) -> AnyValue:
+	"""A program-local transform bound to its library, local function or map evaluator."""
 	transformName = name.replace("/", ".")
-	existing = FUNCTION_TRANSFORMS.get(transformName)
-	if existing is not None:
-		return existing
+	reason = codes(transformName, "Unmapped", "Unformattable", "Invalid").Invalid
 
 	def apply(*args):
-		try:
-			values = callArguments(args)
-		except ValueError as error:
-			raise Gap(existing.Invalid) from error
-		return ABSENT_VALUE if values is None else CALLS[transformName](values)
+		return evaluated(evaluator, name, args, reason)
 
-	existing = transform(transformName, apply, inputs=[[Any, ...]], output=Any, gaps=["Invalid"])
-	FUNCTION_TRANSFORMS[transformName] = existing
-	return existing
+	return replace(FUNCTION_TRANSFORM, name=transformName, function=apply, gaps=(reason,))
 
 
-FUNCTION_TRANSFORMS: dict[str, AnyValue] = {}
-FUNCTION_CODECS: dict[str, AnyValue] = {}
-
-
-def functionCodec(name: str, inverse: str, canonical: AnyValue) -> AnyValue:
-	"""A codec for a declared function with an inverse: parse with `name`, format with `inverse`."""
+def functionCodec(name: str, inverse: str, canonical: AnyValue, evaluator: FunctionEvaluator) -> AnyValue:
+	"""A program-local codec: parse with `name`, format with `inverse`, using its own evaluator."""
 	codecName = name.replace("/", ".")
-	if codecName in FUNCTION_CODECS:
-		return FUNCTION_CODECS[codecName]
+	reasons = codes(codecName, "Unmapped", "Unformattable", "Invalid")
 
 	def parse(value):
-		return CALLS[codecName]([documentValue(value)])
+		return evaluated(evaluator, name, (value,), reasons.Invalid)
 
 	def formatValue(value, original=None):
-		return CALLS[inverse.replace("/", ".")]([value])
+		return evaluated(evaluator, inverse, (value,), reasons.Invalid)
 
-	FUNCTION_CODECS[codecName] = codec(codecName, source=Any, canonical=canonical, parse=parse, format=formatValue, gaps=["Invalid"])
-	return FUNCTION_CODECS[codecName]
-
-
-def registerCall(name: str, evaluator: FunctionEvaluator, gap: Callable[[], AnyValue]) -> None:
-	"""Bind transform or codec `name` (a function path) to `evaluator`, raising `gap()` on failure."""
-
-	def call(values: list[AnyValue]) -> AnyValue:
-		return evaluated(evaluator, name, tuple(values), gap())
-
-	CALLS[name.replace("/", ".")] = call
+	return replace(FUNCTION_CODEC, name=codecName, canonical=canonical, parse=parse, format=formatValue, gaps=tuple(reasons.members.values()))
 
 
 # -----------------------------------------------------------------------------
@@ -732,11 +711,11 @@ def vocabularyConformance() -> int:
 
 
 __all__ = [
-	"ABSENT_VALUE", "BindingCodes", "MappingCodes", "CALLS", "Integral", "IsoDuration", "EpochDate", "IntegerText", "SplitText",
+	"ABSENT_VALUE", "BindingCodes", "MappingCodes", "Integral", "IsoDuration", "EpochDate", "IntegerText", "SplitText",
 	"DateTimePattern", "DecimalNumber", "DecimalPlaces", "Case", "DatePattern", "DecimalText", "Read", "Set", "TextEquals", "When",
 	"Coalesce", "Handle", "SourceHandle", "Ref", "HandleKey", "Correspond", "Valid", "At", "FormatName", "Field", "Nullable",
 	"QualifierConvert", "ToInteger", "ToVocabulary", "Given", "Members", "TRANSFORMS", "CODECS", "builtin", "functionTransform", "functionCodec",
-	"registerCall", "reasonCode", "vocabularyConformance", "isAbsent", "decimalText", "documentValue", "encodeKey", "decodeKey",
+	"reasonCode", "vocabularyConformance", "isAbsent", "decimalText", "documentValue", "encodeKey", "decodeKey",
 	"handleOf", "textOf",
 ]
 

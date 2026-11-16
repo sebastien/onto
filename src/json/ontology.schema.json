@@ -85,6 +85,11 @@
           "description": "Categorical with unknown vocabulary (`...`).",
           "type": "object", "required": ["unknown"], "additionalProperties": false,
           "properties": { "unknown": { "const": true } }
+        },
+        {
+          "description": "Range of an orderable type (`Range<T>`): a built-in or a declared type.",
+          "type": "object", "required": ["range"], "additionalProperties": false,
+          "properties": { "range": { "$ref": "#/$defs/type" } }
         }
       ]
     },
