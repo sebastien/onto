@@ -617,6 +617,26 @@ mappings:
   names must be unique among all the files loaded together; promote a local
   function to a library when a second file needs it.
 
+### Rules
+
+A derived attribute of an ontology may name a library function as its rule:
+`~ Level Band <- Score {rule=Rules/Band}`, or `rule=R/Band` with
+`@use Rules as R` in the ontology. The function's examples then document and
+test the rule. When a library is loaded with its ontologies, each derived
+attribute whose `rule` names one of the library's functions is checked:
+
+- the function exists;
+- it takes one argument per input, or at least that many when the inputs end
+  with `...`; `$Inputs` are not typed;
+- each input's type is accepted by its argument (numbers are interchangeable,
+  a specialisation stands for its base), and the attribute's type accepts the
+  result.
+
+A `rule` token without `/`, or naming a library that is not loaded, is a free
+reference, as before. The ontology never depends on the library: the check runs
+from the library, which already depends on the ontology's types. Evaluating
+derived attributes stays out of scope.
+
 ### Resolution
 
 A function name in a call resolves, in order:
@@ -976,6 +996,8 @@ Errors (nothing is produced):
 - a `complete`, `retract` or `confirm` value outside its domain;
 - a `@fn` without examples, an `inverse` whose signature is not the reverse, or
   an example that does not round-trip through its inverse;
+- a derived attribute whose `rule` names a function of a loaded library that
+  does not exist or does not match its inputs and type ([rules](#rules));
 - an unresolved or ambiguous function name, or a local function name declared
   by two loaded files;
 - `{src=Path}` naming a path the line's expression does not read;

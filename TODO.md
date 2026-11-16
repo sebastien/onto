@@ -427,7 +427,7 @@ reuse existing machinery; 5, 6 and 7 add syntax.
    path); whether `onto meta --decl` output should be checked for staleness by
    `onto check` (`meta.onto` differs from the generated declarations).
 
-9. **A derived rule is only a token** (workaround: `~ Level <- Score {rule=?}`
+9. **Implemented (2026-11-16): spec-04 "Rules", `T04-008`; checked when the library loads, `rule=Lib/Fn` or through an ontology `@use` alias.** **A derived rule is only a token** (workaround: `~ Level <- Score {rule=?}`
    with the thresholds in the doc). Spec-04 already has function libraries
    (`.fn`, `@fn` with signature and examples). Proposal: `{rule=Lib.fn}` on a
    derived attribute names a function of a library; `onto check` with the

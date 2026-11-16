@@ -533,7 +533,7 @@ Keys, in normal-form order:
 | `cards` | attribute | Evidence status of this attribute's cardinality, overriding `@ontology cards=` |
 | `history` | attribute | Flag: each value reached is dated; generates a change concept ([history](#history)) |
 | `deps` | derived attribute | `candidate`: dependencies are proposed, not confirmed |
-| `rule` | derived attribute | Rule reference token, or `?` |
+| `rule` | derived attribute | Rule reference token, or `?`; a `Library/Function` path (or `Alias/Function` through `@use`) names a function of a [spec-04 library](spec-04-mapping.md#rules), checked when the library is loaded |
 | `src` | any | Provenance; overrides the inherited value |
 | `check` | any | Token naming an open question |
 | `elided` | vocabulary | A slice omitted this many values |

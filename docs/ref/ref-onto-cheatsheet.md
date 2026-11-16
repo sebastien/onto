@@ -97,6 +97,7 @@ Customs/Code = C6109|C0808|...
 | `@map M From -> To` + body | Value map: `exact`, `broader`, `narrower`, `related` |
 | `@view V` + body | View |
 | `@domain D` | Domain: a top-level namespace segment |
+| `~ A T <- X {rule=Lib/Fn}` | Derived attribute whose rule is a `.fn` library function, checked when the library loads |
 | `Attr T {history}` | Dated history: generates `Owner/AttrChange` and `Owner -hasChange-> Owner/AttrChange` |
 | `@ontology N layering=declared` | Domains declared in dependency order; `onto check` reports references to later ones |
 

@@ -37,6 +37,58 @@ def _exampleValue(resolver: _Resolver, signature: SignatureType, raw: str, loc: 
 	return resolver.value(raw, attr, Statement(1, "value", "", None, loc, {}))
 
 
+NUMERIC = ("Integer", "Number", "Amount", "Percent")
+
+
+def _compatible(model: Model, expected: ResolvedType, actual: ResolvedType) -> bool:
+	"""Whether a value of `actual` type is accepted where `expected` is: same type, a specialisation, or numbers."""
+	if "unspecified" in (expected.kind, actual.kind):
+		return True
+	if expected.kind == actual.kind == "builtin":
+		return expected.builtin == actual.builtin or (expected.builtin in NUMERIC and actual.builtin in NUMERIC)
+	if expected.kind == actual.kind == "entity":
+		return bool(actual.path and expected.path and model.isA(actual.path, expected.path))
+	if expected.kind == actual.kind == "vocab" and not (expected.path and actual.path):
+		return expected.values == actual.values
+	return expected.kind == actual.kind and expected.path == actual.path
+
+
+def _checkRules(ontologies: list[Ontology], doc: FunctionsDocument, model: Model, resolved: dict[str, tuple[list[ResolvedType], ResolvedType]], diag: Diagnostics) -> None:
+	"""Check derived attributes whose `rule` names a function of this library (spec-01 "Attributes", `rule`).
+
+	The function must exist, take one argument per input (at least as many when the inputs end with `...`),
+	and its argument and result types must match the inputs' and the attribute's types."""
+	for ontology in ontologies:
+		aliases = dict(ontology.uses)
+		owners = [decl for decl in ontology.decls if decl.kind in ("entity", "facet", "relation", "type")]
+		for owner in owners:
+			for attr in (owner.fields or []) if owner.kind == "type" else owner.attrs:
+				rule = annotation(attr.ann, "rule")
+				if not attr.derived or not isinstance(rule, str) or "/" not in rule:
+					continue
+				head, _, name = rule.partition("/")
+				if aliases.get(head, head) != doc.namespace:
+					continue
+				where = f"'{owner.path}.{attr.name}'"
+				if name not in resolved:
+					diag.error("rule", f"{where} names unknown function '{doc.namespace}/{name}'", attr.loc)
+					continue
+				args, result = resolved[name]
+				deps = [dep for dep in attr.deps or [] if not dep.ellipsis]
+				incomplete = any(dep.ellipsis for dep in attr.deps or [])
+				if len(args) < len(deps) or (len(args) > len(deps) and not incomplete):
+					diag.error("rule", f"{where} has {len(deps)} inputs but '{doc.namespace}/{name}' takes {len(args)}", attr.loc)
+					continue
+				for index, dep in enumerate(deps):
+					if dep.input:
+						continue
+					source = model.lookup(owner.path, dep.local) if dep.local else model.lookup(dep.path, dep.attr) if dep.path and dep.attr else Attr("Input", type=TypeExpr(path=dep.path))
+					if source and not _compatible(model, args[index], model.resolveType(source.type, source.ann)):
+						diag.error("rule", f"{where}: input {index + 1} does not match the argument type of '{doc.namespace}/{name}'", attr.loc)
+				if not _compatible(model, model.resolveType(attr.type, attr.ann), result):
+					diag.error("rule", f"{where}: the result of '{doc.namespace}/{name}' does not match its type", attr.loc)
+
+
 # -----------------------------------------------------------------------------
 #
 # OPERATIONS
@@ -126,6 +178,7 @@ def resolveFunctions(ontologies: list[Ontology], doc: FunctionsDocument) -> Func
 			other = next(item for item in doc.functions if item.name == inverse)
 			if len(args) != 1 or len(otherArgs) != 1 or args[0] != otherResult or result != otherArgs[0] or function.args[0].collection != other.result.collection or function.result.collection != other.args[0].collection:
 				diag.error("inverse", f"Inverse '{inverse}' does not have the reversed signature of '{function.name}'", function.loc)
+	_checkRules(ontologies, doc, model, resolved, diag)
 	diag.check()
 	functions = []
 	for function in doc.functions:
