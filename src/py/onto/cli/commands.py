@@ -22,9 +22,9 @@ from ..inventory import Inventory, defaultBinding, inventoryFromDocuments, print
 from ..meta import META_DOMAIN, metaDeclarations, metaObservations
 from ..mapping import Mapping, mappingCoverage, mappingReverse, mappingToJson, printMapping
 from ..observations import Observations, observationsToJson, printObservationsLog, printObservationsState, reconcileObservations
-from ..ontology import Ontology, normaliseOntology, ontologyToJson, printOntology
+from ..ontology import Ontology, loadOntology, normaliseOntology, ontologyDiff, ontologyFromJson, ontologyToJson, printOntology, printOntologyDiff
 from ..referential import Referential, printReferential, referentialToJson
-from ..text import Diagnostic, FormatError, Loc, annotation, layoutText
+from ..text import Diagnostic, FormatError, Loc, Source, annotation, layoutText
 from .usage import UsageError
 from .workspace import STDIN, Entry, Workspace
 
@@ -123,6 +123,69 @@ def coverageRows(report: CoverageReport) -> list[Row]:
 def signatureText(signature: Any) -> str:
 	"""A signature type as `.fn` files write it."""
 	return (signature.builtin or signature.path) + ("*" if signature.collection else "")
+
+
+def snapshotModel(ws: Workspace, files: list[str]) -> Ontology | None:
+	"""Load exactly `files` as one model, retaining embedded IDs and adjacent namespace sidecars."""
+	sources: list[Source] = []
+	ids: dict[str, str] = {}
+	textPaths: list[Path] = []
+
+	def mergeIds(values: dict[str, str], name: str) -> None:
+		for path, identifier in values.items():
+			if path in ids and ids[path] != identifier:
+				ws.error("cli.ids", f"conflicting identifiers for '{path}'", name)
+			ids[path] = identifier
+
+	for file in sorted(set(files)):
+		name = ws.indexer.display(file)
+		text = ws.indexer.read(file, name)
+		ws.readPaths.add(name)
+		if text is None:
+			return None
+		if Path(file).suffix == ".json" or text.lstrip().startswith("{"):
+			try:
+				model = ontologyFromJson(json.loads(text), name)
+			except FormatError as error:
+				ws.report(error.diagnostics)
+				return None
+			except ValueError as error:
+				ws.error("cli.json", f"invalid ontology JSON: {error}", name)
+				return None
+			mergeIds(model.ids or {}, name)
+			text = printOntology(normaliseOntology(model))
+		else:
+			if file != STDIN:
+				textPaths.append(Path(file))
+		sources.append(Source(name, text))
+	try:
+		model = loadOntology(sources)
+	except FormatError as error:
+		ws.report(error.diagnostics)
+		return None
+	for sidecar in sorted({path.parent / f"{model.namespace}.ids" for path in textPaths}):
+		if not sidecar.is_file():
+			continue
+		name = ws.indexer.display(str(sidecar))
+		text = ws.indexer.read(str(sidecar), name)
+		ws.readPaths.add(name)
+		if text is None:
+			return None
+		values: dict[str, str] = {}
+		for line, row in enumerate(text.splitlines(), 1):
+			if not row.strip():
+				continue
+			parts = row.split("\t")
+			if len(parts) != 2 or not all(parts):
+				ws.error("cli.ids", "expected a path and identifier separated by a tab", name, line)
+			elif parts[0] in values and values[parts[0]] != parts[1]:
+				ws.error("cli.ids", f"conflicting identifiers for '{parts[0]}'", name, line)
+			else:
+				values[parts[0]] = parts[1]
+		mergeIds(values, name)
+	model.ids = ids or None
+	ws.report(model.diagnostics)
+	return None if any(item.level == "error" for item in ws.diagnostics()) else model
 
 
 # -----------------------------------------------------------------------------
@@ -258,6 +321,34 @@ class Commands:
 		if model is None:
 			return Result(checked=1)
 		return Result(text=Forms.Text(self.ws, entry, model), checked=1)
+
+	def cmdSnap(self) -> Result:
+		"""Print the normalized model of an explicit file set."""
+		model = snapshotModel(self.ws, self.args.files)
+		if model is None:
+			return Result(checked=len(self.args.files))
+		data = ontologyToJson(model)
+		text = printOntology(normaliseOntology(model)) if self.args.format == "onto" else json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+		return Result(text=text, data=data, checked=len(self.args.files))
+
+	def cmdDiff(self) -> Result:
+		"""Compare independent explicit file sets, using snapshots and text interchangeably."""
+		before, after = self.args.before, self.args.after
+		if self.args.files:
+			if before or after or len(self.args.files) != 2:
+				raise UsageError("name BEFORE AFTER, or use --before FILE... --after FILE...", "diff")
+			before, after = [self.args.files[0]], [self.args.files[1]]
+		if not before or not after:
+			raise UsageError("both --before and --after require at least one file", "diff")
+		if before.count(STDIN) + after.count(STDIN) > 1:
+			raise UsageError("standard input can appear on only one side", "diff")
+		left = snapshotModel(self.ws, before)
+		right = snapshotModel(self.ws, after)
+		checked = len(before) + len(after)
+		if left is None or right is None:
+			return Result(checked=checked)
+		changes = ontologyDiff(left, right)
+		return Result(text=printOntologyDiff(changes), data={"format": "onto.diff/1", "changes": changes}, failed=bool(changes), checked=checked)
 
 	def cmdLs(self) -> Result:
 		"""One row per model: kind, namespace, revision and files."""

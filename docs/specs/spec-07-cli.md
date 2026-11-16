@@ -223,6 +223,90 @@ prints the whole model. Inventories and formats files have no JSON form.
 Print the normal text form of a JSON file; `-` reads JSON from standard input.
 Context comes from the workspace, as for text files.
 
+#### `onto snap FILE... [--format json|onto]`
+
+Merge and validate exactly the files named as one ontology, then print a
+normalized snapshot. Inputs may be ontology text or ontology JSON; `-` reads
+either representation from standard input. Files must agree on namespace,
+revision and header defaults, as for any multi-file ontology.
+
+The default is the existing `onto.ontology/1` JSON form, not a per-file archive.
+`--format onto` prints one combined canonical `.onto` document instead.
+Snapshots have no generated timestamp or source-file paths; comments and source
+layout are not retained. They can be checked into version control.
+
+Unlike workspace commands, `snap` does **not** add files by namespace or search
+the workspace: all required declarations must be in the explicit input set.
+An unresolved reference or duplicate declaration fails the whole operation,
+without printing a partial snapshot.
+
+Embedded JSON `ids` are retained. For text inputs, `<Namespace>.ids` in each
+input's directory is read when present (spec-01's tab-separated identity
+sidecar). Conflicting identifiers for the same path and malformed rows are
+errors. Text output cannot carry these IDs; keep the sidecar or use JSON to
+preserve rename tracking.
+
+```sh
+onto snap core.onto finance.onto investing.onto > baseline.json
+onto snap core.onto finance.onto --format onto > combined.onto
+```
+
+#### `onto diff BEFORE AFTER`
+#### `onto diff --before FILE... --after FILE...`
+
+Compare two independently loaded ontology models. Each side accepts the same
+explicit text/JSON inputs and identity sidecars as `snap`; the two sets are
+never combined with each other or with workspace files. Standard input may be
+used on only one side.
+
+```sh
+onto diff --before old/core.onto old/finance.onto \
+          --after core.onto finance.onto
+onto diff --before baseline.json --after core.onto finance.onto
+onto diff baseline.json current.json --json
+```
+
+The unit of comparison is the resulting model: moving declarations between
+files, renaming files, changing comments/layout or reordering declarations
+produces no change. Alias spelling and explicit versus implicit defaults do
+not produce changes either. Vocabulary order matters only for `{ordered}`
+vocabularies.
+
+Output uses [spec-01's change notation](spec-01-ontology.md#changes), with fully
+qualified paths: `+` added, `-` removed, `>` renamed/moved and `~` changed.
+Declarations, attributes, structure fields, relation roles and vocabulary
+values are addressed separately. Property changes include types, cardinality,
+annotations, docs, bases, relation verbs/counts, maps, views and header metadata.
+Changes are sorted by path, then operation and property. This is a change
+report, not a loadable `.onto` document or an executable patch.
+
+Unique stable identifiers match elements across renames; without them, a
+rename is a removal and addition. Repeated identifiers and the `(overlay)` and
+`(authored)` markers are not used to infer renames. A renamed owner carries
+same-named members with it without reporting redundant member renames.
+References to renamed elements can still appear as property changes.
+
+With `--json`, `result` is an `onto.diff/1` object containing `changes`:
+
+```json
+{
+  "format": "onto.diff/1",
+  "changes": [
+    {"op": "change", "path": "Finance/Person.Email", "field": "card", "before": "?", "after": "1"},
+    {"op": "move", "path": "Finance/Person.ISIN", "to": "Finance/Person.Isin"}
+  ]
+}
+```
+
+- `add`: `path`, `after` (element properties), `line` (normal-form text).
+- `remove`: `path`, `before` (element properties).
+- `move`: old `path`, new `to`.
+- `change`: `path`, `field`, `before`, `after`; missing properties are `null`.
+
+Exit status is `0` for no changes, `1` for changes or input errors (the existing
+CLI convention), and `2` for invalid usage. JSON diagnostics distinguish a
+successful comparison with changes from invalid input.
+
 #### `onto ls [KIND...]`
 
 List the workspace, one row per model: kind, namespace key, `rev` and files,
@@ -405,7 +489,8 @@ on standard error (usage errors excepted):
 | --- | --- |
 | `check` | `null` |
 | `fmt` | The text; an object by file when several files are named (files with errors are absent); the diff for `--diff`; the list of files for `--write` and `--check` |
-| `json` | The JSON form |
+| `json`, `snap` | The JSON form (also for `snap --format onto`) |
+| `diff` | `{"format": "onto.diff/1", "changes": [...]}` |
 | `text`, `state`, `log`, `reverse`, `inventory` | The text |
 | `ls`, `coverage`, `fn` | The rows, as objects keyed by column |
 

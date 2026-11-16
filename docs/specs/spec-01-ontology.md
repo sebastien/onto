@@ -733,7 +733,7 @@ namespace and header); `onto meta` prints the instances as
 
 ## Changes
 
-`OntologyDiff` compares two normal forms (and their sidecars) and writes one
+`onto diff` (`ontologyDiff` in Python) compares two normal forms (and their sidecars) and writes one
 change per line, sorted by path:
 
 ```text
@@ -757,3 +757,9 @@ change per line, sorted by path:
 | `~` | Changed: `type`, `card`, `counts`, `ann`, `base`, `kind`, vocabulary values, participants, `doc` |
 
 Without sidecar identifiers, renames appear as `-` and `+`.
+
+[`onto snap`](spec-07-cli.md#onto-snap-file---format-jsononto) creates a normalized
+JSON or text snapshot from an explicit set of ontology files. `onto diff`
+compares two such sets or snapshots as combined models: moving declarations
+between source files is not a model change. Its JSON output carries structured
+before/after values; the text above is a change report, not ontology source.

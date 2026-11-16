@@ -71,6 +71,7 @@ from .operations import (
 	ontologyToJson,
 	ontologyFromJson,
 )
+from .changes import ontologyDiff, printOntologyDiff
 
 __all__ = [
 	"Operator",
@@ -137,6 +138,8 @@ __all__ = [
 	"formatOntology",
 	"ontologyToJson",
 	"ontologyFromJson",
+	"ontologyDiff",
+	"printOntologyDiff",
 ]
 
 # EOF

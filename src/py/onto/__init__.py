@@ -12,6 +12,8 @@ from .ontology import (
 	normaliseOntology,
 	ontologyFromJson,
 	ontologyToJson,
+	ontologyDiff,
+	printOntologyDiff,
 	parseOntology,
 	printOntology,
 	validateOntology,
@@ -103,6 +105,8 @@ from .referential import (
 )
 
 __all__ = [
+	"ontologyDiff",
+	"printOntologyDiff",
 	"Binding",
 	"BindingDocument",
 	"BindingExclusion",

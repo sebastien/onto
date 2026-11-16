@@ -27,6 +27,7 @@ class Option:
 	choices: tuple[str, ...] = ()
 	repeat: bool = False
 	default: Any = None
+	nargs: str | None = None
 
 	@property
 	def dest(self) -> str:
@@ -122,6 +123,28 @@ COMMANDS = (
 		"from the workspace, as for text files.",
 		(Argument("file"),), (LENIENT,),
 		("onto text finance.json > finance.onto",),
+	),
+	Command(
+		"snap", "Files", "FILE... [--format json|onto]",
+		"Snapshot an ontology from an explicit set of files",
+		"Merge and validate exactly the files named, then print the normalized ontology as JSON (default) or "
+		"onto text. No workspace files are added. Reads <Namespace>.ids beside each text input when present.",
+		(Argument("files", "+"),),
+		(Option(("--format",), "Snapshot representation", "FORMAT", ("json", "onto"), default="json"),),
+		("onto snap core.onto finance.onto > baseline.json", "onto snap core.onto finance.onto --format onto"),
+	),
+	Command(
+		"diff", "Files", "[BEFORE AFTER] [--before FILE...] [--after FILE...]",
+		"Compare combined ontology models, not source files",
+		"Compare two independent sets of ontology text files or JSON snapshots. Declaration placement, comments "
+		"and layout do not matter. Prints semantic changes, or structured changes with --json. "
+		"Exit 1 means changes or input errors; exit 2 means invalid usage.",
+		(Argument("files", "*"),),
+		(
+			Option(("--before",), "Files making up the old model", "FILE", nargs="+"),
+			Option(("--after",), "Files making up the new model", "FILE", nargs="+"),
+		),
+		("onto diff baseline.json current.json", "onto diff --before old/core.onto old/finance.onto --after core.onto finance.onto"),
 	),
 	Command(
 		"ls", "Files", "[KIND...]",
@@ -277,6 +300,8 @@ def addOption(parser: argparse.ArgumentParser, option: Option, suppress: bool = 
 		kwargs["action"] = "append" if option.repeat else "store"
 		if option.choices:
 			kwargs["choices"] = option.choices
+		if option.nargs:
+			kwargs["nargs"] = option.nargs
 	else:
 		kwargs["action"] = "store_true"
 	parser.add_argument(*option.flags, **kwargs)
