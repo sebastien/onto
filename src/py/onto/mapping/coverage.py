@@ -19,7 +19,8 @@ def expressionPaths(expr: Expression | None) -> list[list[str]]:
 	if expr is None:
 		return []
 	if "path" in expr:
-		return [expr["path"]]
+		# `$` (the scope instance) reads no source element
+		return [] if expr["path"] == [{"root": True}] else [expr["path"]]
 	if "call" in expr:
 		args = expr["args"][1:] if expr["call"] == "ref" else expr["args"]
 		return [path for arg in args for path in expressionPaths(arg)]

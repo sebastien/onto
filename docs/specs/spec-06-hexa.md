@@ -19,8 +19,8 @@ source observations, in the log form of
 [spec-02](spec-02-observations.md#json-form)), with [formats](#formats) learning,
 [coverage](#coverage) and [re-running](#re-running); [mappings](#mappings)
 between ontologies, sharing re-running; and [writing](#writing): reversed mappings
-and documents written by bindings. Contextual facets in mappings and
-registry-backed identities are [deferred](#deferred).
+and documents written by bindings. Contextual facets in mappings preserve and
+translate their contexts; registry-backed identities are [deferred](#deferred).
 
 ## Terms
 
@@ -227,9 +227,14 @@ The scope path becomes a hexa selector: `.` and `[*]` become `/` and `/*`, and
   Child locations are joined to the parent's document-root location and retain
   enclosing captures and origins. The whole selector remains available in the
   program's encoding.
-- Index steps (`a[0]`) are not supported: hexa selectors and shapes have no
-  index access, so compiling a binding that uses one fails with
-  `Binding.PathUnsupported`.
+- Index steps (`a[0]`) are read by shapes, since hexa selectors have no index
+  access (hexa spec-004 matches a fixed position with `Tuple` and `rest`). The
+  selector stops before a scope path's first index step, and the rest of the
+  path prefixes every path the scope's lines read: `rows[*][0]` selects
+  `rows/*`, and `id` reads position 0's `id`. An index step followed by `[*]`
+  cannot be selected: compiling it fails with `Binding.PathUnsupported`.
+- A selected record that is JSON `null` is not present (spec-04), so it makes no
+  instance and no gap. A missing path is still a gap below its parent.
 
 ### Shape
 
@@ -246,6 +251,13 @@ P   = $Slot                 a direct read
 - `tolerant` makes a value that does not match, or does not parse, a hole for the
   lines that read it: their claims are omitted and a gap is reported, while the
   record's other claims are made. This is spec-04's "a value did not convert" gap.
+- Positions read by index steps nest in a tuple instead of a struct:
+  `Tuple(S0, ..., Sn, rest(Any))`, with `Any` at the positions no line reads, so
+  further items are ignored. A list too short fails the tuple: a hole for the lines
+  below it, or a gap for the record when the tuple is the record's
+  (`rows[*][1]`). A value read both as a list position and as a field fails to
+  compile with `Binding.PathUnsupported`. Field slots name a position `At<n>`
+  (`[0].id` → `At0Id`), as they name `[*]` `All`.
 - A JSON `null` matches the `Null` branch and binds nothing, so it says nothing.
   A line annotated `{null=absent}` or `{null=unknown}`, or a binding header with
   `null=`, instead compiles its position as
@@ -660,11 +672,11 @@ MappingRead: HandlesResolve → InstancesUnfold → <S><T>RecordsProject → <S>
 MappingRun:  MappingRead → (the re-running stages of bindings)
 ```
 
-This version supports `key=A` and `key=A from=Ns` policies, and mappings without
-a referential (source-qualified handles). Contextual facets, minted handles,
-alternate keys and registry lookups are [deferred](#deferred); a mapping using
-them fails to compile with `Mapping.ContextUnsupported` or
-`Mapping.PolicyUnsupported`. No new hexa construct is needed: unfolding, metadata
+This version supports contextual facets, `key=A` and `key=A from=Ns` policies,
+and mappings without a referential (source-qualified handles). Minted handles,
+composite and alternate keys and registry lookups are [deferred](#deferred);
+policies needing them fail to compile with `Mapping.PolicyUnsupported`.
+No new hexa construct is needed: unfolding, metadata
 and fan-out are onto code around ordinary projections.
 
 ### Reach
@@ -685,12 +697,14 @@ source input is that of its `{src=Path}`, or else of its first path.
 state into a tree:
 
 ```text
-{$handle, $type, $scope, $target, $valid?, $at, $src, Attr: Value, ...}
+{$handle, $type, $scope, $target, $self?, $valid?, $at, $src, Attr: Value, ...}
 ```
 
 - `$handle` and `$type` are the instance's; `$scope` is the state's `@scope`;
-  `$target` is the handle of its target instance ([Handles](#handles)); `$valid`,
-  `$at` and `$src` come from its existence claim, `$src` as the provenance token.
+  `$target` is the handle of its target instance for this scope ([Handles](#handles));
+  `$self`, present when a line reads `$`, is the instance as a reference
+  (`{ref, target, targets?}`); `$valid`, `$at` and `$src` come from its existence
+  claim, `$src` as the provenance token.
 - Keys are attribute paths as in spec-02 claims (`p`, e.g. `Bond.CouponRate`),
   binary relations by verb, and the roles of an n-ary relation instance by role
   name. Only keys in the reach are present.
@@ -711,6 +725,38 @@ its claims, each with its value and metadata.
 Occurrences are `{tree, meta, conflicts}`, listed per scope in handle order.
 Unfolding is pure; it runs as a `lift` stage.
 
+### Contextual mappings
+
+An attribute slot includes its context. Claims at the same attribute path in
+different contexts are never merged or treated as a conflict with one another.
+
+- Global lines run once per instance. Lines reading contextual attributes run
+  once per source context found along their finite read paths, including through
+  references. Global values are available in each occurrence; contextual values
+  must match that occurrence's context handle. There is no cross-context
+  Cartesian product or fallback to another context.
+- Context occurrences are ordered by source context handle after the global
+  occurrence. Their locations add `/contexts/<escaped handle>` to the instance
+  location. Only the lines active for that occurrence emit claims or gaps.
+  A contextual scope condition or scope metadata expression is evaluated per
+  context, with its scope lines; identical existence claims are emitted once.
+- A contextual target inherits the source context, translated through the
+  instance correspondence. Scope `{ctx=expr}` replaces it with the translated
+  reference returned by `expr`. A conflict in that expression is a gap, even
+  when coalescing could otherwise return a different context.
+- Only contextual facet applicability and attribute claims carry `ctx`.
+  Existence and non-contextual claims never do. Referenced-only context handles
+  retain their target type without an invented existence claim.
+- An unavailable context correspondence is `Mapping.ReferenceUnmapped`, never
+  permission to emit an uncontextual claim. Conflict variants remain within
+  their occurrence's context; failed variants report gaps like main projections.
+- Stale slots retain both their output context and the source input's provenance.
+  Re-running may therefore keep a stale slot in one context while retracting a
+  missing slot in another. If a failed context translation leaves the old output
+  context unknown, retention is conservative across that target slot's contexts.
+  A conflicting scope condition also protects the instance's existence.
+  Context types needed by retractions survive even after disappearing from input.
+
 ### Handles
 
 `HandlesResolve` gives every scope instance its target handle before unfolding,
@@ -722,7 +768,7 @@ since references need the targets of the instances they point to.
   first unfold limited to the paths that line reads.
 - Otherwise the handle is source-qualified:
   `Onto.SourceHandle("<T>", $Map.Root.Scope, $Map.Root.Handle, "<S>")`, which
-  encodes `<scope>/<key>` with the source handle's key, as spec-04 specifies.
+  encodes `<scope>/<S>/<key>` with the source type and the source handle's key, as spec-04 specifies.
 - A key line whose expression reads a reference's target cannot be resolved
   before the targets exist: it fails to compile with `Mapping.KeyReference`.
 - An instance whose handle is a hole gets no target. It produces nothing, and
@@ -730,6 +776,14 @@ since references need the targets of the instances they point to.
 
 The pairs of source and target handles are the instance correspondence. They are
 reported with the run, and used by the unfold for `$target` and `target`.
+
+A source type with several scope lines (spec-04 Instances) has one target per
+line: the unfold keeps them by target type, gives each scope's tree the `$target`
+of its own type, and adds `targets: {<T>: handle}` to references to such an
+instance. A line receiving one compiles `Onto.CorrespondAs(value, "<T>")`, `<T>`
+being the target type the receiver accepts, chosen at compile time; other
+references keep `Onto.Correspond`. The reported correspondence keeps the first
+scope's target.
 
 ### Compiling a scope
 
@@ -1046,9 +1100,7 @@ after reading the spec-04 feed:
 
 In the order they are expected to be added:
 
-1. **Contextual facets** in mappings: one occurrence per instance and context for
-   the lines that target them, with contexts translated through the instance
-   correspondence.
-2. **Registry-backed identities** (spec-05): minted handles, alternate keys and
+1. **Registry-backed identities** (spec-05): minted handles, composite and alternate keys and
    alias lookups, through a host operation `IdentityResolve` in `HandlesResolve`.
-3. **Index steps** in paths, which hexa does not support.
+2. **Index steps before `[*]`** in scope paths (`a[0].b[*]`), which no hexa
+   selector can reach. Other index steps are read by tuple shapes.

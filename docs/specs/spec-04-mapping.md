@@ -313,7 +313,7 @@ meta     := "$valid" | "$at" | "$src" | "$format"
 | `"asset class"` in a path | A field name that is not a plain name (bindings only): `row."asset class"` |
 | `a[*]` | Each element of a list (bindings only) |
 | `a[0]` | One element of a list, from 0 (bindings only) |
-| `$` | The document root (bindings) |
+| `$` | The document root (bindings); alone, the scope instance itself, as a reference (mappings) |
 | `^` | The record enclosing the current one: in `a[*].b[*]`, the element of `a`. `^.^` goes one further |
 | `Ref.Attr` | Through a reference: the attribute of the referenced instance (mappings) |
 | `x ?? y` | `x` when it is present, otherwise `y` |
@@ -498,15 +498,29 @@ state to an instance of `T`. Body lines give `T`'s values.
   minted. Different sources and mappings producing the same key produce the
   same instance.
 - Without a referential, or when `T` has no policy, the handle is
-  **source-qualified**: `<T>_` followed by the encoding of `<scope>/<key>`, with
-  `scope` the input's `@scope` and `key` the source handle without its `<S>_`
-  prefix, decoded (or the whole handle, when it has no such prefix). Instances
-  from different sources then never merge unless an
+  **source-qualified**: `<T>_` followed by the encoding of `<scope>/<S>/<key>`,
+  with `scope` the input's `@scope`, `S` the last segment of the source type, and
+  `key` the source handle without its `<S>_` prefix, decoded (or the whole handle,
+  when it has no such prefix): `Person_Crm_2FClient_2F9` for `Client_9`. Instances
+  from different sources, or of different source types mapped to one target type
+  (a CRM's client and user with the same id), then never merge unless an
   [identity link](spec-02-observations.md#identity-links) says so.
 - The **instance correspondence** of `S` is the set of these `S → T` pairs. It
   translates references: `issuedBy <- Issuer` links the instrument to the
   `Company` that `Issuer -> Company` produced for it. A reference to an instance
-  of a type with no `->` line is a gap; with several, an error.
+  of a type with no `->` line is a gap.
+- A source type may have several `->` lines to different target types: one
+  source record describing several things, e.g. a CRM client row that is both a
+  person and the practice's relationship with them (`Client -> Person`,
+  `Client -> Relationship`). Each line makes its own target instance, and a
+  reference translates through the line whose target type the receiving
+  attribute, role or verb accepts (that type or one it specialises): `Member <-
+  Client`, for a `Party` member, is the client's `Person`. When several lines fit
+  the receiver (including two lines to the same type), or none does, the
+  reference is an error.
+- `$` alone reads the scope instance itself, as a reference translated like any
+  other: in `Client -> Relationship`, `Client <- $` is the client's `Person`. Its
+  claims take the scope instance's existence metadata.
 - `{when=path:value}` on the scope applies it only to matching instances;
   `{ctx=expr}` and `{valid=expr}` set the target claims' context and validity.
   Without `valid`, the existence claim keeps the source's.
@@ -989,7 +1003,8 @@ Errors (nothing is produced):
 - unknown ontology, type, attribute, facet, role, verb, view or function;
 - a target assigned twice for the same scope;
 - an incompatible type assignment, or a fixed qualifier contradiction;
-- a reference to a type with several `->` lines;
+- a reference to a type with several `->` lines, none or several of which the
+  receiving attribute, role or verb accepts;
 - a scope line without `id` (bindings);
 - an unknown `referential`, or a scope line whose target type has a `key`
   policy but assigns none of its keys;

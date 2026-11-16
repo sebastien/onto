@@ -42,6 +42,10 @@ def _path(steps: Any, binding: bool) -> list[str | dict[str, Any]]:
 				raise ValueError("Invalid expression path field")
 			result.append(step)
 			continue
+		if not binding and step == {"root": True} and len(steps) == 1:
+			# In a mapping, `$` alone is the scope instance itself (spec-04 Expressions)
+			result.append(dict(step))
+			continue
 		if not binding or not isinstance(step, dict) or len(step) != 1:
 			raise ValueError("Document path steps are only allowed in bindings")
 		key, value = next(iter(step.items()))

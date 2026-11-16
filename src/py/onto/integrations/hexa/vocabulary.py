@@ -306,10 +306,14 @@ def handle(typeName: str, key: AnyValue) -> str:
 
 
 def sourceHandle(typeName: str, scope: str, source: str, sourceType: str) -> str:
-	"""`<T>_` + enc(`<scope>/<key>`), the key being the source handle without `<S>_`, decoded (spec-04)."""
-	prefix = sourceType.rsplit("/", 1)[-1] + "_"
+	"""`<T>_` + enc(`<scope>/<S>/<key>`), the key being the source handle without `<S>_`, decoded (spec-04).
+
+	`<S>` keeps instances of two source types mapped to one target type apart (a client and a user
+	with the same id are two people)."""
+	short = sourceType.rsplit("/", 1)[-1]
+	prefix = short + "_"
 	key = decodeKey(source[len(prefix):]) if source.startswith(prefix) else None
-	return handleOf(typeName, f"{scope}/{key if key is not None else source}")
+	return handleOf(typeName, f"{scope}/{short}/{key if key is not None else source}")
 
 
 def reference(typePath: str, key: AnyValue) -> AnyValue:
@@ -317,6 +321,11 @@ def reference(typePath: str, key: AnyValue) -> AnyValue:
 		return ABSENT_VALUE
 	if key is None or key == UNKNOWN:
 		return key
+	# spec-04: a function given a collection where it expects one value applies to each member
+	if isinstance(key, dict) and "set" in key:
+		return {**key, "set": [reference(typePath, item) for item in key["set"] if item is not None]}
+	if isinstance(key, list):
+		return [reference(typePath, item) for item in key if item is not None]
 	try:
 		return {"ref": handleOf(typePath, key), "type": typePath}
 	except ValueError as error:
@@ -345,7 +354,22 @@ def correspond(value: AnyValue) -> AnyValue:
 		return {"set": [correspond(item) for item in value["set"]], **({"partial": True} if value.get("partial") else {})}
 	if not isinstance(value, dict) or "target" not in value:
 		raise Gap(Correspond.ReferenceUnmapped)
-	return {"ref": value["target"]}
+	return {"ref": value["target"], **({"type": value["targetType"]} if "targetType" in value else {})}
+
+
+def correspondAs(value: AnyValue, typePath: str) -> AnyValue:
+	"""`{ref, targets}` → `{ref: targets[typePath]}`: a source instance with several target instances
+	(several scope lines for its type) is referred to by the one of the type the receiver accepts."""
+	if isAbsent(value):
+		return ABSENT_VALUE
+	if value is None or value == UNKNOWN:
+		return value
+	if isinstance(value, dict) and "set" in value:
+		return {"set": [correspondAs(item, typePath) for item in value["set"]], **({"partial": True} if value.get("partial") else {})}
+	target = value.get("targets", {}).get(typePath) if isinstance(value, dict) else None
+	if target is None:
+		raise Gap(CorrespondAs.ReferenceUnmapped)
+	return {"ref": target, "type": typePath}
 
 
 def valid(value: AnyValue) -> AnyValue:
@@ -375,14 +399,16 @@ def formatName(name: AnyValue) -> AnyValue:
 	return json.loads("[" + name[name.index("(") + 1:-1] + "]")[0]
 
 
-def field(value: AnyValue, steps: list[str]) -> AnyValue:
-	"""Navigate captured JSON by field names; `*` maps over list items."""
+def field(value: AnyValue, steps: list[str | int]) -> AnyValue:
+	"""Navigate captured JSON by field names; `*` maps over list items, an integer picks one."""
 	current = [value]
 	for step in steps:
 		following = []
 		for item in current:
 			if step == "*" and isinstance(item, list):
 				following += item
+			elif type(step) is int and isinstance(item, list):
+				following += item[step:step + 1]
 			elif isinstance(item, dict) and step in item:
 				following.append(item[step])
 		current = following
@@ -595,13 +621,16 @@ Coalesce = transform("Onto.Coalesce", coalesce, inputs=[[Any, ...]], output=Any,
 Handle = transform("Onto.Handle", handle, inputs=[Text, Any], output=Text, gaps=["KeyMissing", "TypeMismatch"],
 	examples=[{"input": ["Issuer", "C-17"], "output": "Issuer_C_2D17"}, {"input": ["Issuer", ABSENT_VALUE], "gap": "KeyMissing"}])
 SourceHandle = transform("Onto.SourceHandle", sourceHandle, inputs=[Text, Any, Any, Text], output=Text,
-	examples=[{"input": ["Company", "Exchange", "Issuer_C_2D17", "Issuer"], "output": "Company_Exchange_2FC_2D17"}])
+	examples=[{"input": ["Company", "Exchange", "Issuer_C_2D17", "Issuer"], "output": "Company_Exchange_2FIssuer_2FC_2D17"}])
 Ref = transform("Onto.Ref", reference, inputs=[Text, Any], output=Any, gaps=["TypeMismatch"],
 	examples=[{"input": ["Exchange/Issuer", "C-17"], "output": {"ref": "Issuer_C_2D17", "type": "Exchange/Issuer"}}])
 HandleKey = transform("Onto.HandleKey", handleKey, inputs=[Any, Text], output=Any, gaps=["Undecodable"],
 	examples=[{"input": [{"ref": "Issuer_C_2D17"}, "Issuer"], "output": "C-17"}])
 Correspond = transform("Onto.Correspond", correspond, inputs=[Any], output=Any, gaps=["ReferenceUnmapped"],
 	examples=[{"input": [{"ref": "Issuer_C_2D17", "target": "Company_ACME"}], "output": {"ref": "Company_ACME"}}, {"input": [{"ref": "x"}], "gap": "ReferenceUnmapped"}])
+CorrespondAs = transform("Onto.CorrespondAs", correspondAs, inputs=[Any, Text], output=Any, gaps=["ReferenceUnmapped"],
+	examples=[{"input": [{"ref": "Client_9", "target": "Person_9", "targets": {"Crm/Person": "Person_9", "Crm/Relationship": "Relationship_9"}}, "Crm/Person"], "output": {"ref": "Person_9", "type": "Crm/Person"}},
+		{"input": [{"ref": "x", "targets": {}}, "Crm/Person"], "gap": "ReferenceUnmapped"}])
 Valid = transform("Onto.Valid", valid, inputs=[Any], output=Any, gaps=["Invalid"],
 	examples=[{"input": ["2026-09-01"], "output": "2026-09-01"}, {"input": ["2026-02-30"], "gap": "Invalid"}])
 At = transform("Onto.At", timeValue, inputs=[Any], output=Any, gaps=["Invalid"],
@@ -647,7 +676,7 @@ for builtinName, builtinExamples in BUILTIN_EXAMPLES.items():
 
 CODECS = {"EpochDate": EpochDate, "IntegerText": IntegerText, "SplitText": SplitText, "DateTimePattern": DateTimePattern,
 	"DecimalNumber": DecimalNumber, "DecimalPlaces": DecimalPlaces, "Case": Case}
-TRANSFORMS = {item.name: item for item in (Read, Set, TextEquals, When, Coalesce, Handle, SourceHandle, Ref, HandleKey, Correspond, Valid, At,
+TRANSFORMS = {item.name: item for item in (Read, Set, TextEquals, When, Coalesce, Handle, SourceHandle, Ref, HandleKey, Correspond, CorrespondAs, Valid, At,
 	FormatName, Field, Nullable, QualifierConvert, ToInteger, ToVocabulary, Given, Members, *BUILTIN_TRANSFORMS.values())}
 
 
@@ -713,7 +742,7 @@ def vocabularyConformance() -> int:
 __all__ = [
 	"ABSENT_VALUE", "BindingCodes", "MappingCodes", "Integral", "IsoDuration", "EpochDate", "IntegerText", "SplitText",
 	"DateTimePattern", "DecimalNumber", "DecimalPlaces", "Case", "DatePattern", "DecimalText", "Read", "Set", "TextEquals", "When",
-	"Coalesce", "Handle", "SourceHandle", "Ref", "HandleKey", "Correspond", "Valid", "At", "FormatName", "Field", "Nullable",
+	"Coalesce", "Handle", "SourceHandle", "Ref", "HandleKey", "Correspond", "CorrespondAs", "Valid", "At", "FormatName", "Field", "Nullable",
 	"QualifierConvert", "ToInteger", "ToVocabulary", "Given", "Members", "TRANSFORMS", "CODECS", "builtin", "functionTransform", "functionCodec",
 	"reasonCode", "vocabularyConformance", "isAbsent", "decimalText", "documentValue", "encodeKey", "decodeKey",
 	"handleOf", "textOf",

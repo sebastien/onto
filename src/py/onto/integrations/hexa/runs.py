@@ -176,13 +176,18 @@ class Rerun:
 		meta = {"src": src, "by": settings.by, "at": at} | ({"of": document["replaces"]} if document.get("replaces") else {})
 		present = {slotKey(claim) for claim in mine}
 		produced = {claim["s"] for claim in mine if claim.get("exists")}
-		stale = {(item["s"], item.get("p") or (f"[{item['facet']}]" if "facet" in item else item.get("verb", ""))) for item in value["stale"] if item["src"] == src}
+		stale = {(item["s"], item.get("p") or (f"[{item['facet']}]" if "facet" in item else item.get("verb", "")), item["ctx"])
+			for item in value["stale"] if item["src"] == src and "ctx" in item}
+		unscopedStale = {(item["s"], item.get("p") or (f"[{item['facet']}]" if "facet" in item else item.get("verb", "")))
+			for item in value["stale"] if item["src"] == src and "ctx" not in item}
 		unidentified = {item["type"] for item in value["unidentified"] if item["src"] == src}
 		gone: set[str] = set()
 		result: list[dict] = []
 		for key, items in bySlot.items():
 			claim = items[0]
 			if key in present or not claim.get("exists"):
+				continue
+			if (claim["s"], "", claim.get("ctx")) in stale or (claim["s"], "") in unscopedStale:
 				continue
 			if settings.complete == "record":
 				continue
@@ -196,7 +201,7 @@ class Rerun:
 			if key in present or claim.get("exists") or "rel" in claim and "s" in claim:
 				continue
 			owners = subjects(claim)
-			if owners & gone or (claim.get("s"), key[1]) in stale:
+			if owners & gone or (claim.get("s"), key[1], claim.get("ctx")) in stale or (claim.get("s"), key[1]) in unscopedStale:
 				continue
 			if settings.complete == "record" and not owners & produced:
 				continue
@@ -247,7 +252,8 @@ class Rerun:
 		pending = settings.mode == "strict" and bool(run["held"] or changes)
 		# Retracted and held subjects keep their types, even when this run no longer mentions them.
 		known = run["output"]["instances"] | value["log"]["instances"]
-		mentioned = {handle for item in run["output"]["deleted"] + run["admitted"] + [entry["retraction"] for entry in run["held"]] for handle in subjects(item)}
+		mentioned = {handle for item in run["output"]["deleted"] + run["admitted"] + [entry["retraction"] for entry in run["held"]]
+			for handle in subjects(item) | ({item["ctx"]} if "ctx" in item else set())}
 		template = {**value["log"], "instances": dict(sorted((value["log"]["instances"] | {handle: known[handle] for handle in mentioned if handle in known}).items()))}
 		log = outputLog(template, run["output"]["claims"], run["output"]["deleted"] + run["admitted"])
 		report = {"gaps": value["gaps"], "formats": value.get("formats", {}), "fields": value.get("fields"), "stale": value["stale"],

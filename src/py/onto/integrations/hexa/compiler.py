@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 import re
 from typing import Any as AnyValue
 
-from hexa.shapes import Any, Bool, DateOnly, DatePattern, DateTime, Decimal, DecimalText, Location, Null, Origin, Text, Timed, derive, either, gather, loose, optional, parsed, slot, tolerant, via
+from hexa.shapes import Any, Bool, DateOnly, DatePattern, DateTime, Decimal, DecimalText, Location, Null, Origin, Text, Timed, Tuple, derive, either, gather, loose, optional, parsed, rest, slot, tolerant, via
 
 from ...binding.model import Binding, BindingLine, BindingScope
 from ...binding.operations import BUILTIN_RESULTS
@@ -17,6 +17,7 @@ from ...functions.operations import _resolveSignature
 from ...functions.runtime import FunctionEvaluator
 from ...inventory.operations import pascalCase
 from ...ontology.model import Attr, Model, Ontology, ResolvedType, TypeExpr
+from ...mapping.operations import correspondenceScopes, correspondenceTarget
 from ...referential.operations import policyFor
 from ...text import annotation, lastSegment
 from . import vocabulary as V
@@ -118,9 +119,25 @@ def slotName(*parts: str) -> str:
 	return ".".join(segment for part in parts for segment in part.replace("/", ".").split(".") if segment)
 
 
+def isIndex(step: AnyValue) -> bool:
+	return isinstance(step, dict) and "index" in step
+
+
+def relativeStep(step: AnyValue) -> AnyValue:
+	"""A path step in a relative key: a field name, `*` for `[*]`, the position for `[n]`."""
+	if step == EACH:
+		return "*"
+	return step["index"] if isIndex(step) else step
+
+
+def keyStep(step: AnyValue) -> AnyValue:
+	"""The path step of a relative key's step (the inverse of `relativeStep`)."""
+	return EACH if step == "*" else {"index": step} if isinstance(step, int) else step
+
+
 def fieldName(steps: list[AnyValue]) -> str:
-	"""`bond.couponRate` → `BondCouponRate`; `[*]` adds `All`."""
-	return "".join("All" if step == EACH else pascalCase(step) for step in steps) or "Value"
+	"""`bond.couponRate` → `BondCouponRate`; `[*]` adds `All`, `[0]` adds `At0`."""
+	return "".join("All" if step == EACH else f"At{step}" if isinstance(step, int) else pascalCase(step) for step in steps) or "Value"
 
 
 def selectorSegment(step: AnyValue) -> str:
@@ -215,7 +232,14 @@ class ScopeCompiler:
 		self.scope = scope
 		self.name = name
 		self.short = lastSegment(scope.type)
-		self.steps = list(scope.path["path"])
+		# A selector has no index form: from its first index step, a scope path is read by the record's
+		# shape instead (`rows[*][0]` selects `rows/*`, and every line reads below position 0).
+		steps = list(scope.path["path"])
+		first = next((index for index, step in enumerate(steps) if isIndex(step)), len(steps))
+		if EACH in steps[first:]:
+			raise CompileError(V.BindingCodes.PathUnsupported, "Index steps are not supported before '[*]' in a scope path")
+		self.steps = steps[:first]
+		self.prefix = tuple(relativeStep(step) for step in steps[first:])
 		self.positions: dict[tuple, Position] = {}
 		self.reads: dict[tuple, int] = {}
 		self.direct: dict[tuple, tuple[BindingLine, AnyValue]] = {}
@@ -228,10 +252,8 @@ class ScopeCompiler:
 	# --- paths -----------------------------------------------------------------
 
 	def relative(self, steps: list[AnyValue]) -> tuple:
-		for step in steps:
-			if isinstance(step, dict) and "index" in step:
-				raise CompileError(V.BindingCodes.PathUnsupported, "Index steps are not supported")
-		return tuple("*" if step == EACH else step for step in steps)
+		"""The key of a path read from the record: `*` for `[*]`, an integer for `[n]`, below the scope's index prefix."""
+		return self.prefix + tuple(relativeStep(step) for step in steps)
 
 	def countReads(self, expr: Expression | None) -> None:
 		"""First pass: count relative path reads and note `$format` reads."""
@@ -317,7 +339,7 @@ class ScopeCompiler:
 		return result
 
 	def fieldPath(self, key: tuple) -> str:
-		steps = [step for step in self.steps] + [EACH if step == "*" else step for step in key]
+		steps = list(self.steps) + [keyStep(step) for step in key]
 		return printExpression({"path": steps}, binding=True)
 
 	def plan(self) -> None:
@@ -398,7 +420,15 @@ class ScopeCompiler:
 			node[key[-1]] = position
 
 		def build(node: dict, inList: bool) -> AnyValue:
-			return loose({name + "?": value(child, inList) for name, child in node.items()})
+			positions = [name for name in node if isinstance(name, int)]
+			if not positions:
+				return loose({name + "?": value(child, inList) for name, child in node.items()})
+			if len(positions) < len(node):
+				raise CompileError(V.BindingCodes.PathUnsupported, "A value is read both as a list position and as a field")
+			# hexa has no index access: positions are matched by a tuple, positions not read by `Any`
+			# and further items by `rest(Any)`. A list too short fails the tuple: a hole where it is
+			# a field, a gap for the record where it is the record (`rows[*][1]`).
+			return Tuple(*[value(node[index], inList) if index in node else Any for index in range(max(positions) + 1)], rest(Any))
 
 		def value(child: AnyValue, inList: bool) -> AnyValue:
 			nullBranch = child.nulls if isinstance(child, Position) and child.nulls is not None else Null
@@ -428,8 +458,6 @@ class ScopeCompiler:
 		levels: list[list[str]] = [[blockText(self.blocks[0])] if 0 in self.blocks else []]
 		seen = 0
 		for step in steps:
-			if isinstance(step, dict) and "index" in step:
-				raise CompileError(V.BindingCodes.PathUnsupported, "Index steps are not supported")
 			levels[-1].append(selectorSegment(step))
 			if step == EACH:
 				seen += 1
@@ -690,6 +718,7 @@ class Segment:
 	owner: str = ""
 	multi: bool = False
 	next: str | None = None
+	context: str | None = None
 
 
 @dataclass(slots=True)
@@ -701,13 +730,16 @@ class LineInfo:
 	inputs: list[list[str]]
 	source: int = 0
 	also: str | None = None
+	contextual: bool = False
+	contextType: str | None = None
 
 	def sourcePath(self, paths: list[list[str]]) -> list[str]:
 		"""The pointers of the source input's path; none for literals and facets."""
 		return paths[self.source] if 0 <= self.source < len(paths) else []
 
 
-ROOT_KEYS = ("$handle", "$type", "$scope", "$target", "$valid", "$at", "$src")
+ROOT_KEYS = ("$handle", "$type", "$scope", "$target", "$self", "$valid", "$at", "$src")
+SELF = [{"root": True}]
 
 
 def qualifierPair(source: dict[str, str], target: dict[str, str]) -> tuple[dict, dict] | None:
@@ -745,8 +777,6 @@ class MappingScopeCompiler:
 				raise CompileError(V.MappingCodes.ReferenceUnmapped, f"Path '{'.'.join(steps)}' reads through a value")
 			name = steps[index]
 			facet = self.source.facetOf(current, name)
-			if facet is not None and annotation(facet.ann, "ctx"):
-				raise CompileError(V.MappingCodes.ContextUnsupported, f"Contextual facet '{name}' in a mapping")
 			member = f"{name}.{steps[index + 1]}" if facet is not None and index + 1 < len(steps) else name
 			index += 2 if facet is not None and index + 1 < len(steps) else 1
 			attr = self.source.lookup(current, member)
@@ -764,7 +794,8 @@ class MappingScopeCompiler:
 				attr = self.source.lookup(current, member)
 			resolved = self.source.resolveType(attr.type, attr.ann)
 			reference = resolved.kind in ("entity", "relation")
-			result.append(Segment(member, "ref" if reference else "attr", attr, current, isMulti(self.source, attr), resolved.path if reference else None))
+			result.append(Segment(member, "ref" if reference else "attr", attr, current, isMulti(self.source, attr), resolved.path if reference else None,
+				annotation(facet.ann, "ctx") if facet else None))
 			current = resolved.path if reference else None
 		return result
 
@@ -796,6 +827,8 @@ class MappingScopeCompiler:
 
 	def exprType(self, expr: Expression) -> AnyValue:
 		"""The resolved type of an expression, for conversions; None when unknown."""
+		if expr.get("path") == SELF:
+			return self.source.resolveType(TypeExpr(path=self.scope.source))
 		if "path" in expr:
 			segments = self.segments(expr["path"])
 			last = segments[-1]
@@ -822,7 +855,7 @@ class MappingScopeCompiler:
 		"""spec-04 typing conversions that a compile-time check cannot settle."""
 		expected = self.target.resolveType(attr.type, attr.ann)
 		if expected.kind in ("entity", "relation"):
-			return derive(V.Correspond, value) if actual is not None and actual.kind in ("entity", "relation") else value
+			return self.owner.correspond(value, actual.path, [expected.path]) if actual is not None and actual.kind in ("entity", "relation") else value
 		if actual is None:
 			return value
 		if expected.kind == "builtin" and expected.builtin in NUMERIC + ("Duration",):
@@ -839,6 +872,9 @@ class MappingScopeCompiler:
 	# --- expressions -----------------------------------------------------------
 
 	def expression(self, expr: Expression) -> AnyValue:
+		if expr.get("path") == SELF:
+			# `$`: the scope instance, as a reference with its target instances
+			return optional(self.root("$self"))
 		if "path" in expr:
 			return self.pathValue(expr["path"])[0]
 		if "call" in expr:
@@ -863,7 +899,7 @@ class MappingScopeCompiler:
 		if expr is None:
 			return []
 		if "path" in expr:
-			return [expr["path"]]
+			return [] if expr["path"] == SELF else [expr["path"]]
 		if "call" in expr:
 			return [path for index, arg in enumerate(expr["args"]) if not (expr["call"] == "ref" and index == 0) for path in self.paths(arg)]
 		if "coalesce" in expr:
@@ -903,10 +939,14 @@ class MappingScopeCompiler:
 			if attr is not None:
 				value = self.convert(value, actual, attr)
 			elif line.verb:
-				value = derive(V.Correspond, value)
+				accepted = [relation.participants[0 if inverse else 1].type for relation, inverse in self.target.verbs(self.scope.target, line.verb)]
+				value = self.owner.correspond(value, actual.path if actual is not None and actual.kind in ("entity", "relation") else None, accepted)
 			info = LineInfo("links" if line.verb else "values", key, inputs, source, also)
 		if line.when:
 			value = self.condition(line.when, value)
+		info.contextual = any(segment.context for path in inputs for segment in self.segments(path))
+		facet = self.target.facets(self.scope.target).get(line.facet) if line.facet else self.target.facetOf(self.scope.target, info.key)
+		info.contextType = annotation(facet.ann, "ctx") if facet else None
 		return value, info
 
 	def template(self) -> dict[str, AnyValue]:
@@ -922,7 +962,7 @@ class MappingScopeCompiler:
 		if self.scope.valid is not None:
 			record["valid?"] = derive(V.Valid, self.expression(self.scope.valid))
 		if self.scope.ctx is not None:
-			raise CompileError(V.MappingCodes.ContextUnsupported, f"Scope '{self.scope.source} -> {self.scope.target}' sets a context")
+			record["ctx?"] = derive(V.Correspond, self.expression(self.scope.ctx))
 		return record | sections | {"source": Location}
 
 	def handleTemplate(self) -> dict[str, AnyValue]:
@@ -954,7 +994,7 @@ class MappingScopeCompiler:
 		"""Every path the scope reads: `{key: {segment, children}}`, references continuing under their type."""
 		tree: dict = {}
 		paths = [path for line in self.scope.lines for path in self.paths(line.expr) + ([line.when["path"]] if line.when else [])]
-		paths += self.paths(self.scope.valid) + ([self.scope.when["path"]] if self.scope.when else [])
+		paths += self.paths(self.scope.valid) + self.paths(self.scope.ctx) + ([self.scope.when["path"]] if self.scope.when else [])
 		for steps in paths:
 			node = tree
 			for segment in self.segments(steps):
@@ -983,6 +1023,17 @@ class MappingCompiler:
 			attr = self.model.lookup(owner or typePath, attrPath)
 			self.slots[name] = slot(name, valueShape(self.model, attr))
 		return self.slots[name]
+
+	def correspond(self, value: AnyValue, source: str | None, accepted: list[str]) -> AnyValue:
+		"""Translate a reference to `source` through the instance correspondence; with several scope
+		lines for `source`, to the target instance of the type the receiver accepts (spec-04 Instances)."""
+		if source is None or len(correspondenceScopes(self.model, self.mapping, source)) < 2:
+			return derive(V.Correspond, value)
+		try:
+			target = correspondenceTarget(self.model, self.targetModel, self.mapping, source, accepted)
+		except ValueError as error:
+			raise CompileError(V.MappingCodes.ReferenceUnmapped, str(error)) from error
+		return derive(V.CorrespondAs, value, target)
 
 	def policy(self, typePath: str) -> AnyValue:
 		"""`T`'s identity policy when it derives handles here; minted and alternate keys are deferred."""

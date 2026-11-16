@@ -102,7 +102,8 @@ def selectStage(scope: ScopeProgram) -> AnyValue:
 					continue
 				following += [combine(parent, child) for child in found]
 			occurrences = following
-		return occurrences
+		# spec-04: a null value is not present, so a null record makes no instance and no gap
+		return [occurrence for occurrence in occurrences if occurrence["value"] is not None]
 
 	run.__name__ = run.__qualname__ = f"{scope.name}RecordsSelect"
 	owner.append(stage(run))

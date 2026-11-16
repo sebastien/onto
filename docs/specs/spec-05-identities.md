@@ -44,7 +44,7 @@ The `Exchange -> Finance` import of [spec-04](spec-04-mapping.md#example) uses i
 `US0000000019` is `Instrument_US0000000019` whichever feed reports it. A broker
 statement, mapped with the same referential, reports a company by a code of its
 own: not being the exchange, its company is source-qualified,
-`Company_Broker_2FACM`, until a curator links it:
+`Company_Broker_2FCompany_2FACM`, until a curator links it:
 
 ```text
 @obs Finance at=2026-11-12 by=curator:review
@@ -52,22 +52,22 @@ own: not being the exchange, its company is source-qualified,
 @src cu
 @scope Finance
 
-Company_ACME:Company = Company_Broker_2FACM:Company
+Company_ACME:Company = Company_Broker_2FCompany_2FACM:Company
 ```
 
-From then on, claims about `Company_Broker_2FACM` are reported on `Company_ACME`.
+From then on, claims about `Company_Broker_2FCompany_2FACM` are reported on `Company_ACME`.
 People have no shared identifier, so the referential mints their handles and
 records which source record each one came from. Its registry, `market-ids.reg`:
 
 ```text
-Finance/Person	Person_1	alias	Person_Broker_2F884
-Finance/Person	Person_1	alias	Person_Crm_2Fc_2D21
+Finance/Person	Person_1	alias	Person_Broker_2FClient_2F884
+Finance/Person	Person_1	alias	Person_Crm_2FContact_2Fc_2D21
 Finance/Person	Person_1	key:Email	jo@example.org
 ```
 
 The broker's client 884 and the CRM's contact `c-21` share an e-mail address, so
 they are the same person, `Person_1`. The registry is an index of the
-referential's own links (`Person_1 = Person_Broker_2F884 {by=ref:MarketIds}`)
+referential's own links (`Person_1 = Person_Broker_2FClient_2F884 {by=ref:MarketIds}`)
 and of the keys claimed on its canonical handles, so the log alone can rebuild
 it.
 
@@ -122,7 +122,7 @@ handle keeps the key it was derived from.
 | Form | Encoded part | Example |
 | --- | --- | --- |
 | Derived | The primary key's value, in its observations encoding | `Instrument_US0000000019` |
-| Source-qualified | `<scope>/<key>`: the source `@scope` and the source record's key | `Company_Broker_2FACM` |
+| Source-qualified | `<scope>/<S>/<key>`: the source `@scope`, the source record's type and its key | `Company_Broker_2FCompany_2FACM` |
 | Minted | A positive integer, the next unused one for the type in the registry | `Person_1` |
 
 A type's policy fixes which forms its handles take. Changing a policy re-keys
@@ -196,7 +196,7 @@ registered. When an instance found at step 2 or 3 also has a derived handle that
 differs (an ISIN change, a wrong pairing), that is an identity conflict.
 
 Every `alias` registration is also emitted as a link by the referential
-(`Person_1 = Person_Broker_2F884 {by=ref:MarketIds}`), with the run's `at`; an
+(`Person_1 = Person_Broker_2FClient_2F884 {by=ref:MarketIds}`), with the run's `at`; an
 alternate key pairing is the key's claim on the canonical handle.
 
 ### Implicit instances

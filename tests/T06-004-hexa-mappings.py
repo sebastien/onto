@@ -91,10 +91,10 @@ def test_handles_follow_the_referential_or_are_source_qualified():
 	assert correspondence["Issuer_C_2D17"] == "Company_ACME"
 	assert correspondence[BOND] == BOND
 	# Finance/Dividend has no policy: its handle is qualified by the input's scope.
-	assert correspondence["Dividend_US0000000001_2F2026_2D09_2D01"] == "Dividend_Exchange_2FUS0000000001_2F2026_2D09_2D01"
+	assert correspondence["Dividend_US0000000001_2F2026_2D09_2D01"] == "Dividend_Exchange_2FDividend_2FUS0000000001_2F2026_2D09_2D01"
 	assert report.correspondence == correspondence
 	_, result, _, _ = mapped(state(), operator(referential=None))
-	assert result["value"]["correspondence"]["Issuer_C_2D17"] == "Company_Exchange_2FC_2D17"
+	assert result["value"]["correspondence"]["Issuer_C_2D17"] == "Company_Exchange_2FIssuer_2FC_2D17"
 
 
 def test_policies_needing_a_registry_are_unsupported():
@@ -122,7 +122,7 @@ def test_exchange_to_finance_gives_the_spec04_claims():
 		assert line in text
 	data = observationsToJson(log)
 	assert {(claim["at"], claim["by"], data["sources"][claim["src"]]) for claim in data["claims"]} == {("2026-11-11", "map:Exchange->Finance", SRC)}
-	assert values(log, "Dividend_Exchange_2FUS0000000001_2F2026_2D09_2D01")["Payer"] == {"ref": "Company_ACME"}
+	assert values(log, "Dividend_Exchange_2FDividend_2FUS0000000001_2F2026_2D09_2D01")["Payer"] == {"ref": "Company_ACME"}
 	assert report.gaps == [] and report.mixed == []
 
 

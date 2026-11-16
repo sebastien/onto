@@ -147,7 +147,7 @@ def test_projection_to_csv_and_reading_back_through_the_reverse_mapping():
 	program = backward.compile(reverse)
 	trades, report = backward.result(program, asyncio.run(run(CLOCK, program.stages.MappingRead, readState(SHEET, SHEET_BINDING, rows, "sheet:1"))))
 	text = printObservationsState(FINANCE, reconcileObservations(FINANCE, trades))
-	assert "Trade_Sheet_2F2024_2D03_2D01_2FUS0000000001_2FBuy:Trade {valid=2024-03-01, by=map:Sheet->Finance}" in text
+	assert "Trade_Sheet_2FPositionRow_2F2024_2D03_2D01_2FUS0000000001_2FBuy:Trade {valid=2024-03-01, by=map:Sheet->Finance}" in text
 	assert "  Instrument Instrument_US0000000001" in text and "  Quantity 100" in text and "  Side Buy" in text
 	assert report.gaps == []
 

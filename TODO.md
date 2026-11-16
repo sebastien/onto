@@ -839,8 +839,9 @@ conformance audit and review; the user approved starting this handoff.
      spec-02 text also asserts existence, so JSON otherwise fails its round trip.
   8. **Resolved (2026-11-16):** writing formats include `decimals:N`, `padded`,
      `case:upper`, `case:lower` and `trim`, with padding taking precedence over case.
-- Still deferred: contextual facets in mappings, registry identities (minted,
-  alternate keys), index steps, `key=A,B` policies, hexa-side conformance runner.
+- Still deferred: registry identities (minted, alternate keys), index steps,
+  `key=A,B` policies, hexa-side conformance runner. Contextual mappings are
+  implemented below.
 
 ### Integration deviation review (2026-11-16)
 
@@ -875,11 +876,94 @@ conformance audit and review; the user approved starting this handoff.
   contract: null takes precedence. `T06-004` tests both input orders, unknown
   without null, input purity and facet/existence ordinals with shared and
   different provenance.
-- Next: contextual mapping facets. Keep compile guards until context-aware
-  indexing, per-context unfolding, correspondence-based context translation,
-  claim emission and stale-slot reporting work together; removing the guards
-  alone would merge separate contexts into a single input slot. Then continue
-  with registry identities and index paths.
+- Contextual mapping facets are implemented below. Next: registry identities
+  and index paths.
+
+### Contextual mappings implemented (2026-11-16)
+
+- Mapping paths retain their contextual facet type. Attribute-slot selection
+  filters by context; finite reach discovers contexts through references.
+  Global lines emit once; contextual reads unfold in source-context handle order,
+  with no cross-context value mixing. Contextual scope conditions and metadata
+  expressions run per context. Identical existence claims are not repeated.
+- Contexts translate through the instance correspondence. Scope `ctx=` replaces
+  the inherited context; conflicting override inputs cannot be hidden by
+  coalescing. Only contextual facet/attribute claims carry `ctx`, never existence
+  or non-contextual claims. Context-only handles retain types without synthetic
+  existence. Missing correspondence produces gaps instead of context-free claims.
+- Re-running matches stale slots by output context and actual source-input
+  provenance. It can retain one context while retracting another. Scope-condition
+  conflicts protect existence and affected slots. Failed conflict variants are
+  reported and held stale, not silently withdrawn. Retractions retain context
+  registry types even if the new input no longer names them.
+- `tests/T06-006-hexa-contexts.py`: 19 regressions, including input purity,
+  reference reach, collections, null/unknown/zero, conditional facets, explicit
+  contexts, context-only instances, conflicts, mixed sources and re-running.
+  Spec-06 now documents the execution path; no hexa changes or dependencies.
+  Full `make test`: **1,462 passed** on Python 3.15; `git diff --check` passes.
+  Python 3.14 validation remains outstanding.
+
+### Index steps implemented (2026-11-17)
+
+- Needed by the AdviceLink CRM API (adviceos-data), which returns related rows
+  as 2-element arrays (`[member, client]`); without index steps neither half
+  could be bound. No hexa change: hexa spec-004 rules out index access and
+  matches fixed positions with `Tuple` and `rest`, which serves this case.
+- A scope path's selector stops before its first index step; the rest prefixes
+  every path its lines read (`rows[*][0]` selects `rows/*`). Relative keys hold
+  positions as integers; a node of positions compiles to `Tuple(..., rest(Any))`
+  with `Any` where unread. `Onto.Field` indexes lists, for paths read below a
+  captured field. Field slots name positions `At<n>`.
+- Still unsupported: an index step before `[*]` in a scope path, and a value read
+  both as a position and as a field (`Binding.PathUnsupported`). Writing is
+  unchanged.
+- `tests/T06-007-hexa-index-steps.py`: 7 tests (selectors, tuple shapes, pairs
+  read into two types, body positions, short lists, missing positions, the two
+  unsupported cases). `T06-001`'s unsupported-index test now covers `a[0].b[*]`.
+  Spec-06 Selector, Shape and Deferred updated. Full `make test`: **1,469 passed**.
+- Two spec-04 conformance fixes found binding the same API, in
+  `tests/T06-008-hexa-binding-values.py` (5 tests):
+  - `ref(Type, key)` applies to each member of a collection key (`ref(Adviser,
+    advisers[*].id)` into a multi-valued attribute), as spec-04 requires of any
+    function given a collection; it gave `Ref.TypeMismatch`.
+  - A selected record that is JSON `null` makes no instance and no gap (spec-04
+    presence); it was a `TypeMismatch` gap. Documented in spec-06 Selector.
+  Full `make test`: **1,474 passed**.
+
+### Type-directed instance correspondence (2026-11-17)
+
+- Approved by the user while mapping the AdviceLink CRM to AdviceOS: a client row
+  is both a `Society/Person` and a `Client/Relationship`, and spec-04 made any
+  reference to a source type with several `->` lines an error.
+- spec-04 Instances: each `->` line makes its own target instance; a reference
+  translates through the line whose target type the receiving attribute, role or
+  verb accepts (or one it specialises); several or none fitting is an error (two
+  lines to the same type stay ambiguous). `$` alone in a mapping is the scope
+  instance as a reference (`Client <- $`), so a second scope can name the first
+  scope's target instance.
+- Static: `mapping.operations.correspondenceTarget` (shared with the compiler),
+  `translate(inferred, accepted)`, `acceptedTypes`. `$` parses in mappings only
+  alone; coverage ignores it.
+- Runtime: `HandlesResolve` keeps `targets[source][targetType]` beside the
+  first-scope `correspondence`; `$target` is per scope; references to such
+  instances carry `targets`; `Onto.CorrespondAs(value, type)`; `$self` root when
+  a scope reads `$`. Spec-06 updated.
+- `tests/T06-009-hexa-mapping-correspondence.py` (6 tests); `T04-001` now accepts
+  `$` alone in mappings. Full `make test`: **1,481 passed**.
+- Found running the AdviceLink mapping:
+  - A reference to an instance its scope's `when` skips had no type in the
+    output log (`observationsFromJson` failed on the untyped handle). References
+    now carry their target type (`targetType`; `Correspond`/`CorrespondAs` keep
+    it), so such targets are typed implicit instances; links record it too.
+  - Source-qualified handles (approved by the user): `<T>_` + enc(`<scope>/<S>/<key>`),
+    adding the source type, since two source types mapped to one target type
+    (a CRM client and user with the same id) produced one handle. Spec-04,
+    spec-05 examples and spec-06 updated; handle assertions in `T06-004`,
+    `T06-005`, `T06-006` and `T06-009` updated to the new form.
+  Full `make test`: **1,482 passed**.
+- `Onto.CorrespondAs` returned hexa's missing marker for an absent reference
+  instead of `ABSENT_VALUE`, failing the record's template (`Issue.Mismatch`).
+  `T06-009` covers an absent reference. Full `make test`: **1,483 passed**.
 
 Work in this order; each step is test-first and leaves `make test` green.
 

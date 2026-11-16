@@ -53,6 +53,37 @@ def instanceType(model: Model, path: str) -> bool:
 	return decl is not None and (decl.kind == "entity" or isAssociation(decl))
 
 
+def correspondenceScopes(model: Model, mapping: Mapping, source: str) -> list[MappingScope]:
+	"""The scope lines giving instances of `source` (or a type it specialises) their target instances."""
+	return [scope for scope in mapping.scopes if source == scope.source or model.isA(source, scope.source)]
+
+
+def correspondenceTarget(model: Model, targetModel: Model, mapping: Mapping, source: str, accepted: list[str] | None) -> str | None:
+	"""The target type a reference to `source` translates to (spec-04 Instances).
+
+	With one scope line for `source`, its target. With several, the one whose target type the
+	receiving attribute, role or verb accepts (`accepted`, a type or one it specialises). None
+	without a scope line; ValueError when several fit, or none does.
+	"""
+	scopes = correspondenceScopes(model, mapping, source)
+	if len(scopes) > 1:
+		# Scope lines, not types: two lines to the same target type are still ambiguous
+		fitting = [scope.target for scope in scopes if accepted and any(scope.target == item or targetModel.isA(scope.target, item) for item in accepted)]
+		if len(fitting) != 1:
+			targets = ", ".join(sorted({scope.target for scope in scopes}))
+			raise ValueError(f"Ambiguous instance correspondence for '{source}': {'several' if fitting else 'none'} of {targets} {'fit' if fitting else 'fits'} the target")
+		return fitting[0]
+	return scopes[0].target if scopes else None
+
+
+def acceptedTypes(targetModel: Model, owner: str, name: str, attr: Any) -> list[str]:
+	"""The instance types a target attribute, role or verb `name` of `owner` accepts."""
+	if attr is not None:
+		resolved = targetModel.resolveType(attr.type, attr.ann)
+		return [resolved.path] if resolved.kind in ("entity", "relation") else []
+	return [relation.participants[0 if inverse else 1].type for relation, inverse in targetModel.verbs(owner, name)]
+
+
 def checkElement(model: Model, path: str) -> None:
 	if model.get(path):
 		return
@@ -91,6 +122,9 @@ class MappingExpressionResolver(ExpressionResolver):
 		self.localMaps = {decl.path: decl for decl in mapping.maps}
 
 	def resolve(self, expr: dict[str, Any]) -> Inferred:
+		if expr.get("path") == [{"root": True}]:
+			# `$`: a reference to the scope instance, translated like any reference
+			return self.model.resolveType(TypeExpr(path=self.owner)), False
 		if "path" in expr:
 			return self.path(expr["path"])
 		if expr.get("call") == "ref":
@@ -150,15 +184,18 @@ class MappingExpressionResolver(ExpressionResolver):
 		checkAssignment(self.model, (actual, False), self.model.resolveType(TypeExpr(path=decl.mapFrom)), True, decl.path)
 		return self.targetModel.resolveType(TypeExpr(path=decl.mapTo)), plural
 
-	def translate(self, inferred: Inferred) -> Inferred:
+	def translate(self, inferred: Inferred, accepted: list[str] | None = None) -> Inferred:
+		"""A source reference's type as the target sees it, through the instance correspondence.
+
+		`accepted` are the target types the receiving attribute, role or verb accepts, which choose
+		among several scope lines for the source type.
+		"""
 		kind, plural = inferred
 		if kind is None or kind.kind not in ("entity", "relation"):
 			return inferred
-		scopes = [scope for scope in self.mapping.scopes if kind.path == scope.source or self.model.isA(kind.path, scope.source)]
-		if len(scopes) > 1:
-			raise ValueError(f"Ambiguous instance correspondence for '{kind.path}'")
-		if scopes:
-			return self.targetModel.resolveType(TypeExpr(path=scopes[0].target)), plural
+		target = correspondenceTarget(self.model, self.targetModel, self.mapping, kind.path, accepted)
+		if target is not None:
+			return self.targetModel.resolveType(TypeExpr(path=target)), plural
 		if kind.path.startswith(self.mapping.toNamespace + "/") and self.mapping.toNamespace != self.mapping.fromNamespace:
 			return inferred
 		self.diag.warn("reference", f"No instance correspondence for '{kind.path}'; these references produce run-time gaps", self.loc)
@@ -314,7 +351,7 @@ def resolveMapping(fromOntology: Ontology, toOntology: Ontology, doc: MappingDoc
 				if facet and (expectedContext := annotation(facet.ann, "ctx")):
 					if scope.ctx is None and not contextsRead:
 						raise ValueError("A contextual target requires ctx or a contextual input claim")
-					values = [context] if scope.ctx is not None else [resolver.translate((model.resolveType(TypeExpr(path=path)), False)) for path in contextsRead]
+					values = [context] if scope.ctx is not None else [resolver.translate((model.resolveType(TypeExpr(path=path)), False), [expectedContext]) for path in contextsRead]
 					for value in values:
 						checkAssignment(model, value, targetModel.resolveType(TypeExpr(path=expectedContext)), False, "target context")
 				if line.facet:
@@ -324,7 +361,7 @@ def resolveMapping(fromOntology: Ontology, toOntology: Ontology, doc: MappingDoc
 				attr = targetModel.lookup(scope.target, name)
 				if attr and inferred[0] is not None and inferred[0].kind in ("entity", "relation") and targetModel.resolveType(attr.type).kind not in ("entity", "relation"):
 					raise ValueError(f"{name}: incompatible reference expression for a scalar target")
-				inferred = resolver.translate(inferred)
+				inferred = resolver.translate(inferred, acceptedTypes(targetModel, scope.target, name, attr))
 				if attr:
 					checkAssignment(model, inferred, targetModel.resolveType(attr.type, attr.ann), (attr.card or targetModel.defaultCard) in ("*", "+"), name)
 				else:

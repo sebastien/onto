@@ -136,10 +136,15 @@ def testMalformedExpressionsAreRejected(text: str):
 		parseExpression(text, binding=True)
 
 
-@pytest.mark.parametrize("text", ["a[*]", "a[0]", "$", "$.a", "^", "^.a", 'row."quoted"', '"quoted".field', "$format"])
+@pytest.mark.parametrize("text", ["a[*]", "a[0]", "$.a", "$[*]", "^", "^.a", 'row."quoted"', '"quoted".field', "$format"])
 def testMappingExpressionsRejectDocumentOnlySyntax(text: str):
 	with pytest.raises(ValueError):
 		parseExpression(text)
+
+
+def testMappingDollarAloneIsTheScopeInstance():
+	assert parseExpression("$") == {"path": [{"root": True}]}
+	assert printExpression({"path": [{"root": True}]}) == "$"
 
 
 @pytest.mark.parametrize("text", ["$valid", "$at", "$src", "a[-1]", "a[1.0]", "a[]", "[*]", "a.^", "a.$", "$.$", '"".a'])

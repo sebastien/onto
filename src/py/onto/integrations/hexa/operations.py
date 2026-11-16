@@ -161,8 +161,15 @@ class HexaMappingOperator:
 			handleTemplate = item.handleTemplate()
 			scope = ScopeProgram(item.name, item.scope.target, "", item.shape(), template, source=item.scope.source)
 			paths = [steps for info in item.lines for steps in info.inputs] + ([item.scope.when["path"]] if item.scope.when else [])
+			scopePaths = item.paths(item.scope.ctx) + item.paths(item.scope.valid) + ([item.scope.when["path"]] if item.scope.when else [])
+			contextualScope = any(segment.context for path in scopePaths for segment in item.segments(path))
+			if contextualScope:
+				for info in item.lines:
+					info.contextual = True
 			plans.append(MappingScopePlan(item.name, item.scope.source, item.scope.target, item.reach(), item.lines, item.scope.when, handleTemplate, scope,
-				{(info.section, info.key): info for info in item.lines}, {tuple(steps): [segment.key for segment in item.segments(steps)] for steps in paths}))
+				{(info.section, info.key): info for info in item.lines}, {tuple(steps): [segment.key for segment in item.segments(steps)] for steps in paths},
+				item.scope.ctx is not None, contextualScope,
+				[[segment.key for segment in item.segments(path)] for path in item.paths(item.scope.ctx)], "$self" in item.roots))
 		scopes = [plan.program for plan in plans]
 		program = MappingProgram(self.fromOntology, self.toOntology, mapping, self.mode, dict(compiler.slots), {scope.name: scope.shape for scope in scopes},
 			{scope.name: scope.template for scope in scopes}, sorted(compiler.used), StageNamespace({}), scopes,
