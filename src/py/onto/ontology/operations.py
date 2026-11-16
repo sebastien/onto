@@ -24,6 +24,7 @@ from .formatter import (
 )
 from .model import (
 	ANNOTATION_PLACES,
+	LAYERINGS,
 	Attr,
 	Decl,
 	IDENTIFIERS,
@@ -258,6 +259,86 @@ def _checkViewCycles(model: Model, diag: Diagnostics) -> None:
 				pending += includes(model.index[path])
 
 
+def _typeRefs(type: TypeExpr | None) -> list[str]:
+	"""Declaration paths a type expression refers to: a named type, or the owner of a reused attribute."""
+	return [type.path] if type and type.path else []
+
+
+def _attrRefs(attrs: list[Attr] | None) -> list[tuple[str, Loc | None]]:
+	"""Declaration paths attributes refer to, through their types and derived inputs."""
+	refs: list[tuple[str, Loc | None]] = []
+	for attr in attrs or []:
+		refs += [(path, attr.loc) for path in _typeRefs(attr.type)]
+		refs += [(dep.path, attr.loc) for dep in attr.deps or [] if dep.path]
+	return refs
+
+
+def _declRefs(decl: Decl) -> list[tuple[str, Loc | None]]:
+	"""Declaration paths `decl` refers to. Vocabulary values, map line values and docs are not references."""
+	refs: list[tuple[str, Loc | None]] = []
+	if decl.kind == "type":
+		refs += [(path, decl.loc) for path in _typeRefs(decl.definition)]
+		refs += _attrRefs(decl.fields)
+	elif decl.kind == "map":
+		refs += [(path, decl.loc) for path in (decl.mapFrom, decl.mapTo) if path]
+	else:
+		refs += [(path, decl.loc) for path in (decl.base, decl.subject) if path]
+		refs += [(participant.type, decl.loc) for participant in decl.participants]
+		refs += [(value, decl.loc) for key, value in decl.ann if key in ("ctx", "context") and isinstance(value, str)]
+		refs += _attrRefs(decl.attrs)
+	return refs
+
+
+def _checkLayering(model: Model, diag: Diagnostics) -> None:
+	"""Under `layering=declared`, an element refers only to its own domain and the domains declared before it."""
+	ontology = model.ontology
+	layering = dict(ontology.header).get("layering")
+	if layering is None:
+		return
+	if layering not in LAYERINGS:
+		diag.error("header", f"Invalid layering '{layering}'", None)
+		return
+	# NOTE: The Meta domain (spec-01) is generated, refers to no other domain, and ranks first wherever it is declared.
+	meta = f"{ontology.namespace}/Meta"
+	domains = [decl for decl in ontology.decls if decl.kind == "domain" and decl.path != meta]
+	files = {decl.loc.file for decl in domains if decl.loc}
+	if len(files) > 1:
+		diag.error("layering", "Under layering=declared, all @domain lines must be in one file: " + ", ".join(sorted(str(name) for name in files)), domains[-1].loc)
+		return
+	rank = {decl.path: index for index, decl in enumerate(domains)}
+	if model.get(meta):
+		rank[meta] = -1
+	prefix = f"{ontology.namespace}/"
+
+	def domainOf(path: str | None) -> str | None:
+		if not path or not path.startswith(prefix):
+			return None
+		head = f"{prefix}{path[len(prefix):].split('/')[0].split('.')[0]}"
+		return head if head in rank else None
+
+	def later(*paths: str | None) -> str | None:
+		known = [domain for domain in map(domainOf, paths) if domain]
+		return max(known, key=rank.__getitem__) if known else None
+
+	for decl in ontology.decls:
+		if decl.kind in ("domain", "view"):
+			continue
+		# NOTE: A binary relation is contributed by the latest of its two ends and its context, whatever its `S.verb.T` path starts with.
+		context = annotation(decl.ann, "context")
+		ends = [item.type for item in decl.participants] + ([context] if isinstance(context, str) else [])
+		own = later(*ends) if decl.kind == "relation" and decl.arrow else domainOf(decl.path)
+		if not own:
+			continue
+		for path, loc in _declRefs(decl):
+			target = domainOf(path)
+			if target and rank[target] > rank[own]:
+				diag.error(
+					"layering",
+					f"'{lastSegment(own)}' is declared before '{lastSegment(target)}': '{decl.path}' cannot refer to '{path}'",
+					loc or decl.loc,
+				)
+
+
 def _validate(model: Model, diag: Diagnostics) -> None:
 	ontology = model.ontology
 	for decl in ontology.decls:
@@ -313,6 +394,7 @@ def _validate(model: Model, diag: Diagnostics) -> None:
 		elif decl.kind == "map":
 			_validateMap(model, decl, diag)
 	_checkViewCycles(model, diag)
+	_checkLayering(model, diag)
 	# NOTE: A verb read from an entity must identify one relation for any compatible object type.
 	uses: list[tuple[str, str, str, Decl]] = []
 	for decl in ontology.decls:

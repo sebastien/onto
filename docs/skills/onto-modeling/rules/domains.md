@@ -46,6 +46,11 @@ When two domains at the same level each need the other's type, move the shared
 type down to the lower domain both already use. The `@use` lines of a file are
 its dependency list: read them to check the direction.
 
+Within one ontology, declare the domains in that order, all in one file, and
+set `@ontology <Name> layering=declared` on every file: `onto check` then reports
+any reference to a later domain. A binary relation belongs to the later of its
+ends (and its `context`), so the later domain declares it.
+
 ## 8.2 A concept lives where it is generic
 
 Put a concept in the lowest domain where it makes sense on its own. Height is a

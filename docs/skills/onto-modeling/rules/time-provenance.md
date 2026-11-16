@@ -228,6 +228,9 @@ Answer(Question, Respondent: Customer) {kind=event}
 
 When a question populates an attribute, link it to the ontology through the
 `Meta` domain (`onto meta`) rather than copying the attribute's path as text.
+With the `Meta` declarations loaded (`onto meta --decl`), `onto check` resolves
+those links and any `Meta/Path` value, so renaming an attribute breaks the
+question instead of leaving a dangling reference.
 
 ## 6.4 Doc strings define; they do not defend
 

@@ -97,6 +97,7 @@ Customs/Code = C6109|C0808|...
 | `@map M From -> To` + body | Value map: `exact`, `broader`, `narrower`, `related` |
 | `@view V` + body | View |
 | `@domain D` | Domain: a top-level namespace segment |
+| `@ontology N layering=declared` | Domains declared in dependency order; `onto check` reports references to later ones |
 
 Built-in types: `Text`, `Integer`, `Number`, `Boolean`, `Date`, `DateTime`,
 `Duration`, `Amount`, `Percent`.

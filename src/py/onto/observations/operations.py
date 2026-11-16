@@ -333,7 +333,16 @@ def resolveObservations(ontology: Ontology, doc: ObservationsDocument, mode: str
 	"""Type parsed `doc`; lenient mode holds semantically invalid statements as gaps."""
 	if mode not in ("strict", "lenient"):
 		raise ValueError("mode must be strict or lenient")
-	return _Resolver(ontology, doc).resolve(mode)
+	observations = _Resolver(ontology, doc).resolve(mode)
+	# NOTE: Imported here: `meta` builds on the observations formatter.
+	from ..meta import checkMetaReferences
+
+	diagnostics = checkMetaReferences(ontology, observations, doc)
+	if not diagnostics:
+		return observations
+	if mode == "strict":
+		raise FormatError(list(observations.diagnostics) + diagnostics)
+	return replace(observations, diagnostics=list(observations.diagnostics) + diagnostics)
 
 
 def loadObservations(ontology: Ontology, source: Source, mode: str = "strict") -> Observations:

@@ -360,7 +360,10 @@ def normaliseOntology(ontology: Ontology) -> Ontology:
 	facets = byPath("facet")
 	relations = byPath("relation")
 	relationPaths = {decl.path for decl in relations}
-	ordered = byPath("domain") + byPath("type")
+	# NOTE: Under `layering=declared` the order of domains is their dependency order, so it is kept.
+	layered = dict(ontology.header).get("layering") == "declared"
+	domains = [decl for decl in decls if decl.kind == "domain"] if layered else byPath("domain")
+	ordered = domains + byPath("type")
 	placed: set[str] = set()
 	for entity in byPath("entity"):
 		ordered.append(entity)

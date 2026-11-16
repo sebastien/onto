@@ -37,6 +37,7 @@ from .model import (
 	Dep,
 	HEADER_DEFAULTS,
 	HEADER_KEYS,
+	LAYERINGS,
 	MATCHES,
 	MapLine,
 	ONTOLOGY_FORMAT,
@@ -371,6 +372,8 @@ def _parseDirective(line: Line, position: int, ctx: _Context, ontology: Ontology
 				diag.error("header", f"Invalid cards status '{value}'", loc)
 			elif key == "rel" and not RE_COUNTS.fullmatch(value):
 				diag.error("header", f"Invalid relation counts '{value}'", loc)
+			elif key == "layering" and value not in LAYERINGS:
+				diag.error("header", f"Invalid layering '{value}'", loc)
 		ctx.namespace = namespace
 		if ontology.namespace is None:
 			ontology.namespace, ontology.header = namespace, header

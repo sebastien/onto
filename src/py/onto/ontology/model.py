@@ -53,7 +53,8 @@ ANNOTATION_PLACES: dict[str, set[str] | None] = {
 	"elided": {"vocabulary"},
 }
 ANNOTATION_KEYS = list(ANNOTATION_PLACES)
-HEADER_KEYS = ["rev", "src", "card", "cards", "rel"]
+HEADER_KEYS = ["rev", "src", "card", "cards", "rel", "layering"]
+LAYERINGS = ("declared",)
 HEADER_DEFAULTS = {"card": "?", "cards": "stated", "rel": "*:*"}
 IDENTIFIERS = ("key", "narrow", "broad", "none")
 MATCHES = ("exact", "broader", "narrower", "related")

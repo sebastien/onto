@@ -6,6 +6,8 @@ import re
 
 from .observations.formatter import printText
 from .ontology import BUILTINS, MULTI, Attr, Decl, Model, Ontology, TypeExpr
+from .observations.model import Observations, ObservationsDocument
+from .text import Diagnostic, Diagnostics, Loc
 
 # -----------------------------------------------------------------------------
 #
@@ -203,6 +205,69 @@ def metaObservations(ontology: Ontology) -> str:
 	return MetaWriter(ontology).write()
 
 
-__all__ = ["META_DOMAIN", "metaDeclarations", "metaObservations"]
+RE_RECORD = re.compile(rf"^(\S+):{META_DOMAIN}/(\w+)$")
+RE_PATH = re.compile(r"^  Path (\S+)$")
+META_RECORDS = ("Concept", "Attribute", "Dimension")
+
+
+def metaHandles(ontology: Ontology, text: str | None = None) -> set[tuple[str, str]]:
+	"""The `(handle, record type)` pairs that `onto meta` generates for `ontology`, or finds in its output `text`."""
+	lines = (metaObservations(ontology) if text is None else text).splitlines()
+	return {(match.group(1), match.group(2)) for line in lines if (match := RE_RECORD.match(line))}
+
+
+def metaPaths(ontology: Ontology, text: str | None = None) -> set[str]:
+	"""The `Path` values that `onto meta` generates for `ontology`, or finds in its output `text`."""
+	lines = (metaObservations(ontology) if text is None else text).splitlines()
+	return {match.group(1) for line in lines if (match := RE_PATH.match(line))}
+
+
+def resolvesMetaPath(model: Model, value: str, paths: set[str] | None = None) -> bool:
+	"""Whether `value` names an element of the ontology: a path `onto meta` generates (`paths`), a declaration,
+	or an attribute, facet attribute, role or structure field under a declaration."""
+	if value in (metaPaths(model.ontology) if paths is None else paths) or value in BUILTINS or model.get(value):
+		return True
+	namespace = model.ontology.namespace or ""
+	if model.get(f"{namespace}/{value}"):
+		return True
+	head, _, rest = value.partition(".")
+	return bool(rest) and model.get(f"{namespace}/{head}") is not None and model.lookup(f"{namespace}/{head}", rest) is not None
+
+
+def checkMetaReferences(ontology: Ontology, observations: Observations, doc: ObservationsDocument) -> list[Diagnostic]:
+	"""Errors for `Meta` instances that `onto meta` does not generate and `Meta/Path` values naming no element.
+
+	Applies only when `ontology` declares the `Meta` domain; `doc` gives the locations of the statements."""
+	model = Model(ontology)
+	namespace = ontology.namespace or ""
+	if not model.get(f"{namespace}/{META_DOMAIN}"):
+		return []
+	diag = Diagnostics()
+	instances, statements = observations.instances, {statement.n: statement for statement in doc.statements}
+
+	def located(handle: str) -> Loc | None:
+		token = re.compile(rf"(?<![\w]){re.escape(handle)}(?![\w])")
+		return next((statement.loc for statement in doc.statements if token.search(statement.rawLine or statement.text)), None)
+
+	records = {f"{namespace}/{META_DOMAIN}/{name}": name for name in META_RECORDS}
+	text = metaObservations(ontology)
+	generated, paths = metaHandles(ontology, text), metaPaths(ontology, text)
+	for handle, instance in sorted(instances.items()):
+		record = records.get(str(instance.get("type")))
+		if record and (handle, record) not in generated:
+			diag.error("meta.unresolved", f"'{handle}' is not a {META_DOMAIN}/{record} of this ontology", located(handle))
+	pathType = f"{namespace}/{META_DOMAIN}/Path"
+	for claim in observations.claims:
+		value, owner = claim.get("v"), instances.get(claim.get("s", ""), {}).get("type")
+		if not isinstance(value, str) or "p" not in claim or not isinstance(owner, str):
+			continue
+		attr = model.lookup(owner, claim["p"])
+		final = model.typeDecl(attr.type) if attr else None
+		if final and final.path == pathType and not resolvesMetaPath(model, value, paths):
+			diag.error("meta.path", f"'{value}' names no element of this ontology", statements[claim["n"]].loc if claim["n"] in statements else None)
+	return diag.items
+
+
+__all__ = ["META_DOMAIN", "checkMetaReferences", "metaDeclarations", "metaHandles", "metaObservations", "metaPaths", "resolvesMetaPath"]
 
 # EOF

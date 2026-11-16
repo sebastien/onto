@@ -149,6 +149,7 @@ Trade(Account, Counterparty: * Party, Instrument, Trader: + Person) {kind=event}
 | `card` | Default attribute cardinality | `?` |
 | `cards` | Evidence status of cardinalities: `stated`, `inferred`, `assumed` | `stated` |
 | `rel` | Default binary relation counts (`L:R`) | `*:*` |
+| `layering` | `declared`: the order of `@domain` lines is the dependency order of the domains ([layering](#layering)) | none |
 
 An ontology may span several files with the same `@ontology` namespace and `rev`.
 Their declarations are combined; duplicate declarations are errors. This keeps
@@ -160,6 +161,41 @@ Aliases are file-local.
 `@domain Name` declares a domain `Namespace/Name`. `Name` is a single name (no
 `/`); the directive has no body. An element whose first path segment (relative to
 its namespace) is a declared domain belongs to that domain.
+
+### Layering
+
+With `@ontology ... layering=declared`, domains are declared from the most
+generic to the most specific, and an element refers only to its own domain and
+the domains declared before it:
+
+```text
+@ontology Finance layering=declared
+@domain Party
+@domain Lending
+
+Party/Person
+Lending/Loan
+  Borrower Party/Person                         -- Allowed: Party is declared before Lending
+Party/Person -owes-> Lending/Loan               -- Allowed: contributed by Lending, the later end
+```
+
+- References are the types of attributes and fields, derived inputs, bases,
+  facet subjects, `ctx` and `context` annotations, relation participants, and
+  the vocabularies a map connects. Vocabulary values (including hierarchical
+  paths that happen to name a domain), map line values and docs are not
+  references. Views are exempt: they slice the ontology across domains.
+- A binary relation belongs to the latest of its two ends and its `context`,
+  whatever its `S.verb.T` path starts with: a domain adds relations from earlier
+  concepts to its own. Other elements belong to the domain of their path.
+- Elements outside any declared domain, and references to them, are not
+  checked.
+- All `@domain` lines are in one file, so that their order is unambiguous. The
+  [`Meta` domain](#meta-domain) is generated, refers to no other domain, and
+  ranks first wherever it is declared.
+- Normal form keeps the domains in their declared order.
+
+A reference to a later domain is an error (`layering`). The header applies to
+every file of the ontology, like the other defaults.
 
 ### Name resolution
 
@@ -515,7 +551,7 @@ The formatter produces one canonical text per ontology; formatting it again
 changes nothing. Diffs compare normal forms.
 
 1. `@ontology`, then `@use` lines sorted by alias.
-2. Domains.
+2. Domains, sorted by path; in declared order under `layering=declared`.
 3. Types.
 4. Entities; each followed by its facets.
 5. Relations (binary shorthand sorts by its `S.verb.T` path); each association
@@ -730,6 +766,19 @@ namespace and header); `onto meta` prints the instances as
 - `Description` is the element's doc string.
 - Inherited attributes are not repeated on specialisations, structure fields
   are not described, and the `Meta` domain describes itself as any other domain.
+
+When an ontology declares the `Meta` domain (`onto meta --decl`), observations
+checked against it may refer to its records, e.g. a question that
+`populates Person__Email:Meta/Attribute`. Such references are checked against
+what `onto meta` generates for the ontology:
+
+- an instance typed `Meta/Concept`, `Meta/Attribute` or `Meta/Dimension` must be
+  a record `onto meta` generates with that type (`meta.unresolved`), so renaming
+  `Person.Email` breaks the observations that refer to it;
+- a value of type `Meta/Path` must name an element (`meta.path`): a path
+  `onto meta` generates, a declaration, or an attribute, facet attribute, role
+  or structure field under a declaration (`Address.Street`, a field that has no
+  record of its own).
 
 ## Changes
 

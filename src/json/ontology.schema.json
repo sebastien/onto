@@ -19,7 +19,8 @@
         "default": { "$ref": "#/$defs/token" },
         "layer": { "$ref": "#/$defs/name" },
         "cards": { "enum": ["stated", "inferred", "assumed"] },
-        "rel": { "$ref": "#/$defs/counts" }
+        "rel": { "$ref": "#/$defs/counts" },
+        "layering": { "enum": ["declared"] }
       }
     },
     "uses": {
