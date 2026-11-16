@@ -454,7 +454,16 @@ reuse existing machinery; 5, 6 and 7 add syntax.
     which of the two (generated concept versus required `valid=`); where a
     reason or actor goes; this is open decision 3 of the AdviceOS review.
 
-5. **A later domain cannot add values to an earlier vocabulary** (rule 2.7;
+5. **Implemented (2026-11-16): spec-01 "Extensions", `T01-010`.** Syntax changed
+   from `T += A|B` to a vocabulary of the contributing domain,
+   `Nz/IncomeMeasure = Paye|Esct {extends=Finance/Income/Measure}`: `+=` had no
+   place to record the contributing domain, as files are not tied to domains.
+   Decided: open targets only; the extension is closed and not itself extended;
+   values must be new; children under existing values allowed (ancestors
+   repeated); `{ordered}` appends; flat and hierarchical do not mix; text and
+   JSON keep the extension as written, the merge is a reading (`resolveType`,
+   maps, observations, `onto meta` values) and `onto meta` adds
+   `Meta/Dimension -extends->`. **A later domain cannot add values to an earlier vocabulary** (rule 2.7;
    workaround: generic values renamed, country names in comments, or a
    country vocabulary with an `@map` to the generic one). Proposal:
    `Finance/Income/Measure += Paye|Esct -- NZ income measures` in a later
@@ -480,7 +489,7 @@ reuse existing machinery; 5, 6 and 7 add syntax.
    (type check), spec-01 "Facets". Open: one condition or several; conditions
    on attribute values (`when=Type:Joint`) are not proposed.
 
-7. **A structure cannot say "exactly one of these fields"** (workaround:
+7. **Implemented (2026-11-16): `{one=G}` means at most one (a group stays optional), spec-01 "Exclusive groups", `T01-009`.** **A structure cannot say "exactly one of these fields"** (workaround:
    `Insurance/Benefit` documents "Amount or PeriodicAmount, not both").
    Fields carry their own types, so an alternation on one line does not fit.
    Proposal: a group annotation on the fields: `Amount Core/Money {one=Value}` and

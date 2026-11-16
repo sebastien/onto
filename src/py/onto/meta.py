@@ -52,6 +52,7 @@ Meta/Attribute {layer=Reference}                -- An attribute of a concept, li
 Meta/Concept -hasAttribute/isAttributeOf-> Meta/Attribute 1:*
 Meta/Attribute -hasDimension/isDimensionOf-> Meta/Dimension *:? -- Absent when the attribute refers to a concept or its type is not defined yet
 Meta/Dimension -isBasedOn/isBaseOf-> Meta/Dimension *:? -- The dimension a named type is defined as: Core/Percentage is based on Number
+Meta/Dimension -extends/isExtendedBy-> Meta/Dimension *:? -- The open vocabulary a later domain adds its values to; the extended vocabulary lists them too
 """
 
 # -----------------------------------------------------------------------------
@@ -70,6 +71,7 @@ class MetaWriter:
 		self.prefix = re.compile(rf"(^|\.){re.escape(ontology.namespace or '')}/")
 		self.dimensions: dict[str, list[str]] = {}
 		self.bases: list[tuple[str, str]] = []
+		self.extensions: list[tuple[str, str]] = []
 		self.concepts: list[str] = []
 		self.links: list[str] = []
 
@@ -95,9 +97,9 @@ class MetaWriter:
 	def Flag(value: bool) -> str:
 		return "true" if value else "false"
 
-	def vocabulary(self, definition: TypeExpr, ordered: bool = False) -> list[tuple[str, str | None]]:
-		"""The values of a vocabulary type expression."""
-		values = ", ".join(printText(value, True) for value in definition.values or [])
+	def vocabulary(self, definition: TypeExpr, ordered: bool = False, values: list[str] | None = None) -> list[tuple[str, str | None]]:
+		"""The values of a vocabulary type expression, or `values` when given (a vocabulary with its extensions)."""
+		values = ", ".join(printText(value, True) for value in (definition.values or [] if values is None else values))
 		return [("Kind", "Vocabulary"), ("Values", f"[{values}]"), ("IsOpen", self.Flag(definition.open or definition.unknown)), ("IsOrdered", self.Flag(ordered))]
 
 	def dimension(self, type: TypeExpr | None, owner: str) -> str | None:
@@ -133,13 +135,16 @@ class MetaWriter:
 		if final.fields is not None:
 			values.append(("Kind", "Structure"))
 		elif final.definition and (final.definition.values is not None or final.definition.unknown):
-			values += self.vocabulary(final.definition, any(key == "ordered" for key, _ in final.ann))
+			values += self.vocabulary(final.definition, any(key == "ordered" for key, _ in final.ann), self.model.resolveType(TypeExpr(path=final.path)).values)
 		elif definition:
 			values.append(("Kind", "Value"))
 		if definition and (definition.builtin or definition.path):
 			base = self.dimension(definition, path)
 			if base:
 				self.bases.append((handle, base))
+		extended = self.model.get(next((value for key, value in decl.ann if key == "extends" and isinstance(value, str)), None))
+		if extended and extended.kind == "type":
+			self.extensions.append((handle, self.named(extended)))
 		self.dimensions[handle] = self.Record(handle, "Dimension", values + [("Description", self.Text(decl.doc))])
 		return handle
 
@@ -184,6 +189,7 @@ class MetaWriter:
 		for handle in sorted(self.dimensions, key=lambda handle: (order.get(handle, len(order)), handle)):
 			lines += self.dimensions[handle]
 		lines += [f"{handle} isBasedOn {base}" for handle, base in sorted(self.bases)]
+		lines += [f"{handle} extends {target}" for handle, target in sorted(self.extensions)]
 		return "\n".join(lines + self.concepts + self.links) + "\n"
 
 

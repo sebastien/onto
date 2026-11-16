@@ -33,6 +33,7 @@ from .model import (
 	IDENTIFIERS,
 	MULTI,
 	Model,
+	PATH_KEYS,
 	Ontology,
 	STATUSES,
 	TypeExpr,
@@ -40,6 +41,7 @@ from .model import (
 	_typeKey,
 	isAssociation,
 	isSymmetric,
+	vocabularyValues,
 )
 from .parser import (
 	_fromJson,
@@ -74,6 +76,8 @@ def _checkAnnotations(model: Model, ann: Annotations, places: set[str], loc: Loc
 			diag.error("annotation", f"{key} is a flag", loc)
 		elif key == "id" and value not in IDENTIFIERS:
 			diag.error("annotation", f"id must be {', '.join(IDENTIFIERS)}", loc)
+		elif key == "one" and not (isinstance(value, str) and isName(value)):
+			diag.error("annotation", "one must name a group", loc)
 		elif key in ("subjectRole", "objectRole") and not (isinstance(value, str) and isName(value)):
 			diag.error("annotation", f"{key} must name a role", loc)
 		elif key == "layer" and not (isinstance(value, str) and isName(value)):
@@ -86,6 +90,8 @@ def _checkAnnotations(model: Model, ann: Annotations, places: set[str], loc: Loc
 				diag.error("annotation", "privacy must be distinct audience names joined with +", loc)
 		elif key == "context" and not isAssociation(model.get(value if isinstance(value, str) else None)):
 			diag.error("reference", f"context must name an n-ary relation: '{value}'", loc)
+		elif key == "extends" and "attribute" in places:
+			diag.error("annotation", "extends applies to a named vocabulary, not one written in an attribute", loc)
 		elif key == "ctx":
 			target = model.get(value if isinstance(value, str) else None)
 			if not target or (target.kind != "entity" and not isAssociation(target)):
@@ -161,6 +167,18 @@ def _checkAttrs(model: Model, owner: Decl, attrs: list[Attr], localNames: Callab
 				diag.error("reference", f"Unknown dependency '{dep.local}' of '{owner.path}.{attr.name}'", attr.loc)
 			if dep.path and not model.lookup(dep.path, dep.attr):
 				diag.error("reference", f"Unknown dependency '{dep.path}.{dep.attr}'", attr.loc)
+	# NOTE: `{one=G}` makes the attributes of `owner` sharing `G` mutually exclusive: at most one has a value.
+	groups: dict[str, list[Attr]] = {}
+	for attr in attrs:
+		if isinstance(group := annotation(attr.ann, "one"), str):
+			groups.setdefault(group, []).append(attr)
+	for group, members in groups.items():
+		where = f"'{owner.path}' group '{group}'"
+		if len(members) < 2:
+			diag.error("one", f"{where} has one member; a group needs at least two", members[0].loc)
+		for attr in members:
+			if attr.derived or (attr.card or model.defaultCard) in ("1", "+"):
+				diag.error("one", f"{where}: '{attr.name}' is required or derived and cannot be exclusive", attr.loc)
 
 
 def _validateMap(model: Model, decl: Decl, diag: Diagnostics, targetModel: Model | None = None) -> None:
@@ -183,6 +201,39 @@ def _validateMap(model: Model, decl: Decl, diag: Diagnostics, targetModel: Model
 		if pair in pairs:
 			diag.error("duplicate", f"Duplicate map line '{line.fromValue} {line.toValue}'", line.loc)
 		pairs.add(pair)
+
+
+def _validateExtensions(model: Model, diag: Diagnostics) -> None:
+	"""An `{extends=T}` vocabulary adds values to open vocabulary `T`; each value it lists must be new (spec-01 "Extensions")."""
+	for decl in model.ontology.decls:
+		target = annotation(decl.ann, "extends")
+		if decl.kind != "type" or not isinstance(target, str) or not decl.definition or decl.definition.values is None:
+			continue
+		final = model.typeDecl(TypeExpr(path=target))
+		base = model.resolveType(TypeExpr(path=target)) if final else None
+		if not final or not base or base.kind != "vocab" or not final.definition or final.definition.values is None:
+			diag.error("reference", f"'{decl.path}' extends '{target}', which is not a named vocabulary", decl.loc)
+			continue
+		if final is decl or annotation(final.ann, "extends") is not None:
+			diag.error("extends", f"'{decl.path}' extends '{target}', which is itself an extension", decl.loc)
+			continue
+		if not (final.definition.open or final.definition.unknown):
+			diag.error("extends", f"'{decl.path}' extends '{target}', which is closed: only an open vocabulary (|...) accepts extensions", decl.loc)
+		if decl.definition.open:
+			diag.error("extends", f"'{decl.path}' extends '{target}' and must list its values: it cannot be open", decl.loc)
+		if (annotation(decl.ann, "hierarchical") is True) != base.hierarchical:
+			diag.error("extends", f"'{decl.path}' and '{target}' must both be hierarchical or both flat", decl.loc)
+	# NOTE: Each value an extension states (not an ancestor it repeats to place a child) must be new to its vocabulary.
+	for final in (decl for decl in model.ontology.decls if model.extensionsOf(decl.path)):
+		hierarchical = model.resolveType(TypeExpr(path=final.path)).hierarchical
+		expand = vocabularyValues if hierarchical else list
+		seen = set(expand(list(final.definition.values or []) if final.definition else []))
+		for extension in model.extensionsOf(final.path):
+			values = expand(list(extension.definition.values or []) if extension.definition else [])
+			for value in values:
+				if value in seen and not any(other.startswith(f"{value}/") for other in values):
+					diag.error("extends", f"'{extension.path}' adds '{value}', already a value of '{final.path}'", extension.loc)
+			seen.update(values)
 
 
 def _validateViewLine(model: Model, line: ViewLine, diag: Diagnostics) -> None:
@@ -287,8 +338,8 @@ def _declRefs(decl: Decl) -> list[tuple[str, Loc | None]]:
 	else:
 		refs += [(path, decl.loc) for path in (decl.base, decl.subject) if path]
 		refs += [(participant.type, decl.loc) for participant in decl.participants]
-		refs += [(value, decl.loc) for key, value in decl.ann if key in ("ctx", "context") and isinstance(value, str)]
 		refs += _attrRefs(decl.attrs)
+	refs += [(value, decl.loc) for key, value in decl.ann if key in PATH_KEYS and isinstance(value, str)]
 	return refs
 
 
@@ -396,6 +447,7 @@ def _validate(model: Model, diag: Diagnostics) -> None:
 				_validateViewLine(model, line, diag)
 		elif decl.kind == "map":
 			_validateMap(model, decl, diag)
+	_validateExtensions(model, diag)
 	_checkViewCycles(model, diag)
 	_checkLayering(model, diag)
 	# NOTE: A verb read from an entity must identify one relation for any compatible object type.

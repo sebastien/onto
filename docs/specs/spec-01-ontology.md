@@ -180,7 +180,7 @@ Party/Person -owes-> Lending/Loan               -- Allowed: contributed by Lendi
 ```
 
 - References are the types of attributes and fields, derived inputs, bases,
-  facet subjects, `ctx` and `context` annotations, relation participants, and
+  facet subjects, `ctx`, `context` and `extends` annotations, relation participants, and
   the vocabularies a map connects. Vocabulary values (including hierarchical
   paths that happen to name a domain), map line values and docs are not
   references. Views are exempt: they slice the ontology across domains.
@@ -307,6 +307,37 @@ Category = {hierarchical}
 - Values match exactly. The hierarchy describes ancestry, not automatic
   ancestor observations, descendant matching or aggregation.
 - Aliases retain the vocabulary's hierarchy, openness and ordering.
+
+#### Extensions
+
+A later domain may add values to an open vocabulary of an earlier one. The
+values are declared as a vocabulary of the contributing domain, naming the
+vocabulary it extends:
+
+```text
+Finance/Income/Measure = Gross|Net|...          -- Generic income measures
+Nz/IncomeMeasure = Paye|Esct {extends=Finance/Income/Measure} -- NZ income measures
+```
+
+- `{extends=T}` goes on a named vocabulary; `T` resolves like any name and
+  must be an open vocabulary (`|...`), directly or through aliases. A closed
+  vocabulary stays closed. The extension is not open and is not itself
+  extended.
+- The values of `T`, wherever it is used (attributes, aliases, maps,
+  observations, `onto meta`), are its own followed by those of its extensions,
+  taken in path order. The extension is also a vocabulary of its own, with only
+  its values.
+- Each value an extension states must be new to `T` and to its other
+  extensions (`extends`).
+- `{ordered}` vocabularies: extension values come after the declared ones.
+- Hierarchical vocabularies take hierarchical extensions, and flat ones flat
+  ones. An extension may add children under an existing value by repeating the
+  ancestor path: `Investment` then `  KiwiSaver` under it adds
+  `Investment/KiwiSaver`. Repeated ancestors are not new values.
+- The extension belongs to its own domain, and `extends` is a reference: under
+  [layering](#layering), `T` is in the same or an earlier domain.
+- Text and JSON keep the extension as written; the merge is a reading of the
+  ontology, never written back.
 
 ### Structures
 
@@ -475,6 +506,24 @@ Body lines of entities, facets, relations and structures:
   evaluation time. Dependencies never imply a formula.
 - Attributes are unique by name within their owner; in a facet, within the facet.
 
+### Exclusive groups
+
+Attributes or structure fields of one declaration that share `{one=G}` are
+alternatives: at most one of them has a value.
+
+```text
+Benefit =
+  Amount D/Money/USD {one=Value}                -- A lump sum
+  PeriodicAmount D/Money/USD {period=Month, one=Value}
+```
+
+- A group has at least two members, none required (`1`, `+`) or derived. A
+  value is still optional: a group with no value is allowed.
+- In observations, one source stating values for two members of a group on the
+  same subject (and the same structured attribute) over overlapping `valid=`
+  periods is an error (`one`). `null` and `?` are not values. Different sources
+  disagreeing are reconciled as usual.
+
 ### History
 
 A status or stage whose past values matter is flagged `{history}`. The flag
@@ -523,6 +572,7 @@ Keys, in normal-form order:
 | `context` | binary relation | The n-ary relation carrying the link's state; written shortest, stored as a full path |
 | `subjectRole`, `objectRole` | context-backed binary relation | Role names on the context selecting the subject and object |
 | `ctx` | facet | Entity or association whose instances the facet's values hold within ([contextual facets](#contextual-facets)); written shortest, stored as a full path |
+| `extends` | named vocabulary | Open vocabulary whose values this one adds to ([extensions](#extensions)); written shortest, stored as a full path |
 | `ordered` | vocabulary | Value order is meaningful |
 | `hierarchical` | vocabulary | Values are taxonomy paths; prefixes are ancestors |
 | `cur` | type, attribute | Currency code, or `?` |
@@ -532,6 +582,7 @@ Keys, in normal-form order:
 | `status` | any | `stated`, `inferred`, `assumed` |
 | `cards` | attribute | Evidence status of this attribute's cardinality, overriding `@ontology cards=` |
 | `history` | attribute | Flag: each value reached is dated; generates a change concept ([history](#history)) |
+| `one` | attribute | Name of an exclusive group: attributes or fields of one declaration sharing it hold at most one value ([exclusive groups](#exclusive-groups)) |
 | `deps` | derived attribute | `candidate`: dependencies are proposed, not confirmed |
 | `rule` | derived attribute | Rule reference token, or `?`; a `Library/Function` path (or `Alias/Function` through `@use`) names a function of a [spec-04 library](spec-04-mapping.md#rules), checked when the library is loaded |
 | `src` | any | Provenance; overrides the inherited value |
@@ -735,7 +786,7 @@ convert losslessly (comments excepted); the structure is defined by
   "lines": [{"from", "match", "to", "doc"?}], "ann"?, "doc"?}` (`from`/`to` are
   full type paths; line values are names, or full value paths for hierarchical
   vocabularies).
-- `ann.context` and `ann.ctx` are full paths.
+- `ann.context`, `ann.ctx` and `ann.extends` are full paths.
 - `ids` optionally carries the identity sidecar (same paths and identifiers).
 
 Reading JSON prints its normal-form text and parses that, so every rule of this
@@ -770,6 +821,7 @@ Meta/Dimension {layer=Reference}
 Meta/Concept -hasAttribute/isAttributeOf-> Meta/Attribute 1:*
 Meta/Attribute -hasDimension/isDimensionOf-> Meta/Dimension *:?
 Meta/Dimension -isBasedOn/isBaseOf-> Meta/Dimension *:?
+Meta/Dimension -extends/isExtendedBy-> Meta/Dimension *:?
 ```
 
 Neither the declarations nor the instances are written by hand.
@@ -795,6 +847,8 @@ namespace and header); `onto meta` prints the instances as
   refers to a concept has none.
 - `isBasedOn` links a named type to the type it is defined as
   (`D/Money/USD = Amount`).
+- `extends` links a vocabulary [extension](#extensions) to the vocabulary it
+  extends, whose `Values` include the extension's.
 - `Description` is the element's doc string.
 - Inherited attributes are not repeated on specialisations, structure fields
   are not described, and the `Meta` domain describes itself as any other domain.

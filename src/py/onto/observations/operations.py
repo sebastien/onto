@@ -17,10 +17,12 @@ from ..ontology import (
 	isSymmetric,
 )
 from ..text import (
+	Diagnostic,
 	Diagnostics,
 	FormatError,
 	Loc,
 	Source,
+	annotation,
 )
 from .formatter import (
 	_printObservationsLog,
@@ -329,6 +331,31 @@ def reconcileObservations(ontology: Ontology, observations: Observations, mode: 
 		sorted(deepcopy(claims), key=lambda claim: claim["n"]), [], diag.items, deepcopy(observations.gaps))
 
 
+def _checkExclusive(ontology: Ontology, observations: Observations, doc: ObservationsDocument) -> list[Diagnostic]:
+	"""Errors for two attributes of one `{one=G}` group stated with values by one source over overlapping periods."""
+	model = Model(ontology)
+	diag = Diagnostics()
+	locations = {statement.n: statement.loc for statement in doc.statements}
+	stated: dict[tuple, list[Claim]] = {}
+	for claim in observations.claims:
+		value, path, owner = claim.get("v"), claim.get("p"), observations.instances.get(claim.get("s", ""), {}).get("type")
+		if value is None or (isinstance(value, dict) and value.get("unknown")) or not isinstance(path, str) or not isinstance(owner, str):
+			continue
+		attr = model.lookup(owner, path)
+		group = annotation(attr.ann, "one") if attr else None
+		if isinstance(group, str):
+			prefix = path.rpartition(".")[0]
+			stated.setdefault((claim["s"], claim.get("ctx"), prefix, group, claim.get("src")), []).append(claim)
+	for (subject, _, prefix, group, _), claims in stated.items():
+		for index, left in enumerate(claims):
+			clash = next((right for right in claims[index + 1:] if right["p"] != left["p"] and _overlaps(left, right)), None)
+			if clash:
+				where = f"{subject}.{prefix}" if prefix else subject
+				diag.error("one", f"'{where}' states both '{left['p']}' and '{clash['p']}' of exclusive group '{group}'", locations.get(clash["n"]))
+				break
+	return diag.items
+
+
 def resolveObservations(ontology: Ontology, doc: ObservationsDocument, mode: str = "strict") -> Observations:
 	"""Type parsed `doc`; lenient mode holds semantically invalid statements as gaps."""
 	if mode not in ("strict", "lenient"):
@@ -337,7 +364,7 @@ def resolveObservations(ontology: Ontology, doc: ObservationsDocument, mode: str
 	# NOTE: Imported here: `meta` builds on the observations formatter.
 	from ..meta import checkMetaReferences
 
-	diagnostics = checkMetaReferences(ontology, observations, doc)
+	diagnostics = checkMetaReferences(ontology, observations, doc) + _checkExclusive(ontology, observations, doc)
 	if not diagnostics:
 		return observations
 	if mode == "strict":

@@ -88,6 +88,7 @@ Customs/Code = C6109|C0808|...
 | `T = A\|B\|C` | Closed vocabulary |
 | `T = A\|B\|...` | Open vocabulary |
 | `T = {hierarchical}` + tree | Taxonomy |
+| `D/T = A\|B {extends=T}` | Values a later domain adds to open vocabulary `T` |
 | `T =` + body | Structure: fields, no identity |
 | `E` / `E < Base` + body | Entity / specialisation (single inheritance) |
 | `F of E` + body | Facet of an entity or an association |
@@ -98,6 +99,7 @@ Customs/Code = C6109|C0808|...
 | `@view V` + body | View |
 | `@domain D` | Domain: a top-level namespace segment |
 | `~ A T <- X {rule=Lib/Fn}` | Derived attribute whose rule is a `.fn` library function, checked when the library loads |
+| `A T {one=G}` | Exclusive group: attributes or fields sharing `G` hold at most one value |
 | `Attr T {history}` | Dated history: generates `Owner/AttrChange` and `Owner -hasChange-> Owner/AttrChange` |
 | `@ontology N layering=declared` | Domains declared in dependency order; `onto check` reports references to later ones |
 
@@ -130,6 +132,7 @@ Built-in types: `Text`, `Integer`, `Number`, `Boolean`, `Date`, `DateTime`,
 | `context`, `subjectRole`, `objectRole` | binary relation | Association carrying the link's state |
 | `ctx` | facet | Context the facet's values hold within |
 | `ordered`, `hierarchical` | vocabulary | Order is meaningful / values are paths |
+| `extends` | named vocabulary | Open vocabulary this one adds its values to |
 | `cur`, `unit`, `period`, `scale` | type, attribute | Measurement qualifiers; `?` is filled per value |
 | `status` | any | `stated`, `inferred`, `assumed` |
 | `src`, `check` | any | Provenance / an open question |

@@ -38,6 +38,7 @@ ANNOTATION_PLACES: dict[str, set[str] | None] = {
 	"subjectRole": {"binary"},
 	"objectRole": {"binary"},
 	"ctx": {"facet"},
+	"extends": {"vocabulary"},
 	"ordered": {"vocabulary"},
 	"hierarchical": {"vocabulary"},
 	"cur": {"type", "attribute"},
@@ -47,6 +48,7 @@ ANNOTATION_PLACES: dict[str, set[str] | None] = {
 	"status": None,
 	"cards": {"attribute"},
 	"history": {"attribute"},
+	"one": {"attribute"},
 	"deps": {"derived"},
 	"rule": {"derived", "map"},
 	"src": None,
@@ -62,7 +64,7 @@ MATCHES = ("exact", "broader", "narrower", "related")
 QUALIFIERS = ("cur", "unit", "period", "scale")
 CARDS = ("1", "?", "+", "*")
 STATUSES = ("stated", "inferred", "assumed")
-PATH_KEYS = ("context", "ctx")
+PATH_KEYS = ("context", "ctx", "extends")
 MULTI = ("+", "*")
 SECTIONS = {"domain": 0, "type": 1, "entity": 2, "facet": 2, "relation": 3, "map": 4, "view": 5}
 
@@ -282,6 +284,7 @@ class Model:
 		self.defaultCard = header.get("card", "?")
 		self.defaultCounts = header.get("rel", "*:*")
 		self._looking: set[str] = set()
+		self._extensions: dict[str, list[Decl]] | None = None
 
 	def get(self, path: str | None) -> Decl | None:
 		"""Find declaration `path`, or return None when absent."""
@@ -294,6 +297,24 @@ class Model:
 			parts = path.split("/")
 			result.update("/".join(parts[:index]) for index in range(1, len(parts)) if "." not in "/".join(parts[:index]))
 		return result
+
+	def extensionsOf(self, path: str) -> list[Decl]:
+		"""Vocabularies declaring `{extends=...}` the vocabulary `path` (after aliases), sorted by path."""
+		if self._extensions is None:
+			self._extensions = {}
+			for decl in sorted(self.ontology.decls, key=lambda item: item.path):
+				target = annotation(decl.ann, "extends")
+				final = self.typeDecl(TypeExpr(path=target)) if decl.kind == "type" and isinstance(target, str) else None
+				if final and final is not decl:
+					self._extensions.setdefault(final.path, []).append(decl)
+		return self._extensions.get(path, [])
+
+	def vocabularyOf(self, decl: Decl) -> list[str]:
+		"""Values of vocabulary declaration `decl` followed by those its extensions add, in declaration order."""
+		values = list(decl.definition.values or []) if decl.definition else []
+		for extension in self.extensionsOf(decl.path):
+			values += extension.definition.values or [] if extension.definition else []
+		return list(dict.fromkeys(values))
 
 	def lineage(self, path: str) -> list[str]:
 		"""Entity `path` and its bases, nearest first; an association is its own lineage."""
@@ -456,7 +477,7 @@ class Model:
 			definition = decl.definition
 			if definition and (definition.values is not None or definition.unknown):
 				resolved = ResolvedType(
-					"vocab", path=decl.path, values=list(definition.values or []),
+					"vocab", path=decl.path, values=self.vocabularyOf(decl),
 					open=definition.open or definition.unknown, ordered=annotation(decl.ann, "ordered") is True,
 				)
 				break

@@ -50,7 +50,7 @@
     "card": { "enum": ["1", "?", "+", "*"] },
     "counts": { "type": "string", "pattern": "^[?1*+]:[?1*+]$" },
     "ann": {
-      "description": "Annotations: token values, `true` for flags. `context` and `ctx` are full paths.",
+      "description": "Annotations: token values, `true` for flags. `context`, `ctx` and `extends` are full paths.",
       "type": "object",
       "propertyNames": { "$ref": "#/$defs/name" },
       "properties": {
@@ -61,6 +61,7 @@
         "subjectRole": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
         "objectRole": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
         "ctx": { "$ref": "#/$defs/path" },
+        "extends": { "$ref": "#/$defs/path" },
         "hierarchical": { "const": true }
       },
       "additionalProperties": { "anyOf": [{ "$ref": "#/$defs/token" }, { "const": true }] }

@@ -218,3 +218,17 @@ C/Currency = Text
 C/Subdivision = Text                            -- ISO 3166-2 code
 State = Bavaria|Saxony|...
 ```
+
+When a country has values a generic open vocabulary lacks, the country domain
+adds them with `{extends=}` instead of renaming them into generic words or
+listing them in comments. The values stay the country's; the vocabulary stays
+generic.
+
+```onto
+@ontology Tax layering=declared
+@domain Core
+@domain Germany
+
+Core/TaxKind = Income|Sales|...                 -- Kinds of tax, any country
+Germany/TaxKind = ChurchTax|SolidaritySurcharge {extends=Core/TaxKind} -- German taxes with no generic name
+```
