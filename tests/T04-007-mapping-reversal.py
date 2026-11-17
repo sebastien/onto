@@ -164,4 +164,14 @@ def test_scope_conditions_that_cannot_reverse_lose_the_scope():
 	assert reversed_.scopes == [] and [item.line for item in lossy] == ["Label"]
 
 
+def test_derived_values_are_never_projected_back():
+	"""A -> B -> A: a derived target, or a reverse assigning a derived input, is lossy."""
+	source = loadOntology([Source("s.onto", "@ontology DerS rev=v1\nPerson\n  Name Text\n  ~ CanEdit Boolean <- Name {rule=?}\n")])
+	target = loadOntology([Source("t.onto", "@ontology DerT rev=v1\nHuman\n  Name Text\n  Editable Boolean\n  ~ Label Text <- Name {rule=?}\n")])
+	text = "@mapping DerS -> DerT\n\nPerson -> Human\n  Editable <- CanEdit\n  Label <- Name\n  Name <- Name\n"
+	reversed_, lossy = mappingReverse(loadMapping(source, target, Source("m", text)), source, target)
+	assert sorted((item.line, item.reason) for item in lossy) == [("Editable", "derived target, not written back"), ("Label", "derived target, not written back")]
+	assert list(lines(reversed_)) == ["Name"]
+
+
 # EOF

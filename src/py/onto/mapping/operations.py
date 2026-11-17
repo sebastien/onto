@@ -5,18 +5,20 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from ..binding.operations import ExpressionResolver, Inferred, checkAssignment, compatible
+from ..binding.operations import ExpressionResolver, Inferred, checkAssignment, checkScalarTarget, compatible
 from ..binding.parser import qualifyPath
 from ..coverage import _Selection, _selections
 from ..functions.model import Function, FunctionLibrary, FunctionsDocument
 from ..functions.operations import resolveFunctions
+from ..observations.model import ObservationsDocument
+from ..observations.parser import _Resolver
 from ..ontology.model import Model, Ontology, ResolvedType, TypeExpr, isAssociation
 from ..ontology.operations import _checkAnnotations, _validateMap
 from ..referential.model import Referential
 from ..referential.operations import policyFor, validateReferential
 from ..text import Diagnostics, FormatError, Loc, Source, annotation
 from .formatter import mappingToJson, printMapping
-from .model import Mapping, MappingDocument, MappingScope
+from .model import Mapping, MappingDocument, MappingLine, MappingScope
 from .parser import parseMapping, readMappingJson
 
 # -----------------------------------------------------------------------------
@@ -55,7 +57,7 @@ def instanceType(model: Model, path: str) -> bool:
 
 def correspondenceScopes(model: Model, mapping: Mapping, source: str) -> list[MappingScope]:
 	"""The scope lines giving instances of `source` (or a type it specialises) their target instances."""
-	return [scope for scope in mapping.scopes if source == scope.source or model.isA(source, scope.source)]
+	return [scope for scope in mapping.scopes if scope.into is None and (source == scope.source or model.isA(source, scope.source))]
 
 
 def correspondenceTarget(model: Model, targetModel: Model, mapping: Mapping, source: str, accepted: list[str] | None) -> str | None:
@@ -82,6 +84,17 @@ def acceptedTypes(targetModel: Model, owner: str, name: str, attr: Any) -> list[
 		resolved = targetModel.resolveType(attr.type, attr.ann)
 		return [resolved.path] if resolved.kind in ("entity", "relation") else []
 	return [relation.participants[0 if inverse else 1].type for relation, inverse in targetModel.verbs(owner, name)]
+
+
+def checkExclusive(name: str, lines: list[MappingLine], facet: bool) -> None:
+	"""Lines assigning one target must be exclusive: `when` on one path with distinct values, and at most one default."""
+	if len(lines) < 2:
+		return
+	conditional = [line.when for line in lines if line.when]
+	if facet or len(lines) - len(conditional) > 1 or len({tuple(when["path"]) for when in conditional}) > 1 \
+		or len({when["value"] for when in conditional}) != len(conditional):
+		raise ValueError(f"Target '{name}' is assigned twice in one scope; repeated lines need exclusive conditions"
+			" (`when` on one path with distinct values) and at most one line without `when`")
 
 
 def checkElement(model: Model, path: str) -> None:
@@ -128,7 +141,7 @@ class MappingExpressionResolver(ExpressionResolver):
 		if "path" in expr:
 			return self.path(expr["path"])
 		if expr.get("call") == "ref":
-			raise ValueError("ref(Type, key) is binding-only; mappings translate existing references")
+			return self.sourceReference(expr)
 		if "meta" in expr:
 			return (ResolvedType("builtin", builtin="Text") if expr["meta"] == "src" else None), False
 		return super().resolve(expr)
@@ -173,6 +186,24 @@ class MappingExpressionResolver(ExpressionResolver):
 				return self.model.resolveType(TypeExpr(path=owner)), plural
 			self.throughReference = True
 		raise ValueError("Empty mapping path")
+
+	def sourceReference(self, expr: dict[str, Any]) -> Inferred:
+		"""`ref(S, Key)`: the source instance of `S` whose key (the binding's `id`) is the value of path `Key`."""
+		args = expr["args"]
+		if self.mapping.fromNamespace == self.mapping.toNamespace:
+			raise ValueError("ref(Type, key) needs distinct source and target ontologies")
+		if len(args) != 2 or set(args[0]) != {"path"} or len(args[0]["path"]) != 1 or not isinstance(args[0]["path"][0], str) or set(args[1]) != {"path"}:
+			raise ValueError("ref requires a source instance type and a key path: ref(Type, Path)")
+		path = qualifyPath(args[0]["path"][0], self.mapping.fromNamespace, self.mapping.uses)
+		if not path.startswith(self.mapping.fromNamespace + "/") or not instanceType(self.model, path):
+			raise ValueError(f"Unknown source reference type '{path}'")
+		args[0] = {"path": [path]}
+		kind, plural = self.resolve(args[1])
+		if plural:
+			raise ValueError("ref requires a single key")
+		if kind is not None and not (kind.kind == "vocab" or kind.kind == "builtin" and kind.builtin in ("Text", "Integer", "Number")):
+			raise ValueError("ref requires a text or integer key")
+		return self.model.resolveType(TypeExpr(path=path)), False
 
 	def call(self, expr: dict[str, Any]) -> Inferred:
 		decl = self.localMaps.get(expr["call"])
@@ -310,7 +341,13 @@ def resolveMapping(fromOntology: Ontology, toOntology: Ontology, doc: MappingDoc
 			checkElement(model, exclusion.path)
 		except ValueError as error:
 			diag.error("reference", str(error), exclusion.loc)
+	scopeNames = set()
 	for scope in mapping.scopes:
+		key = (scope.source, scope.target, scope.name)
+		repeated = [item for item in mapping.scopes if item.into is None and item.source == scope.source and item.target == scope.target]
+		if key in scopeNames or len(repeated) > 1 and scope.into is None and not scope.name:
+			diag.error("mapping", "Repeated source/target scopes require distinct names", scope.loc)
+		scopeNames.add(key)
 		if not instanceType(model, scope.source) or not instanceType(targetModel, scope.target):
 			diag.error("reference", f"Unknown entity or association mapping scope '{scope.source}' -> '{scope.target}'", scope.loc)
 			continue
@@ -319,24 +356,34 @@ def resolveMapping(fromOntology: Ontology, toOntology: Ontology, doc: MappingDoc
 		resolver = MappingExpressionResolver(model, targetModel, mapping, scope, functions, diag, selections)
 		context: Inferred = None, False
 		try:
+			if scope.into is not None:
+				intoType, multi = resolver.resolve(scope.into)
+				if intoType is None or intoType.kind not in ("entity", "relation"):
+					raise ValueError("into requires a source instance reference")
+				if resolver.contexts:
+					raise ValueError("into currently requires a non-contextual reference")
+				destination = resolver.translate((intoType, False), [scope.target])
+				checkAssignment(model, destination, targetModel.resolveType(TypeExpr(path=scope.target)), False, "into target")
 			if scope.when:
 				resolver.resolve({"path": scope.when["path"]})
 			if scope.valid:
 				resolver.resolve(scope.valid)
+			if scope.present:
+				resolver.resolve(scope.present)
 			if scope.ctx:
 				context = resolver.translate(resolver.resolve(scope.ctx))
 		except ValueError as error:
 			diag.error("expression", str(error), scope.loc)
-		targets: set[str] = set()
+		targets: dict[str, list[MappingLine]] = {}
 		for line in scope.lines:
 			resolver = MappingExpressionResolver(model, targetModel, mapping, scope, functions, diag, selections)
 			resolver.loc = line.loc
 			try:
 				name = line.facet or line.target or line.verb
 				key = f"[{name}]" if line.facet else name
-				if key in targets:
-					raise ValueError(f"Target '{name}' is assigned twice in one scope")
-				targets.add(key)
+				siblings = targets.setdefault(key, [])
+				siblings.append(line)
+				checkExclusive(name, siblings, bool(line.facet))
 				inferred: Inferred = None, False
 				if line.expr is not None:
 					inferred = resolver.resolve(line.expr)
@@ -346,6 +393,7 @@ def resolveMapping(fromOntology: Ontology, toOntology: Ontology, doc: MappingDoc
 					raise ValueError("reverse requires a path through a reference")
 				if line.when:
 					resolver.resolve({"path": line.when["path"]})
+				qualifierTypes = {key: resolver.resolve(expr) for key, expr in line.qualifiers.items()}
 				contextsRead = set(resolver.contexts)
 				facet = targetModel.facets(scope.target).get(line.facet) if line.facet else targetModel.facetOf(scope.target, name)
 				if facet and (expectedContext := annotation(facet.ann, "ctx")):
@@ -359,11 +407,27 @@ def resolveMapping(fromOntology: Ontology, toOntology: Ontology, doc: MappingDoc
 						raise ValueError(f"Unknown target facet '{name}'")
 					continue
 				attr = targetModel.lookup(scope.target, name)
+				if line.qualifiers:
+					if attr is None:
+						raise ValueError("Measurement qualifiers require a scalar attribute target")
+					expected = targetModel.resolveType(attr.type, attr.ann)
+					for qualifier, (kind, multi) in qualifierTypes.items():
+						if expected.qualifiers.get(qualifier) != "?":
+							raise ValueError(f"{name}: qualifier '{qualifier}' requires a variable target qualifier")
+						if inferred[0] is not None and inferred[0].qualifiers.get(qualifier, "?") != "?":
+							raise ValueError(f"{name}: qualifier '{qualifier}' is already fixed on the source expression")
+						if multi or kind is not None and not (kind.kind == "vocab" or kind.kind == "builtin" and kind.builtin == "Text"):
+							raise ValueError(f"{name}: qualifier '{qualifier}' requires a single text or vocabulary value")
 				if attr and inferred[0] is not None and inferred[0].kind in ("entity", "relation") and targetModel.resolveType(attr.type).kind not in ("entity", "relation"):
 					raise ValueError(f"{name}: incompatible reference expression for a scalar target")
 				inferred = resolver.translate(inferred, acceptedTypes(targetModel, scope.target, name, attr))
 				if attr:
-					checkAssignment(model, inferred, targetModel.resolveType(attr.type, attr.ann), (attr.card or targetModel.defaultCard) in ("*", "+"), name)
+					checkScalarTarget(targetModel, attr, name)
+					expected = targetModel.resolveType(attr.type, attr.ann)
+					if expected.kind == "range" and line.expr is not None and "text" in line.expr:
+						line.expr["text"] = _Resolver(toOntology, ObservationsDocument()).scalar(line.expr["text"], expected, line.loc or Loc("mapping", 0))
+						inferred = expected, False
+					checkAssignment(model, inferred, expected, (attr.card or targetModel.defaultCard) in ("*", "+"), name)
 				else:
 					verbs = targetModel.verbs(scope.target, name)
 					if inferred[0] is not None:
@@ -373,7 +437,7 @@ def resolveMapping(fromOntology: Ontology, toOntology: Ontology, doc: MappingDoc
 					line.target, line.verb = None, name
 			except ValueError as error:
 				diag.error("mapping", str(error), line.loc)
-		if referential is not None:
+		if referential is not None and scope.into is None:
 			policy = policyFor(targetModel, referential, scope.target)
 			if policy is not None and not policy.minted:
 				assigned = {line.target for line in scope.lines if not line.candidate or mapping.header.get("candidates", False)}

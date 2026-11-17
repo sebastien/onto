@@ -40,6 +40,7 @@ ANNOTATION_PLACES: dict[str, set[str] | None] = {
 	"subjectRole": {"binary"},
 	"objectRole": {"binary"},
 	"ctx": {"facet"},
+	"when": {"facet"},
 	"extends": {"vocabulary"},
 	"ordered": {"vocabulary"},
 	"hierarchical": {"vocabulary"},

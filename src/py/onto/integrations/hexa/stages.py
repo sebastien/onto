@@ -14,6 +14,7 @@ from hexa.combinators import Policy, collect, each, parallel, pipe, project, sel
 from hexa.runtime import Ledger, report
 from hexa.shapes import Failure
 
+from ...binding.model import bindingBy
 from ...expressions import printExpression
 from ...inventory.operations import documentFields
 from ...ontology.model import Model
@@ -323,7 +324,7 @@ def documentGaps(records: list[dict], gaps: list[dict], scopes: dict[str, ScopeP
 def emitClaims(program: AnyValue, documents: list[dict], runTime: str | None) -> dict:
 	"""`ClaimsEmit`: the run's spec-02 log, stale slots, format tallies and observed fields."""
 	binding = program.binding
-	builder = ClaimsBuilder(program.model, binding.ontology, str(binding.header.get("scope", binding.ontology)), f"bind:{binding.ontology}")
+	builder = ClaimsBuilder(program.model, binding.ontology, str(binding.header.get("scope", binding.ontology)), bindingBy(binding))
 	scopes = {scope.name: scope for scope in program.scopes}
 	stale: list[dict] = []
 	unidentified: list[dict] = []

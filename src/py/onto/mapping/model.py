@@ -21,7 +21,8 @@ type Condition = dict[str, Any]
 
 MAPPING_FORMAT = "onto.mapping/1"
 HEADER_KEYS = ("from", "to", "view", "scope", "referential", "candidates", "retract", "confirm")
-ANNOTATION_KEYS = ("when", "src", "ctx", "valid", "reverse", "candidate", "reason")
+QUALIFIER_KEYS = ("cur", "period")
+ANNOTATION_KEYS = ("name", "into", "present", "when", "src", "ctx", "valid", *QUALIFIER_KEYS, "reverse", "candidate", "reason")
 
 
 @dataclass(slots=True)
@@ -38,6 +39,7 @@ class MappingLine:
 	candidate: bool = False
 	doc: str | None = None
 	loc: Loc | None = None
+	qualifiers: dict[str, Expression] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -52,6 +54,9 @@ class MappingScope:
 	lines: list[MappingLine] = field(default_factory=list)
 	doc: str | None = None
 	loc: Loc | None = None
+	name: str | None = None
+	present: Expression | None = None
+	into: Expression | None = None
 
 
 @dataclass(slots=True)

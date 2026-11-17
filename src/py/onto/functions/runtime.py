@@ -207,7 +207,7 @@ class FunctionEvaluator:
 		if signature.collection:
 			if not isinstance(value, dict) or "set" not in value:
 				raise ValueError("Expected a collection")
-			scalar = SignatureType(signature.builtin, signature.path)
+			scalar = SignatureType(signature.builtin, signature.path, range=signature.range)
 			members = [self.typedValue(member, scalar) for member in value["set"]]
 			if len({_valueIdentity(member, resolved.builtin in NUMERIC) for member in members}) != len(members):
 				raise ValueError("Duplicate collection members")

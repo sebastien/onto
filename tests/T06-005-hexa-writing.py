@@ -116,6 +116,17 @@ def test_lossy_lines_and_parentless_records():
 	assert all("name" not in item for item in document["instruments"])
 
 
+def test_derived_targets_are_read_but_never_written():
+	"""A value the source computes on read (`~ CanEdit`) is not written back to it."""
+	ontology = loadOntology([Source("d.onto", "@ontology Der rev=v1\nRow\n  Name Text\n  ~ CanEdit Boolean <- Name {rule=?}\n")])
+	binding = loadBinding(ontology, Source("d.bind", "@binding Der\nRow <- rows[*] {id=id}\n  CanEdit <- canEdit\n  Name <- name\n"))
+	state = readState(ontology, binding, {"rows": [{"id": "1", "name": "A", "canEdit": True}]})
+	assert {claim.get("p") for claim in state["claims"]} >= {"CanEdit", "Name"}
+	document, report, _ = write(ontology, binding, state)
+	assert [(item["line"], item["reason"]) for item in report.lossy] == [("CanEdit", "Binding.PathUnsupported: derived target, not written back")]
+	assert document == {"rows": [{"name": "A"}]}
+
+
 def test_null_policies_write_json_null():
 	text = TEXT.replace("  Class <- class\n", "  Class <- class {null=unknown}\n")
 	binding = loadBinding(EXCHANGE, Source("b", text))

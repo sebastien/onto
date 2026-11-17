@@ -388,6 +388,7 @@ Measurement qualifiers drive conversions that are exact and need no function:
 | Key | Meaning | Default |
 | --- | --- | --- |
 | `rev` | Ontology revision the binding was written against | none |
+| `name` | The binding's name, distinguishing bindings of one ontology (a token) | none |
 | `format` | `json` or `csv` | `json` |
 | `scope` | `@scope` of the produced observations | the namespace |
 | `null` | How JSON `null` reads: `absent` or `unknown` ([body lines](#body-lines)) | says nothing |
@@ -397,7 +398,10 @@ Measurement qualifiers drive conversions that are exact and need no function:
 
 - `@at <- expr` sets the observation time (`at`) of every claim from the
   document, from a document field. Without it, `at` is the run's time.
-- Claims carry `by=bind:<Namespace>`, so a re-run withdraws only its own output.
+- Claims carry `by=bind:<Namespace>`, or `by=bind:<Namespace>/<name>` for a
+  named binding, so a re-run withdraws only its own output. Several bindings of
+  one ontology reading documents of one `src` (an API's endpoints) must have
+  distinct names: otherwise each run retracts the others' output.
 - `@columns` lists CSV columns in output order, for writing. Reading ignores it.
 - A CSV document is read as a list of objects keyed by the header row, so its
   scope paths are `$[*]`. Cells are text; empty cells are absent.
@@ -460,8 +464,8 @@ deliberately not bound, for [coverage](#coverage). `reason` is required.
   <args> => <result>
 @map <Name> <From> -> <To> [{annotations}] [-- doc]
   <FromValue> <match> <ToValue> [-- doc]
-<FromType> -> <ToType> [{when=<path:value>, ctx=<expr>, valid=<expr>}] [-- doc]
-  <target> <- <expr> [{when=<path:value>, src=<path>, reverse, candidate}] [-- doc]
+<FromType> -> <ToType> [{name=<Name>, into=<expr>, present=<expr>, when=<path:value>, ctx=<expr>, valid=<expr>}] [-- doc]
+  <target> <- <expr> [{when=<path:value>, src=<path>, cur=<expr>, period=<expr>, reverse, candidate}] [-- doc]
   [<Facet>] [{annotations}]
 - <From path> {reason=<reason>} [-- doc]
 ```
@@ -518,16 +522,117 @@ state to an instance of `T`. Body lines give `T`'s values.
   Client`, for a `Party` member, is the client's `Person`. When several lines fit
   the receiver (including two lines to the same type), or none does, the
   reference is an error.
+- `ref(S, Key)` reads the source instance of type `S` whose key (its binding
+  `id`) is the value of path `Key`: the handle `<S>_<key>` of
+  [scope lines](#scope-lines), a reference translated like any other. It is
+  for sources that name an instance by type and id, such as a tag row's table
+  and id; with exclusive lines, the table chooses the type:
+
+  ```onto
+  RecordTag -> Interaction {into=Record}
+    concerns <- ref(Client, ForeignId) {when=ForeignTable:ClientId}
+    concerns <- ref(Group, ForeignId) {when=ForeignTable:GroupId}
+  ```
+
+  `S` resolves against `From`, which must differ from `To`; `Key` is one path to
+  a text or number. As a binding's `ref`, it need not name an instance of the
+  input state: such an instance is [implicit](spec-02-observations.md#implicit-instances),
+  translated through the scope lines of `S`, and its target is implicit too. A
+  type with no correspondence is a gap (`Mapping.ReferenceUnmapped`). A line
+  whose `when` is false demands nothing, so another table's id is not looked
+  up. Source references are lossy under reversal.
 - `$` alone reads the scope instance itself, as a reference translated like any
   other: in `Client -> Relationship`, `Client <- $` is the client's `Person`. Its
   claims take the scope instance's existence metadata.
 - `{when=path:value}` on the scope applies it only to matching instances;
   `{ctx=expr}` and `{valid=expr}` set the target claims' context and validity.
   Without `valid`, the existence claim keeps the source's.
+- `{name=ShortGoal}` distinguishes repeated source/target scopes. Repeated
+  scopes for the same source and target types must all have distinct names.
+  An unnamed scope keeps its existing identity. A named source-qualified
+  identity uses `<scope>/@<name>/<S>/<key>` before encoding, so equal text,
+  numeric keys or reordered scope declarations do not merge their targets.
+  Names are stable identity components, not display labels. Named identity scopes
+  currently require source-qualified identities (no target referential policy).
+  Incoming references still require a unique type-directed correspondence:
+  a receiver accepting several named scopes of the same type is ambiguous,
+  not an instruction to choose the first. Explicit named-reference selection
+  is not yet supported.
+- `{into=Application}` assigns the scope's fields, facets or verbs to the
+  target already mapped from that source reference, instead of minting another
+  target. The selector must be a non-contextual source instance reference. A
+  multi-valued one (`into=Clients`) selects its one member: an empty collection
+  selects nothing, and several members, or an incomplete collection, are a gap
+  (`Mapping.ReferenceAmbiguous`), since collections have no order to take a
+  first from;
+  correspondence is type-directed against the declared target type. Missing,
+  unknown, conflicting, plural, wrong-type or ambiguous destinations never
+  choose a handle arbitrarily.
+  Identity scopes resolve and emit first, independently of declaration order.
+  An `into` destination must have an existence claim emitted by an identity
+  scope in this run: an implicit-only, condition-excluded or absent destination
+  yields a gap and is not resurrected. Unselected updates (`when`/`present`)
+  make no assignments and do not require a destination.
+  Updates keep the values' own provenance, confidence and validity; they do not
+  replace the destination's existence provenance. Attribute and verb updates
+  add no existence header; explicit facet assertions retain spec-02's normal
+  same-handle existence encoding, not a new identity.
+  They do not contribute instance correspondence, so updates cannot supply one
+  another's identities. Reversal reports them as lossy.
+  A named update may share a source/target pair with an existing unnamed
+  identity scope without changing that scope's identity.
+- `{present=expr}` emits a scope only for a known, nonempty value. Absent,
+  unknown, empty text and empty collections are skipped; **false and zero are
+  present**. Use `present=trim(Description)` to skip whitespace-only answers
+  while preserving the original description in its assignment. Conflicting
+  presence inputs or failed expressions report gaps rather than choosing a
+  declaration. This selection may be combined with `when`. Named and
+  presence-selected scopes are currently lossy under reversal.
 - Target attributes, facets and relations follow the forms of bindings
   (`Attr`, `Facet.Attr`, `[Facet]`, `verb`, `Role`).
+- A target is assigned by one line, or by **exclusive lines**: lines whose
+  `when` conditions read one path with distinct values, and at most one line
+  without `when`, the **default**, applied when no condition matches (including
+  when the path is absent). At most one of them applies to an instance:
+
+  ```onto
+  GroupReview -> Review
+    StoppedReason <- ReviewStoppedReason
+    StoppedReason <- "Other" {when=Status:ClosedOnMigration}
+  ```
+
+  Each line keeps its own inputs and provenance; the default also reads the
+  conditions' path, so a conflict there is a conflicting input. Other repeated
+  assignments, and repeated facet lines, are errors. The default is lossy under
+  reversal: its condition cannot be written back.
+- A quoted literal assigned to a `Range<T>` attribute is validated and
+  canonicalised with the observations range parser. For example,
+  `Horizon <- "P1Y..P5Y"` retains a duration band, not an untyped text value.
 
 ### Claims and metadata
+
+An attribute assignment may supply variable measurement qualifiers from expressions:
+
+```onto
+Expense -> Expense
+  Amount <- Cost.Value {period=Cost.Period}
+```
+
+`cur` and `period` expressions must be single text or vocabulary values.
+The receiving attribute must declare that qualifier as variable (`?`), and the
+source expression must not already fix it: this feature attaches a missing
+measurement basis, never relabels a currency or converts a period. A literal
+qualifier is a quoted expression, e.g. `{period="Month"}`.
+
+These reads participate in provenance, validity, confidence, conflicts and
+coverage like value-expression reads. Qualifiers appear on the emitted
+observation claim, not inside its scalar value. An absent amount emits no claim
+and needs no qualifiers. A present amount with an absent, unknown, malformed or
+out-of-vocabulary supplied qualifier emits no amount; the line reports
+`Mapping.ValueUnmapped` and retains the stale slot. A conflicting qualifier is a
+conflicting input. A false line condition does not demand its qualifiers.
+Qualifier expressions cannot currently be reversed; reversal reports the line
+as lossy rather than dropping its measurement basis.
 
 Each output claim derives from the input claims its expression reads:
 
@@ -588,7 +693,9 @@ A reference to an instance with no existence claim yet is kept; the instance is
 
 - The signature lists argument types and the result type, resolved like any
   ontology name: built-in types, declared types, vocabularies or references.
-  `T*` is a collection argument or result.
+  `T*` is a collection argument or result, and `Range<T>` a range of a built-in
+  or named type, its examples in the [range encoding](spec-02-observations.md#values)
+  (`35-44 => P35Y..P44Y`).
 - Declared `@fn` signatures require concrete types. `any` and `any*` are notation
   for the built-in contracts only, not valid types in a declaration. A concrete
   signature fixes how each example is read: bare `p` is text for `Text`, but a
@@ -755,6 +862,14 @@ A path through a reference (`Instrument.Isin`) reads another instance:
 `??`, literals, multi-argument functions and `$` metadata (except `$valid`, which
 reverses to the scope's `valid`) are not reversible. A `when` condition reverses
 only if its path is also assigned by a reversible line.
+
+A **derived** value is never projected back (A -> B -> A): a value the source
+computes, or one a rule derives, is not an input anyone writes. A line is lossy,
+reported as "derived target, not written back", when its target is a derived
+attribute (`~`) of the output ontology, or when its reverse would assign a
+derived attribute of the input ontology. For a binding, a line whose target is
+a derived attribute of the source ontology (`CanEdit <- canEdit`, for
+`~ CanEdit Boolean`, a value the API computes on read) is read, never written.
 
 The **reverse** of a mapping `A -> B` is the mapping `B -> A` made of the
 reverses of its reversible lines. Tools report the others as **lossy**; the
@@ -1042,8 +1157,8 @@ Warnings:
    bindings); body lines sorted by target (`[Facet]` lines first).
 5. Exclusions sorted by path.
 
-Annotations follow the order `id`, `when`, `src`, `ctx`, `valid`, `deleted`,
-`null`, `reverse`, `candidate`, `reason`. Header keys follow the order of their
+Annotations follow the order `id`, `name`, `into`, `present`, `when`, `src`, `ctx`, `valid`, `deleted`,
+`null`, `cur`, `period`, `reverse`, `candidate`, `reason`. Header keys follow the order of their
 tables. Spacing, docs and comments follow
 spec-01; a declaration with a body is surrounded by blank lines.
 
@@ -1097,6 +1212,11 @@ A function library:
   declarations of a binding or mapping go under `functions`, and `@map`
   declarations use the spec-01 JSON `map` declaration form, under `maps`.
 - Lines carry `src` (a path, as a string) and `reverse`, `candidate` flags.
+  Attribute lines may also carry `qualifiers`, an object from `cur` or `period`
+  to expression objects (e.g. `{"period": {"path": ["Cost", "Period"]}}`).
+- Mapping scopes may carry `name` (an identifier), `present` and `into` (expressions).
+  Structure/entity exclusions cover their descendant fields; explicit leaf
+  exclusions are more specific, and actual reads still take precedence.
 - Expressions: `{"path": [step, ...]}`, where a step is a field or attribute
   name (any string), `{"each": true}` (`[*]`), `{"index": n}`, `{"up": n}` (`^`)
   or `{"root": true}` (`$`); `{"text": "..."}`, `{"number": "5.25"}`,

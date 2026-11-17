@@ -19,7 +19,7 @@ from ..text import Diagnostic, Loc
 type Condition = dict[str, Any]
 
 BINDING_FORMAT = "onto.binding/1"
-HEADER_KEYS = ("rev", "format", "scope", "null", "complete", "retract", "confirm")
+HEADER_KEYS = ("rev", "name", "format", "scope", "null", "complete", "retract", "confirm")
 ANNOTATION_KEYS = ("id", "when", "src", "ctx", "valid", "deleted", "null", "reverse", "candidate", "reason")
 
 
@@ -94,6 +94,12 @@ class Binding:
 	loc: Loc | None = None
 
 
-__all__ = ["Condition", "BindingLine", "BindingScope", "BindingExclusion", "BindingDocument", "Binding"]
+def bindingBy(binding: "Binding") -> str:
+	"""The `by` of a binding's claims: `bind:<Namespace>`, or `bind:<Namespace>/<name>` for a named binding."""
+	name = binding.header.get("name")
+	return f"bind:{binding.ontology}/{name}" if name else f"bind:{binding.ontology}"
+
+
+__all__ = ["bindingBy", "Condition", "BindingLine", "BindingScope", "BindingExclusion", "BindingDocument", "Binding"]
 
 # EOF

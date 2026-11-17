@@ -20,7 +20,7 @@ from .model import FUNCTIONS_FORMAT, Function, FunctionExample, FunctionLibrary,
 
 def _signatureToJson(signature: SignatureType) -> dict[str, Any]:
 	value = {"builtin": signature.builtin} if signature.builtin else {"path": signature.path}
-	return value | ({"collection": True} if signature.collection else {})
+	return value | ({"collection": True} if signature.collection else {}) | ({"range": True} if signature.range else {})
 
 
 def _valueToJson(value: Any) -> Any:
@@ -53,7 +53,8 @@ def _exampleKey(example: FunctionExample) -> str:
 def functionBlock(function: Function, short: Namer) -> list[str]:
 	"""Render one local or library function declaration and its sorted examples."""
 	def signatureText(signature: SignatureType) -> str:
-		return (signature.builtin or short(signature.path)) + ("*" if signature.collection else "")
+		name = signature.builtin or short(signature.path)
+		return (f"Range<{name}>" if signature.range else name) + ("*" if signature.collection else "")
 	annotations = printAnnotations(function.ann, ["inverse", "nulls"])
 	head = f"@fn {function.name} {', '.join(signatureText(arg) for arg in function.args)} -> {signatureText(function.result)}"
 	lines = [withDoc(head + (f" {annotations}" if annotations else ""), function.doc)]

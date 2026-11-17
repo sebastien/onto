@@ -237,7 +237,16 @@ def testInvalidBindingDeclarationsAreRejected(body: str):
 		load(body)
 
 
-@pytest.mark.parametrize("header", ["complete=invalid", "retract=101%", "retract=-1%", "retract=1.5%", "confirm=0", "confirm=x", "format=yaml", "null=invalid", "extra=yes"])
+def testStructuredTargetsTakeTheirFieldsNotADocumentObject():
+	"""A structure has no scalar value: `check` rejects what the executor cannot read."""
+	ontology = loadOntology([Source("s.onto", "@ontology S rev=v1\nPerson\n  Address Address\nAddress =\n  City Text\n")])
+	source = "@binding S rev=v1\nPerson <- people[*] {id=id}\n"
+	assert loadBinding(ontology, Source("t", source + "  Address.City <- address.city\n")).scopes[0].lines[0].target == "Address.City"
+	with pytest.raises(FormatError, match="a structure has no value of its own"):
+		loadBinding(ontology, Source("t", source + "  Address <- address\n"))
+
+
+@pytest.mark.parametrize("header", ["complete=invalid", "name=\"a b\"", "retract=101%", "retract=-1%", "retract=1.5%", "confirm=0", "confirm=x", "format=yaml", "null=invalid", "extra=yes"])
 def testInvalidHeaderDomainsAreRejected(header: str):
 	with pytest.raises(FormatError):
 		loadBinding(ONTOLOGY, Source("t", f"@binding A {header}\nPerson <- people[*] {{id=id}}\n"))

@@ -25,11 +25,17 @@ BUILTIN_ARITIES = {
 
 @dataclass(slots=True)
 class SignatureType:
-	"""A concrete built-in or named function type, optionally a collection."""
+	"""A concrete built-in or named function type, optionally a `Range<T>` of it, optionally a collection."""
 
 	builtin: str | None = None
 	path: str | None = None
 	collection: bool = False
+	range: bool = False
+
+	def typeExpr(self) -> "TypeExpr":
+		from ..ontology.model import TypeExpr
+		element = TypeExpr(builtin=self.builtin, path=self.path)
+		return TypeExpr(range=element) if self.range else element
 
 
 @dataclass(slots=True)

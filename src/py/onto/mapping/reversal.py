@@ -22,6 +22,7 @@ from .model import Mapping, MappingLine, MappingScope
 SPELLING = ("trim", "lower", "upper")
 DATE_PARTS = ("YYYY", "MM", "DD")
 TIME_PARTS = ("hh", "mm", "ss")
+DERIVED = "derived target, not written back"
 
 
 @dataclass(slots=True, frozen=True)
@@ -54,6 +55,12 @@ def lineLabel(line: MappingLine) -> str:
 	return f"[{line.facet}]" if line.facet else line.target or line.verb or ""
 
 
+def isDerived(model: Model, owner: str, path: str) -> bool:
+	"""Whether `owner.path` (through facets and structure fields) ends at a derived attribute."""
+	attr = model.lookup(owner, path)
+	return attr is not None and attr.derived
+
+
 def hasParts(pattern: str, parts: tuple[str, ...]) -> bool:
 	return all(part in pattern for part in parts)
 
@@ -71,6 +78,7 @@ class Reverser:
 	def __init__(self, mapping: Mapping, fromOntology: Ontology, toOntology: Ontology, libraries: list[FunctionLibrary] | None = None):
 		self.mapping = mapping
 		self.model = Model(fromOntology)
+		self.targetModel = Model(toOntology)
 		self.functions: dict[str, tuple[Function, str]] = {item.name: (item, "") for item in mapping.functions}
 		for library in libraries or []:
 			self.functions.update({f"{library.namespace}/{item.name}": (item, library.namespace) for item in library.functions})
@@ -166,6 +174,8 @@ class Reverser:
 		assigned = {".".join(line.expr["path"]): line.target or line.verb for line in lines if line.expr and "path" in line.expr and not line.facet}
 		reverse = MappingScope(source=scope.target, target=scope.source, doc=scope.doc)
 		try:
+			if scope.name or scope.present or scope.into:
+				raise Lossy("named, presence-selected or into scopes are not reversed")
 			if scope.when:
 				reverse.when = self.condition(scope, scope.when, assigned)
 			if scope.ctx is not None:
@@ -180,13 +190,21 @@ class Reverser:
 			if line.facet and not line.when:
 				continue
 			try:
+				if line.qualifiers:
+					raise Lossy("measurement qualifier expressions cannot be written back")
 				if line.facet:
 					raise Lossy("a facet's condition cannot be written back")
 				if line.expr == {"meta": "valid"}:
 					reverse.valid = {"path": (line.target or line.verb or "").split(".")}
 					continue
+				if not line.when and any(other is not line and other.when and lineLabel(other) == lineLabel(line) for other in lines):
+					raise Lossy("the default of exclusive lines has no reversible condition")
+				if line.target and isDerived(self.targetModel, scope.target, line.target):
+					raise Lossy(DERIVED)
 				value = {"path": (line.target or line.verb or "").split(".")}
 				solved = self.solve(scope, line, line.expr, value)
+				if solved.target and isDerived(self.model, scope.source, solved.target):
+					raise Lossy(DERIVED)
 				if line.when:
 					solved.when = self.condition(scope, line.when, assigned)
 				solved.candidate, solved.doc = line.candidate, line.doc

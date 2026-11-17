@@ -275,6 +275,14 @@ def testInvalidMappingDeclarationsAreRejected(body: str):
 		load(body)
 
 
+def testStructuredTargetsAreAssignedFieldByField():
+	"""A structure has no value of its own, so `Name <- Name` is rejected and its fields are mapped."""
+	with pytest.raises(FormatError, match="a structure has no value of its own"):
+		loadMapping(SOURCE, SOURCE, Source("t", "@mapping S -> S\nPerson -> Person\n  Name <- Name\n"))
+	mapping = loadMapping(SOURCE, SOURCE, Source("t", "@mapping S -> S\nPerson -> Person\n  Name.Given <- Name.Given\n"))
+	assert mapping.scopes[0].lines[0].target == "Name.Given"
+
+
 def testReferenceCorrespondenceCannotBeAmbiguousAndUnmappedReferencesWarn():
 	with pytest.raises(FormatError, match="correspondence"):
 		load("Person -> Human\n  Owner <- Owner\nPerson -> Human {when=Code:X}\n")

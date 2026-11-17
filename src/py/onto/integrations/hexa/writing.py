@@ -242,6 +242,8 @@ class WriteCompiler:
 					continue
 				if line.verb:
 					raise CompileError(V.BindingCodes.PathUnsupported, "Relations are not written")
+				if (derived := self.model.lookup(scope.type, line.target)) is not None and derived.derived:
+					raise CompileError(V.BindingCodes.PathUnsupported, "derived target, not written back")
 				expr = line.expr
 				if "path" in expr and len(expr["path"]) == 1 and isinstance(expr["path"][0], dict) and "up" in expr["path"][0]:
 					parent, parentRef = self.enclosingName(scope, expr["path"][0]["up"]), line.target

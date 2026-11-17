@@ -1015,6 +1015,42 @@ dependency, and optional), review-py conventions (tabs, module docstrings,
 camelCase functions, `# EOF`), JSON values with decimals as strings, no network
 in tests, replay journals instead of live effects.
 
+### Write-back safety, exclusive lines and named bindings (2026-11-18)
+
+Found mapping the AdviceLink CRM to AdviceOS (adviceos-data `TODO_ONTO.md`):
+
+- **Derived targets are not written back.** `mapping/reversal.py` reports a line
+  lossy ("derived target, not written back") when its target is derived in the
+  output ontology or its reverse assigns a derived attribute of the input;
+  `integrations/hexa/writing.py` never writes a derived binding target (spec-04
+  Reversal). Tests: `T04-007`, `T06-005`.
+- **Exclusive lines.** One target may be assigned by lines whose `when` read one
+  path with distinct values, plus at most one default without `when`
+  (`checkExclusive`, spec-04 Instances). Each compiles to its own record key
+  (`LineInfo.slot`, `Key#n`); the default is guarded by `Onto.WhenNone`, reads the
+  condition path (a conflict there is a conflicting input) and is lossy under
+  reversal. The formatter orders the default first, then by condition value.
+  Bindings keep one line per target. Tests: `T06-013`.
+- **Structure targets rejected by check** (`checkScalarTarget`), for bindings and
+  mappings, matching the compiler's "no scalar value type". Tests: `T04-003`, `T04-004`.
+- **Named bindings.** Header `name=<token>`; claims and re-run requests use
+  `by=bind:<Namespace>/<name>` (`bindingBy`). Tests: `T06-003`.
+- **`into` over a collection.** A multi-valued selector selects its one member
+  (`Onto.Single`); several or an incomplete set are `Mapping.ReferenceAmbiguous`.
+  Tests: `T06-012`.
+- **`Range<T>` in function signatures** (`SignatureType.range`, JSON `range: true`).
+  Tests: `T04-002`.
+- **Source references.** `ref(S, Key)` in a mapping (`S` from `From`, distinct from
+  `To`): resolved while unfolding (`MappingScopePlan.sourceRefs`, root slots
+  `$ref<n>`) to `<S>_<key>`, translated through the correspondence; instances it
+  names that the state lacks are added as implicit (`implicitReferences`).
+  Generated reverses keep `ref(T, Key)` over target types. A line whose `when`
+  is false (or a default whose sibling matched) reports no projection gaps
+  (`lineApplies`). Tests: `T06-014`.
+- **Open: multi-valued structures.** spec-02 encodes structure values as field
+  paths, so members of a multi-valued structure attribute cannot be told apart;
+  an element constructor in mappings needs element identity in spec-02 first.
+
 ## Workspace hygiene
 
 The project now is a Git repository. Do not modify the original

@@ -97,6 +97,9 @@ def testAliasChoiceIsIndependentOfDeclarationAndFileOrder():
 	("Text -> Text", '"?" => "null"', {"args": ["?"], "result": "null"}),
 	("Text -> Text", '" -- doc" => " {value}"', {"args": [" -- doc"], "result": " {value}"}),
 	("Number -> Number", "? => null", {"args": [{"unknown": True}], "result": None}),
+	("Text -> Range<D/Months>", "35-44 => 35..44", {"args": ["35-44"], "result": "35..44"}),
+	("Text -> Range<Duration>", "65+ => P65Y..", {"args": ["65+"], "result": "P65Y.."}),
+	("Range<Integer>* -> Integer", "[1..2, 5] => 2", {"args": [{"set": ["1..2", "5..5"]}], "result": "2"}),
 ])
 def testTypedExampleValuesRoundTrip(signature: str, example: str, expected: dict):
 	library = load(f"@functions Markets\n@use Dimensions as D\n@fn Convert {signature} {{nulls}}\n  {example}\n")

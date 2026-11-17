@@ -11,7 +11,7 @@ from ..functions.model import FunctionLibrary
 from ..ontology.formatter import Namer, Printer, _toJson, normaliseOntology
 from ..ontology.model import ANNOTATION_KEYS as ONTOLOGY_ANNOTATIONS, Ontology
 from ..text import printAnnotations, withDoc
-from .model import ANNOTATION_KEYS, HEADER_KEYS, MAPPING_FORMAT, Mapping, MappingLine
+from .model import ANNOTATION_KEYS, HEADER_KEYS, MAPPING_FORMAT, QUALIFIER_KEYS, Mapping, MappingLine
 
 # -----------------------------------------------------------------------------
 #
@@ -20,8 +20,9 @@ from .model import ANNOTATION_KEYS, HEADER_KEYS, MAPPING_FORMAT, Mapping, Mappin
 # -----------------------------------------------------------------------------
 
 
-def lineKey(line: MappingLine) -> tuple[int, str]:
-	return (0 if line.facet else 1, line.facet or line.target or line.verb or "")
+def lineKey(line: MappingLine) -> tuple[int, str, str]:
+	# Exclusive lines of one target: the default (no `when`) first, then by condition value.
+	return (0 if line.facet else 1, line.facet or line.target or line.verb or "", "" if line.when is None else "\x01" + str(line.when["value"]))
 
 
 def shortElement(path: str, short: Namer) -> str:
@@ -37,7 +38,10 @@ def shortElement(path: str, short: Namer) -> str:
 def expressionText(expr: dict[str, Any], short: Namer) -> str:
 	def names(value: dict[str, Any]) -> dict[str, Any]:
 		if "call" in value:
-			return {"call": short(value["call"]) if "/" in value["call"] else value["call"], "args": [names(arg) for arg in value["args"]]}
+			args = [names(arg) for arg in value["args"]]
+			if value["call"] == "ref" and args and len(args[0].get("path", [])) == 1 and "/" in str(args[0]["path"][0]):
+				args[0] = {"path": [short(args[0]["path"][0])]}  # ref(Type, Key): the type is a name
+			return {"call": short(value["call"]) if "/" in value["call"] else value["call"], "args": args}
 		if "coalesce" in value:
 			return {"coalesce": [names(item) for item in value["coalesce"]]}
 		return value
@@ -58,13 +62,13 @@ def printMapping(mapping: Mapping) -> str:
 	def annotations(item: Any, keys: tuple[str, ...]) -> str:
 		parts = []
 		for key in ANNOTATION_KEYS:
-			value = getattr(item, key, None) if key in keys else None
+			value = (item.qualifiers.get(key) if key in QUALIFIER_KEYS else getattr(item, key, None)) if key in keys else None
 			if value is None or value is False:
 				continue
 			if key in ("reverse", "candidate"):
 				parts.append(key)
 				continue
-			if key in ("ctx", "valid"):
+			if key in ("ctx", "valid", "present", "into", *QUALIFIER_KEYS):
 				value = expressionText(value, left)
 			elif key == "when":
 				value = printExpression({"path": value["path"]}) + ":" + value["value"]
@@ -85,11 +89,11 @@ def printMapping(mapping: Mapping) -> str:
 		ann = printAnnotations(decl.ann, ONTOLOGY_ANNOTATIONS)
 		lines += ["", withDoc(f"@map {decl.path} {left(decl.mapFrom)} -> {right(decl.mapTo)}" + (" " + ann if ann else ""), decl.doc)]
 		lines += [printer.mapLine(line, indent="  ") for line in decl.mapLines]
-	for scope in sorted(mapping.scopes, key=lambda item: (item.source, item.target)):
-		lines += ["", withDoc(f"{left(scope.source)} -> {right(scope.target)}" + annotations(scope, ("when", "ctx", "valid")), scope.doc)]
+	for scope in sorted(mapping.scopes, key=lambda item: (item.source, item.target, item.name or "")):
+		lines += ["", withDoc(f"{left(scope.source)} -> {right(scope.target)}" + annotations(scope, ("name", "into", "present", "when", "ctx", "valid")), scope.doc)]
 		for line in sorted(scope.lines, key=lineKey):
 			text = f"[{line.facet}]" if line.facet else f"{line.target or line.verb} <- {expressionText(line.expr, left)}"
-			lines.append(withDoc("  " + text + annotations(line, ("when", "src", "reverse", "candidate")), line.doc))
+			lines.append(withDoc("  " + text + annotations(line, ("when", "src", *QUALIFIER_KEYS, "reverse", "candidate")), line.doc))
 	if mapping.exclusions:
 		lines.append("")
 		for item in sorted(mapping.exclusions, key=lambda item: item.path):
@@ -109,15 +113,17 @@ def mappingToJson(mapping: Mapping) -> dict[str, Any]:
 	if mapping.maps:
 		data["maps"] = _toJson(normaliseOntology(Ontology(namespace=mapping.fromNamespace, decls=mapping.maps)), None)["decls"]
 	scopes = []
-	for scope in sorted(mapping.scopes, key=lambda item: (item.source, item.target)):
+	for scope in sorted(mapping.scopes, key=lambda item: (item.source, item.target, item.name or "")):
 		value = {"source": scope.source, "target": scope.target}
-		for key in ("when", "ctx", "valid", "doc"):
+		for key in ("when", "ctx", "valid", "name", "present", "into", "doc"):
 			if (member := getattr(scope, key)) is not None:
 				value[key] = member
 		lines = []
 		for line in sorted(scope.lines, key=lineKey):
 			entry = {key: getattr(line, key) for key in ("target", "facet", "verb", "expr", "when", "src", "doc") if getattr(line, key) is not None}
 			entry.update({key: True for key in ("reverse", "candidate") if getattr(line, key)})
+			if line.qualifiers:
+				entry["qualifiers"] = line.qualifiers
 			lines.append(entry)
 		if lines:
 			value["lines"] = lines

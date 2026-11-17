@@ -7,7 +7,7 @@ from typing import Any
 from hexa.shapes import encode
 
 from ...binding.coverage import absolute, documentPaths
-from ...binding.model import Binding
+from ...binding.model import Binding, bindingBy
 from ...binding.operations import bindingFromJson
 from ...expressions import printExpression
 from ...formats.model import FormatChange, Formats
@@ -90,7 +90,7 @@ class HexaBindingOperator:
 			for steps in documentPaths(line.expr) if (path := absolute(scope.path["path"], steps))}
 		members = bindingStages(program)
 		header = binding.header
-		settings = RunSettings(self.ontology, f"bind:{binding.ontology}", self.mode, str(header.get("complete", "document")),
+		settings = RunSettings(self.ontology, bindingBy(binding), self.mode, str(header.get("complete", "document")),
 			str(header.get("retract", "20%")), int(header.get("confirm", 1)), formats)
 		members |= runStages(settings, members["BindingRead"], "Binding")
 		program.stages = StageNamespace(members)
@@ -161,15 +161,18 @@ class HexaMappingOperator:
 			handleTemplate = item.handleTemplate()
 			scope = ScopeProgram(item.name, item.scope.target, "", item.shape(), template, source=item.scope.source)
 			paths = [steps for info in item.lines for steps in info.inputs] + ([item.scope.when["path"]] if item.scope.when else [])
-			scopePaths = item.paths(item.scope.ctx) + item.paths(item.scope.valid) + ([item.scope.when["path"]] if item.scope.when else [])
+			scopePaths = item.paths(item.scope.ctx) + item.paths(item.scope.valid) + item.paths(item.scope.present) + item.paths(item.scope.into) + ([item.scope.when["path"]] if item.scope.when else [])
 			contextualScope = any(segment.context for path in scopePaths for segment in item.segments(path))
 			if contextualScope:
 				for info in item.lines:
 					info.contextual = True
 			plans.append(MappingScopePlan(item.name, item.scope.source, item.scope.target, item.reach(), item.lines, item.scope.when, handleTemplate, scope,
-				{(info.section, info.key): info for info in item.lines}, {tuple(steps): [segment.key for segment in item.segments(steps)] for steps in paths},
+				{(info.section, info.record): info for info in item.lines}, {tuple(steps): [segment.key for segment in item.segments(steps)] for steps in paths},
 				item.scope.ctx is not None, contextualScope,
-				[[segment.key for segment in item.segments(path)] for path in item.paths(item.scope.ctx)], "$self" in item.roots))
+				[[segment.key for segment in item.segments(path)] for path in item.paths(item.scope.ctx)], "$self" in item.roots,
+				item.scope.present is not None, [[segment.key for segment in item.segments(path)] for path in item.paths(item.scope.present)],
+				item.scope.into is not None, [[segment.key for segment in item.segments(path)] for path in item.paths(item.scope.into)],
+				{key: (typePath, [segment.key for segment in item.segments(steps)]) for key, (typePath, steps) in item.sourceRefs.items()}))
 		scopes = [plan.program for plan in plans]
 		program = MappingProgram(self.fromOntology, self.toOntology, mapping, self.mode, dict(compiler.slots), {scope.name: scope.shape for scope in scopes},
 			{scope.name: scope.template for scope in scopes}, sorted(compiler.used), StageNamespace({}), scopes,

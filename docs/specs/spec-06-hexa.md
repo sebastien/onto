@@ -357,7 +357,7 @@ its codes under `Binding` and `Mapping`:
 | Constraints | `Integral`, `IsoDuration` |
 | Codecs | `EpochDate`, `IntegerText`, `SplitText(Separator)`, `DateTimePattern(Pattern)`, `DecimalNumber`, `DecimalPlaces(Places)`, `Case(Case)` |
 | Transforms | `Handle`, `SourceHandle`, `Ref`, `Correspond`, `Coalesce`, `When`, `TextEquals`, `Valid`, `Read`, `Set`, `Field`, `Nullable`, `At`, `Given`, `Members`, `FormatName`, `QualifierConvert`, `ToInteger`, `ToVocabulary`, `HandleKey`, and the spec-04 built-in functions in PascalCase (`Concat`, `Trim`, `Multiply`, ...) |
-| Codes | `Binding.KeyMissing`, `Binding.TypeMismatch`, `Binding.PathUnsupported`, `Binding.InputEmpty`, `Binding.SnapshotOlder`, `Binding.ParentMissing`; `Mapping.InputConflicting`, `Mapping.ReferenceUnmapped`, `Mapping.NotIntegral`, `Mapping.ValueUnmapped`, `Mapping.KeyReference`, `Mapping.ContextUnsupported`, `Mapping.PolicyUnsupported` |
+| Codes | `Binding.KeyMissing`, `Binding.TypeMismatch`, `Binding.PathUnsupported`, `Binding.InputEmpty`, `Binding.SnapshotOlder`, `Binding.ParentMissing`; `Mapping.InputConflicting`, `Mapping.ReferenceUnmapped`, `Mapping.ReferenceAmbiguous`, `Mapping.NotIntegral`, `Mapping.ValueUnmapped`, `Mapping.KeyReference`, `Mapping.ContextUnsupported`, `Mapping.PolicyUnsupported` |
 
 Each has examples. Built-in functions keep their spec-04 examples and add those
 the table in spec-04 implies.
@@ -408,7 +408,7 @@ DocumentRecordsCollect: <Type>RecordsSelect → <Type>RecordsProject, for each s
   `valid`; a contextual facet's `ctx` never applies to existence.
 - Metadata: `src` is the document's token, `at` the record's `at` or the run's
   time from the `ClockRead` effect (so replay reproduces it), `by` is
-  `bind:<Namespace>`, and `valid` comes from the record. A record's `ctx` is a
+  `bind:<Namespace>` (`bind:<Namespace>/<name>` for a named binding), and `valid` comes from the record. A record's `ctx` is a
   default only for contextual facet applicability and value claims, never for
   existence or non-contextual claims (spec-02).
 - Instances referenced through `ref` and not produced by any record are typed by

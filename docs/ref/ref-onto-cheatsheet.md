@@ -93,6 +93,7 @@ Customs/Code = C6109|C0808|...
 | `E` / `E < Base` + body | Entity / specialisation (single inheritance) |
 | `F of E` + body | Facet of an entity or an association |
 | `F of E {ctx=C}` | Contextual facet: values hold within an instance of `C` |
+| `F of E {when=A:V}` | Conditional facet: applies only to subjects whose `A` is `V` |
 | `S -verb/inverse-> T L:R` + body | Binary relation |
 | `R(Role: [card] Type, ...)` + body | Association (n-ary relation) |
 | `@map M From -> To` + body | Value map: `exact`, `broader`, `narrower`, `related` |

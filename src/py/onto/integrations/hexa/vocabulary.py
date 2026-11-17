@@ -41,7 +41,7 @@ BUILTINS = {
 	"sum": "Sum", "multiply": "Multiply", "subtract": "Subtract", "divide": "Divide", "count": "Count",
 }
 BindingCodes = codes("Binding", "KeyMissing", "TypeMismatch", "PathUnsupported", "InputEmpty", "SnapshotOlder", "ParentMissing")
-MappingCodes = codes("Mapping", "InputConflicting", "ReferenceUnmapped", "NotIntegral", "ValueUnmapped", "KeyReference", "ContextUnsupported", "PolicyUnsupported")
+MappingCodes = codes("Mapping", "InputConflicting", "ReferenceUnmapped", "ReferenceAmbiguous", "NotIntegral", "ValueUnmapped", "KeyReference", "ContextUnsupported", "PolicyUnsupported")
 # NOTE: Only these prototypes are registered. Compiled calls carry their own evaluator,
 # like program-local stages, without competing for hexa's process-wide names.
 FUNCTION_TRANSFORM = transform("Onto.Function", lambda *args: None, inputs=[[Any, ...]], output=Any)
@@ -292,6 +292,11 @@ def whenValue(condition: AnyValue, value: AnyValue) -> AnyValue:
 	return value if condition is True and not isAbsent(value) else ABSENT_VALUE
 
 
+def whenNone(value: AnyValue, texts: list[str], result: AnyValue) -> AnyValue:
+	"""The default of exclusive lines: `result` when `value` is absent or none of `texts`."""
+	return ABSENT_VALUE if not isAbsent(value) and textOf(value) in texts or isAbsent(result) else result
+
+
 def coalesce(*items: AnyValue) -> AnyValue:
 	return next((item for item in items if not isAbsent(item)), ABSENT_VALUE)
 
@@ -370,6 +375,18 @@ def correspondAs(value: AnyValue, typePath: str) -> AnyValue:
 	if target is None:
 		raise Gap(CorrespondAs.ReferenceUnmapped)
 	return {"ref": target, "type": typePath}
+
+
+def single(value: AnyValue) -> AnyValue:
+	"""The one member of a collection (`into` over a multi-valued reference); several, or an incomplete set, are ambiguous."""
+	if isAbsent(value) or not isinstance(value, dict) or "set" not in value:
+		return value
+	members = value["set"]
+	if not members and not value.get("partial"):
+		return ABSENT_VALUE
+	if len(members) != 1 or value.get("partial"):
+		raise Gap(Single.ReferenceAmbiguous)
+	return members[0]
 
 
 def valid(value: AnyValue) -> AnyValue:
@@ -616,6 +633,9 @@ TextEquals = transform("Onto.TextEquals", textEquals, inputs=[Any, Text], output
 	examples=[{"input": ["F", "F"], "output": True}, {"input": [6, "6"], "output": True}])
 When = transform("Onto.When", whenValue, inputs=[Any, Any], output=Any,
 	examples=[{"input": [True, "x"], "output": "x"}, {"input": [False, "x"], "output": ABSENT_VALUE}])
+WhenNone = transform("Onto.WhenNone", whenNone, inputs=[Any, Any, Any], output=Any,
+	examples=[{"input": ["A", ["A", "B"], "x"], "output": ABSENT_VALUE}, {"input": ["C", ["A", "B"], "x"], "output": "x"},
+		{"input": [ABSENT_VALUE, ["A"], "x"], "output": "x"}])
 Coalesce = transform("Onto.Coalesce", coalesce, inputs=[[Any, ...]], output=Any,
 	examples=[{"input": [ABSENT_VALUE, "ACM30"], "output": "ACM30"}, {"input": [None, "x"], "output": None}])
 Handle = transform("Onto.Handle", handle, inputs=[Text, Any], output=Text, gaps=["KeyMissing", "TypeMismatch"],
@@ -628,6 +648,9 @@ HandleKey = transform("Onto.HandleKey", handleKey, inputs=[Any, Text], output=An
 	examples=[{"input": [{"ref": "Issuer_C_2D17"}, "Issuer"], "output": "C-17"}])
 Correspond = transform("Onto.Correspond", correspond, inputs=[Any], output=Any, gaps=["ReferenceUnmapped"],
 	examples=[{"input": [{"ref": "Issuer_C_2D17", "target": "Company_ACME"}], "output": {"ref": "Company_ACME"}}, {"input": [{"ref": "x"}], "gap": "ReferenceUnmapped"}])
+Single = transform("Onto.Single", single, inputs=[Any], output=Any, gaps=["ReferenceAmbiguous"],
+	examples=[{"input": [{"set": [{"ref": "Person_1"}]}], "output": {"ref": "Person_1"}}, {"input": [{"set": []}], "output": ABSENT_VALUE},
+		{"input": [{"set": [{"ref": "a"}, {"ref": "b"}]}], "gap": "ReferenceAmbiguous"}, {"input": [{"ref": "a"}], "output": {"ref": "a"}}])
 CorrespondAs = transform("Onto.CorrespondAs", correspondAs, inputs=[Any, Text], output=Any, gaps=["ReferenceUnmapped"],
 	examples=[{"input": [{"ref": "Client_9", "target": "Person_9", "targets": {"Crm/Person": "Person_9", "Crm/Relationship": "Relationship_9"}}, "Crm/Person"], "output": {"ref": "Person_9", "type": "Crm/Person"}},
 		{"input": [{"ref": "x", "targets": {}}, "Crm/Person"], "gap": "ReferenceUnmapped"}])
@@ -676,7 +699,7 @@ for builtinName, builtinExamples in BUILTIN_EXAMPLES.items():
 
 CODECS = {"EpochDate": EpochDate, "IntegerText": IntegerText, "SplitText": SplitText, "DateTimePattern": DateTimePattern,
 	"DecimalNumber": DecimalNumber, "DecimalPlaces": DecimalPlaces, "Case": Case}
-TRANSFORMS = {item.name: item for item in (Read, Set, TextEquals, When, Coalesce, Handle, SourceHandle, Ref, HandleKey, Correspond, CorrespondAs, Valid, At,
+TRANSFORMS = {item.name: item for item in (Read, Set, TextEquals, When, WhenNone, Coalesce, Handle, SourceHandle, Ref, HandleKey, Correspond, CorrespondAs, Single, Valid, At,
 	FormatName, Field, Nullable, QualifierConvert, ToInteger, ToVocabulary, Given, Members, *BUILTIN_TRANSFORMS.values())}
 
 
@@ -741,8 +764,8 @@ def vocabularyConformance() -> int:
 
 __all__ = [
 	"ABSENT_VALUE", "BindingCodes", "MappingCodes", "Integral", "IsoDuration", "EpochDate", "IntegerText", "SplitText",
-	"DateTimePattern", "DecimalNumber", "DecimalPlaces", "Case", "DatePattern", "DecimalText", "Read", "Set", "TextEquals", "When",
-	"Coalesce", "Handle", "SourceHandle", "Ref", "HandleKey", "Correspond", "CorrespondAs", "Valid", "At", "FormatName", "Field", "Nullable",
+	"DateTimePattern", "DecimalNumber", "DecimalPlaces", "Case", "DatePattern", "DecimalText", "Read", "Set", "TextEquals", "When", "WhenNone",
+	"Coalesce", "Handle", "SourceHandle", "Ref", "HandleKey", "Correspond", "CorrespondAs", "Single", "Valid", "At", "FormatName", "Field", "Nullable",
 	"QualifierConvert", "ToInteger", "ToVocabulary", "Given", "Members", "TRANSFORMS", "CODECS", "builtin", "functionTransform", "functionCodec",
 	"reasonCode", "vocabularyConformance", "isAbsent", "decimalText", "documentValue", "encodeKey", "decodeKey",
 	"handleOf", "textOf",

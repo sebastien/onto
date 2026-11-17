@@ -87,6 +87,12 @@ def checkAssignment(model: Model, inferred: Inferred, expected: ResolvedType, co
 		raise ValueError(f"{what}: incompatible expression type for the target")
 
 
+def checkScalarTarget(model: Model, attr: Any, name: str) -> None:
+	"""A structured attribute has no value of its own: its fields are assigned (`Attr.Field <- ...`)."""
+	if model.resolveType(attr.type, attr.ann).kind == "struct":
+		raise ValueError(f"{name}: a structure has no value of its own; assign its fields ({name}.<Field>)")
+
+
 # -----------------------------------------------------------------------------
 #
 # OPERATIONS
@@ -323,6 +329,7 @@ def resolveBinding(ontology: Ontology, doc: BindingDocument, libraries: list[Fun
 				inferred = resolver.resolve(line.expr)
 				attr = model.lookup(scope.type, name)
 				if attr:
+					checkScalarTarget(model, attr, name)
 					checkAssignment(model, inferred, model.resolveType(attr.type, attr.ann), (attr.card or model.defaultCard) in ("*", "+"), name)
 				else:
 					verbs = model.verbs(scope.type, name)

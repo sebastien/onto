@@ -356,6 +356,44 @@ def _checkExclusive(ontology: Ontology, observations: Observations, doc: Observa
 	return diag.items
 
 
+def _conditionText(value: object) -> str | None:
+	"""A stated value as a facet condition spells it; None for `null` and `?`."""
+	if value is None or isinstance(value, dict):
+		return None
+	return ("true" if value else "false") if isinstance(value, bool) else str(value)
+
+
+def _checkFacetConditions(ontology: Ontology, observations: Observations, doc: ObservationsDocument) -> list[Diagnostic]:
+	"""Errors for a facet `{when=Attr:Value}` claimed by a source that states another value of `Attr` for the same subject."""
+	model = Model(ontology)
+	diag = Diagnostics()
+	locations = {statement.n: statement.loc for statement in doc.statements}
+	stated: dict[tuple, list[Claim]] = {}
+	facetClaims: list[tuple[Claim, str, str, str]] = []
+	for claim in observations.claims:
+		owner = observations.instances.get(claim.get("s", ""), {}).get("type")
+		if not isinstance(owner, str):
+			continue
+		path = claim.get("p")
+		name = claim.get("facet") or (path.split(".", 1)[0] if isinstance(path, str) and "." in path else None)
+		facet = model.facets(owner).get(name) if name else None
+		if facet is None:
+			if isinstance(path, str):
+				stated.setdefault((claim["s"], claim.get("src"), path), []).append(claim)
+			continue
+		condition = annotation(facet.ann, "when")
+		if isinstance(condition, str) and ":" in condition:
+			attr, _, value = condition.partition(":")
+			facetClaims.append((claim, name, attr, value))
+	for claim, name, attr, value in facetClaims:
+		clash = next((other for other in stated.get((claim["s"], claim.get("src"), attr), [])
+			if (text := _conditionText(other.get("v"))) is not None and text != value and _overlaps(claim, other)), None)
+		if clash:
+			diag.error("when", f"'{claim['s']}' has facet '{name}', which applies when {attr} is {value}, but states {attr} {_conditionText(clash['v'])}",
+				locations.get(claim["n"]))
+	return diag.items
+
+
 def resolveObservations(ontology: Ontology, doc: ObservationsDocument, mode: str = "strict") -> Observations:
 	"""Type parsed `doc`; lenient mode holds semantically invalid statements as gaps."""
 	if mode not in ("strict", "lenient"):
@@ -364,7 +402,7 @@ def resolveObservations(ontology: Ontology, doc: ObservationsDocument, mode: str
 	# NOTE: Imported here: `meta` builds on the observations formatter.
 	from ..meta import checkMetaReferences
 
-	diagnostics = checkMetaReferences(ontology, observations, doc) + _checkExclusive(ontology, observations, doc)
+	diagnostics = checkMetaReferences(ontology, observations, doc) + _checkExclusive(ontology, observations, doc) + _checkFacetConditions(ontology, observations, doc)
 	if not diagnostics:
 		return observations
 	if mode == "strict":

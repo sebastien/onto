@@ -13,7 +13,7 @@ from ..observations.parser import _jsonObject, _jsonString
 from ..ontology.model import Decl, RE_ATTR_PATH, RE_MAP, RE_VIEW_ARROW
 from ..ontology.parser import _Context, _declFromJson, _parseMapLine
 from ..text import Diagnostics, Loc, Source, isName, isPath, isToken, parseAnnotations, parseArguments, sourceLines, splitAnnotations, splitDoc
-from .model import HEADER_KEYS, MAPPING_FORMAT, Mapping, MappingDocument, MappingExclusion, MappingLine, MappingScope
+from .model import HEADER_KEYS, MAPPING_FORMAT, QUALIFIER_KEYS, Mapping, MappingDocument, MappingExclusion, MappingLine, MappingScope
 
 # -----------------------------------------------------------------------------
 #
@@ -48,7 +48,7 @@ def mappingAnnotations(text: str | None, allowed: tuple[str, ...]) -> dict[str, 
 	for part in annotationParts(text):
 		key, separator, value = part.partition("=")
 		key, value = key.strip(), value.strip()
-		if key not in allowed or key in result:
+		if key not in allowed or key in result or key in result.get("qualifiers", {}):
 			raise ValueError(f"Invalid or duplicate mapping annotation '{key}'")
 		if key in ("reverse", "candidate"):
 			if separator:
@@ -56,8 +56,12 @@ def mappingAnnotations(text: str | None, allowed: tuple[str, ...]) -> dict[str, 
 			result[key] = True
 		elif not separator:
 			raise ValueError(f"'{key}' requires a value")
-		elif key in ("ctx", "valid"):
+		elif key in QUALIFIER_KEYS:
+			result.setdefault("qualifiers", {})[key] = parseExpression(value)
+		elif key in ("ctx", "valid", "present", "into"):
 			result[key] = parseExpression(value)
+		elif key == "name" and isName(value):
+			result[key] = value
 		elif key == "when":
 			result[key] = condition(value, binding=False)
 		elif key == "src" and RE_ATTR_PATH.fullmatch(value):
@@ -113,11 +117,13 @@ def readMappingJson(data: Any) -> Mapping:
 	if not isinstance(value["scopes"], list):
 		raise ValueError("scopes must be an array")
 	for item in value["scopes"]:
-		item = _jsonObject(item, ("source", "target"), ("when", "ctx", "valid", "doc", "lines"))
+		item = _jsonObject(item, ("source", "target"), ("when", "ctx", "valid", "doc", "lines", "name", "present", "into"))
 		scope = MappingScope(_jsonString(item["source"], isPath), _jsonString(item["target"], isPath), doc=readDoc(item))
 		if "when" in item:
 			scope.when = readCondition(item["when"], binding=False)
-		for key in ("ctx", "valid"):
+		if "name" in item:
+			scope.name = _jsonString(item["name"], isName)
+		for key in ("ctx", "valid", "present", "into"):
 			if key in item:
 				setattr(scope, key, expressionFromJson(item[key]))
 		if not isinstance(item.get("lines", []), list):
@@ -126,11 +132,13 @@ def readMappingJson(data: Any) -> Mapping:
 			if not isinstance(line, dict) or len(set(line) & {"target", "facet", "verb"}) != 1:
 				raise ValueError("A mapping line requires one target kind")
 			kind = next(key for key in ("target", "facet", "verb") if key in line)
-			line = _jsonObject(line, (kind,) if kind == "facet" else (kind, "expr"), ("when", "candidate", "doc") if kind == "facet" else ("when", "src", "reverse", "candidate", "doc"))
+			line = _jsonObject(line, (kind,) if kind == "facet" else (kind, "expr"), ("when", "candidate", "doc") if kind == "facet" else ("when", "src", "reverse", "candidate", "doc", "qualifiers"))
 			name = _jsonString(line[kind], isName if kind == "facet" else lambda text: bool(RE_ATTR_PATH.fullmatch(text)))
 			entry = MappingLine(**{kind: name}, doc=readDoc(line))
 			if "expr" in line:
 				entry.expr = expressionFromJson(line["expr"])
+			if "qualifiers" in line:
+				entry.qualifiers = {key: expressionFromJson(expr) for key, expr in _jsonObject(line["qualifiers"], (), QUALIFIER_KEYS).items()}
 			if "when" in line:
 				entry.when = readCondition(line["when"], binding=False)
 			if "src" in line:
@@ -197,7 +205,7 @@ def parseMapping(source: Source) -> MappingDocument:
 					parts = re.split(r"[ \t]+<-[ \t]+", body, maxsplit=1)
 					if len(parts) != 2 or not RE_ATTR_PATH.fullmatch(parts[0]):
 						raise ValueError("Invalid mapping assignment")
-					entry = MappingLine(target=parts[0], expr=parseExpression(parts[1]), **mappingAnnotations(annotations, ("when", "src", "reverse", "candidate")), doc=docText, loc=line.loc)
+					entry = MappingLine(target=parts[0], expr=parseExpression(parts[1]), **mappingAnnotations(annotations, ("when", "src", *QUALIFIER_KEYS, "reverse", "candidate")), doc=docText, loc=line.loc)
 				current.lines.append(entry)
 				continue
 			current = None
@@ -231,7 +239,7 @@ def parseMapping(source: Source) -> MappingDocument:
 				if len(parts) != 2:
 					raise ValueError("Invalid mapping scope or directive")
 				current = MappingScope(qualifyPath(parts[0], doc.fromNamespace, doc.uses), qualifyPath(parts[1], doc.toNamespace, doc.uses),
-					**mappingAnnotations(annotations, ("when", "ctx", "valid")), doc=docText, loc=line.loc)
+					**mappingAnnotations(annotations, ("name", "into", "present", "when", "ctx", "valid")), doc=docText, loc=line.loc)
 				doc.scopes.append(current)
 		except ValueError as error:
 			diag.error("mapping", str(error), line.loc)

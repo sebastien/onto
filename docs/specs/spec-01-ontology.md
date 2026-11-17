@@ -396,6 +396,33 @@ Facet attributes are always addressed through the facet:
 `Person.Investor.RiskTolerance`, `Income.IncomeTreatment.IsIncluded`. Two
 facets may therefore declare attributes with the same name.
 
+#### Conditional facets
+
+```onto
+Cna/CnaSection
+  1 Advice Advice/AdviceApplication {key}
+  1 Section Cna/Section {key}
+
+Cna/GoalsSection of Cna/CnaSection {when=Section:Goals}
+  Notes Text
+```
+
+`{when=Attr:Value}` on a facet makes it **conditional**: it applies only to
+subject instances whose `Attr` has value `Value`. One record kind with variants
+chosen by a value (a section, a document type, a discriminator) is one entity
+with a conditional facet per variant.
+
+- `Attr` is a single-valued, observed attribute of the subject (or a field of
+  one of its structures) whose type is a built-in or a vocabulary; `Value` is a
+  value of that type, as the [observations encoding](spec-02-observations.md#values)
+  spells it (`true`, `Goals`, `12`).
+- The condition does not make the facet apply: the facet's applicability is
+  still observed.
+- In observations, one source claiming the facet (its applicability or one of
+  its attributes) on a subject for which it states another value of `Attr`,
+  over overlapping `valid=` periods, is an error (`when`). `null` and `?` are not
+  values. Different sources disagreeing are reconciled as usual.
+
 #### Contextual facets
 
 ```text
@@ -590,6 +617,7 @@ Keys, in normal-form order:
 | `context` | binary relation | The n-ary relation carrying the link's state; written shortest, stored as a full path |
 | `subjectRole`, `objectRole` | context-backed binary relation | Role names on the context selecting the subject and object |
 | `ctx` | facet | Entity or association whose instances the facet's values hold within ([contextual facets](#contextual-facets)); written shortest, stored as a full path |
+| `when` | facet | `Attr:Value`: the facet applies only to subjects whose `Attr` is `Value` ([conditional facets](#conditional-facets)) |
 | `extends` | named vocabulary | Open vocabulary whose values this one adds to ([extensions](#extensions)); written shortest, stored as a full path |
 | `ordered` | vocabulary | Value order is meaningful |
 | `hierarchical` | vocabulary | Values are taxonomy paths; prefixes are ancestors |

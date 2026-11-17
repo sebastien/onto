@@ -29,11 +29,11 @@ def _resolveSignature(model: Model, signature: SignatureType) -> ResolvedType:
 		decl = model.get(signature.path)
 		if not decl or decl.kind not in ("entity", "type") and not isAssociation(decl):
 			raise ValueError(f"Unknown signature type '{signature.path}'")
-	return model.resolveType(TypeExpr(builtin=signature.builtin, path=signature.path))
+	return model.resolveType(signature.typeExpr())
 
 
 def _exampleValue(resolver: _Resolver, signature: SignatureType, raw: str, loc: Loc) -> Any:
-	attr = Attr("Example", card="*" if signature.collection else "?", type=TypeExpr(builtin=signature.builtin, path=signature.path))
+	attr = Attr("Example", card="*" if signature.collection else "?", type=signature.typeExpr())
 	return resolver.value(raw, attr, Statement(1, "value", "", None, loc, {}))
 
 

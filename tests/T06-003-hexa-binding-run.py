@@ -248,4 +248,18 @@ def test_snapshots_replacing_a_previous_token():
 	assert outcome.log["sources"][retraction["of"]] == "feed:2026-11-10" and outcome.log["sources"][retraction["src"]] == "feed:2026-11-11"
 
 
+def test_named_bindings_claim_and_retract_under_their_own_by():
+	"""Bindings of one ontology over one `src` stay apart when named: `by=bind:<Namespace>/<name>`."""
+	text = TEXT.replace("@binding Exchange rev=2026-11-10", "@binding Exchange rev=2026-11-10 name=instruments-feed", 1)
+	assert binding(text).header["name"] == "instruments-feed"
+	store = Store()
+	_, first = runOnce(store, feed(), text=text)
+	assert {claim["by"] for claim in first.log["claims"]} == {"bind:Exchange/instruments-feed"}
+	store.apply(first)
+	runOnce(store, feed(), text=text)
+	assert store.requests[-1] == {"by": "bind:Exchange/instruments-feed", "src": SRC}
+	with pytest.raises(Exception):
+		binding(TEXT.replace("@binding Exchange rev=2026-11-10", "@binding Exchange rev=2026-11-10 name=\"a b\"", 1))
+
+
 # EOF

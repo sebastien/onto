@@ -122,7 +122,8 @@ def coverageRows(report: CoverageReport) -> list[Row]:
 
 def signatureText(signature: Any) -> str:
 	"""A signature type as `.fn` files write it."""
-	return (signature.builtin or signature.path) + ("*" if signature.collection else "")
+	name = signature.builtin or signature.path
+	return (f"Range<{name}>" if signature.range else name) + ("*" if signature.collection else "")
 
 
 def snapshotModel(ws: Workspace, files: list[str]) -> Ontology | None:

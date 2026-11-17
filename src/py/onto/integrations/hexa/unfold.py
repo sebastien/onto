@@ -16,11 +16,12 @@ from typing import Any as AnyValue
 from hexa.combinators import Policy, collect, each, lift, pipe, project, stage
 
 from ...observations.model import parseInterval
-from ...ontology.model import Model
+from ...ontology.model import Model, TypeExpr
+from ...text import isToken
 from .compiler import LineInfo
 from .model import ScopeProgram
 from .stages import ClaimsBuilder, cleanValue, namedStage
-from .vocabulary import MappingCodes, isAbsent, reasonCode, textOf
+from .vocabulary import MappingCodes, handleOf, isAbsent, reasonCode, textOf
 
 # -----------------------------------------------------------------------------
 #
@@ -47,6 +48,11 @@ class MappingScopePlan:
 	contextualScope: bool = False
 	contextInputs: list[list[str]] = field(default_factory=list)
 	readsSelf: bool = False  # a line reads `$`, the scope instance
+	presence: bool = False
+	presenceInputs: list[list[str]] = field(default_factory=list)
+	update: bool = False
+	targetInputs: list[list[str]] = field(default_factory=list)
+	sourceRefs: dict[str, tuple[str, list[str]]] = field(default_factory=dict)  # `$ref<n>` -> (source type, key segments)
 
 	def activeLines(self, occurrence: dict) -> list[LineInfo]:
 		"""Global lines run once; lines reading contextual slots run in their context occurrence."""
@@ -106,6 +112,11 @@ def valueAt(tree: dict, keys: list[str]) -> AnyValue:
 	return node
 
 
+def isPresent(value: AnyValue) -> bool:
+	"""A known nonempty value; false and zero are present."""
+	return not (value is None or isAbsent(value) or value == {"unknown": True} or value == "" or isinstance(value, dict) and "set" in value and not value["set"])
+
+
 def setAt(tree: dict, pointer: str, value: AnyValue) -> dict:
 	"""A copy of `tree` with `value` at `pointer` (a conflicting slot taking one of its values)."""
 	result = deepcopy(tree)
@@ -162,11 +173,13 @@ class StateIndex:
 class Unfolder:
 	"""Turn scope instances into trees limited to the scope's reach, with metadata tables and conflicts."""
 
-	def __init__(self, index: StateIndex, correspondence: dict[str, str] | None, targets: dict[str, dict[str, str]] | None = None):
+	def __init__(self, index: StateIndex, correspondence: dict[str, str] | None, targets: dict[str, dict[str, str]] | None = None,
+		scopeTargets: dict[str, dict[str, str]] | None = None):
 		self.index = index
 		self.correspondence = correspondence
 		# Source handle -> {target type: target handle}, for source types with several scope lines
 		self.targets = targets or {}
+		self.scopeTargets = scopeTargets or {}
 
 	def reference(self, handle: str, children: dict, pointer: str, meta: dict, conflicts: dict, context: str | None = None) -> dict:
 		result: dict = {"ref": handle}
@@ -271,13 +284,33 @@ class Unfolder:
 		tree |= {"$handle": handle, "$type": self.index.typeOf(handle), "$scope": self.index.scope, "$at": existence.get("at"), "$src": existsMeta["src"]}
 		if "valid" in existence:
 			tree["$valid"] = existence["valid"]
-		if self.correspondence is not None and handle in self.correspondence:
+		if plan.name in self.scopeTargets.get(handle, {}):
+			tree["$target"] = self.scopeTargets[handle][plan.name]
+		elif self.correspondence is not None and handle in self.correspondence:
 			tree["$target"] = self.targets.get(handle, {}).get(plan.target, self.correspondence[handle])
 		if plan.readsSelf:
 			# `$` reads the instance itself: a reference translated like any other
 			tree["$self"] = self.reference(handle, {}, "", meta, conflicts, context)
+		for key, (typePath, keys) in plan.sourceRefs.items():
+			# `ref(S, Key)`: the source instance `<S>_<key>`, a reference translated like any other
+			value = valueAt(tree, keys)
+			if value is not None and not isAbsent(value) and value != {"unknown": True} and not isinstance(value, dict):
+				tree[key] = self.reference(handleOf(typePath, textOf(value)), {}, "", meta, conflicts, context)
 		location = f"/{plan.name}/{escape(handle)}" + (f"/contexts/{escape(context)}" if context else "")
 		return {"value": tree, "location": location, "meta": meta, "conflicts": conflicts, "exists": existsMeta, "context": context}
+
+
+def lineApplies(plan: MappingScopePlan, occurrence: dict, info: LineInfo) -> bool:
+	"""Whether a line's `when` holds, or a default's siblings' conditions all fail. An absent condition value
+	fails a `when` and holds for a default; conflicts are reported as conflicting inputs before this."""
+	condition = info.when or info.unless
+	if condition is None:
+		return True
+	value = valueAt(occurrence["value"], plan.segmentKeys[tuple(condition["path"])])
+	if value is None:
+		return info.when is None
+	text = textOf(value)
+	return text == info.when["value"] if info.when else text not in info.unless["values"]
 
 
 def pointersOf(tree: dict, steps: list[str]) -> list[str]:
@@ -315,6 +348,7 @@ class MappingEmitter:
 		self.mixed: list[dict] = []
 		self.unidentified: list[dict] = []
 		self.emittedExistence: set[tuple] = set()
+		self.emittedHandles: set[str] = set()
 
 	def inputs(self, occurrence: dict, info: LineInfo, variant: str | None = None) -> tuple[list[list[str]], list[str]]:
 		"""Each input path's present pointers, and the conflicting pointers among them."""
@@ -368,7 +402,20 @@ class MappingEmitter:
 		if not isinstance(handle, str):
 			return
 		occurrence = {**occurrence, "scope": plan.name}
-		if variant is None:
+		if plan.presence:
+			if any(pointer in occurrence["conflicts"] for keys in plan.presenceInputs for pointer in pointersOf(occurrence["value"], keys)):
+				self.gap(plan.target, str(MappingCodes.InputConflicting), occurrence, handle)
+				for info in plan.activeLines(occurrence):
+					self.markStale(plan, occurrence, info, handle, str(MappingCodes.InputConflicting), record, variant)
+				return
+			if not isPresent(record.get("present")):
+				return
+		if plan.update and handle not in self.emittedHandles:
+			self.gap(plan.target, str(MappingCodes.ReferenceUnmapped), occurrence, handle)
+			for info in plan.activeLines(occurrence):
+				self.markStale(plan, occurrence, info, handle, str(MappingCodes.ReferenceUnmapped), record, variant)
+			return
+		if variant is None and not plan.update:
 			exists = occurrence["exists"]
 			meta = {"src": exists["src"], "at": self.runTime, "by": self.by}
 			valid = record.get("valid") if isinstance(record.get("valid"), str) else exists.get("valid")
@@ -377,12 +424,13 @@ class MappingEmitter:
 			if "conf" in exists:
 				meta["conf"] = exists["conf"]
 			self.builder.instance(handle, plan.target)
+			self.emittedHandles.add(handle)
 			existenceKey = (handle, tuple(sorted(meta.items())))
 			if existenceKey not in self.emittedExistence:
 				self.builder.exists(handle, meta)
 				self.emittedExistence.add(existenceKey)
 		for info in lines if lines is not None else plan.activeLines(occurrence):
-			value = record.get(info.section, {}).get(info.key)
+			value = record.get(info.section, {}).get(info.record)
 			paths, conflicting = self.inputs(occurrence, info, variant[0] if variant else None)
 			target = f"{plan.target}[{info.key}]" if info.section == "facets" else f"{plan.target}.{info.key}"
 			if conflicting and variant is None and conflicting == info.sourcePath(paths)[-1:] and not self.contextConflicts(plan, occurrence):
@@ -391,9 +439,26 @@ class MappingEmitter:
 				self.gap(target, str(MappingCodes.InputConflicting), occurrence, handle)
 				self.markStale(plan, occurrence, info, handle, str(MappingCodes.InputConflicting), record, variant)
 				continue
-			if value is None and info.key not in record.get(info.section, {}) or isAbsent(value) or value is False and info.section == "facets":
+			if value is None and info.record not in record.get(info.section, {}) or isAbsent(value) or value is False and info.section == "facets":
 				continue
 			meta, others = self.metadata(occurrence, info, paths, variant)
+			if info.qualifiers:
+				qualifiers = record.get("qualifiers", {}).get(info.record, {})
+				attr = self.program.targetModel.lookup(plan.target, info.key)
+				resolved = self.program.targetModel.resolveType(attr.type, attr.ann)
+				valid = True
+				for key in info.qualifiers:
+					member = qualifiers.get(key)
+					vocabulary = resolved.qualifierVocabularies.get(key)
+					kind = self.program.targetModel.resolveType(TypeExpr(path=vocabulary)) if vocabulary else None
+					if not isinstance(member, str) or member == "?" or not isToken(member) or kind is not None and not kind.open and member not in (kind.values or []):
+						valid = False
+						break
+					meta[key] = member
+				if not valid:
+					self.gap(target, str(MappingCodes.ValueUnmapped), occurrence, handle)
+					self.markStale(plan, occurrence, info, handle, str(MappingCodes.ValueUnmapped), record, variant)
+					continue
 			if info.contextType:
 				context = self.contextSlot(plan, occurrence, info, record).get("ctx")
 				if not context:
@@ -431,16 +496,24 @@ class MappingEmitter:
 		variant: tuple[str, dict] | None = None, lines: list[LineInfo] | None = None) -> None:
 		"""Report a main or variant projection hole only for the lines active in this occurrence."""
 		path = entry.get("path") or []
+		if path[:1] == ["present"] and plan.presence:
+			handle = occurrence["value"]["$target"]
+			self.gap(plan.target, reasonCode(entry["reason"]), occurrence, handle)
+			for info in plan.activeLines(occurrence):
+				self.markStale(plan, occurrence, info, handle, reasonCode(entry["reason"]), record, variant)
+			return
 		if len(path) < 2:
 			return
 		section, key = path[0], path[1]
 		info = plan.sectionLines.get((section, key))
 		if info is None or info not in (lines if lines is not None else plan.activeLines(occurrence)):
 			return
+		if not lineApplies(plan, occurrence, info):
+			return  # a line whose condition is false demands nothing, not even a value
 		if self.inputs({**occurrence, "scope": plan.name}, info, variant[0] if variant else None)[1]:
 			return
 		handle = occurrence["value"]["$target"]
-		target = f"{plan.target}[{key}]" if section == "facets" else f"{plan.target}.{key}"
+		target = f"{plan.target}[{info.key}]" if section == "facets" else f"{plan.target}.{info.key}"
 		self.gap(target, reasonCode(entry["reason"]), occurrence, handle)
 		self.markStale(plan, occurrence, info, handle, reasonCode(entry["reason"]), record, variant)
 
@@ -456,11 +529,16 @@ class MappingEmitter:
 			found = self.program.targetModel.verbs(plan.target, info.key)
 			if not found:
 				return
-			decl, inverse = found[0]
-			first, second = decl.participants[0].role, decl.participants[1].role
 			members = value["set"] if isinstance(value, dict) and "set" in value else [value]
 			for member in members:
 				if isinstance(member, dict) and "ref" in member:
+					kind = member.get("type") or builder.implicit.get(member["ref"])
+					matches = [(decl, inverse) for decl, inverse in found if kind is None or self.program.targetModel.isA(kind, decl.participants[0 if inverse else 1].type)]
+					if len(matches) != 1:
+						self.gaps.append({"target": f"{plan.target}.{info.key}", "reason": str(MappingCodes.ReferenceUnmapped), "src": meta["src"], "handle": handle})
+						continue
+					decl, inverse = matches[0]
+					first, second = decl.participants[0].role, decl.participants[1].role
 					cleanValue(member, builder.implicit)
 					other = member["ref"]
 					builder.add({"rel": decl.path, "roles": {first: other, second: handle} if inverse else {first: handle, second: other}, **meta})
@@ -501,6 +579,23 @@ def variantsOf(occurrence: dict, plan: MappingScopePlan, emitter: MappingEmitter
 	return result
 
 
+def implicitReferences(state: dict, model: Model, plans: list[MappingScopePlan]) -> dict:
+	"""The state with the instances `ref(S, Key)` names and no claim mentions, typed `S` and implicit (as a binding's `ref`)."""
+	if not any(plan.sourceRefs for plan in plans):
+		return state
+	index = StateIndex(state, model)
+	unfolder = Unfolder(index, None)
+	instances = dict(state.get("instances", {}))
+	for plan in plans:
+		for handle in index.handlesOf(plan.source) if plan.sourceRefs else []:
+			occurrence = unfolder.occurrence(plan, handle)
+			for typePath, keys in plan.sourceRefs.values():
+				value = valueAt(occurrence["value"], keys) if occurrence else None
+				if value is not None and not isAbsent(value) and value != {"unknown": True} and not isinstance(value, dict):
+					instances.setdefault(handleOf(typePath, textOf(value)), {"type": typePath})
+	return {**state, "instances": instances}
+
+
 def mappingStages(program: AnyValue, plans: list[MappingScopePlan], mode: str) -> dict[str, AnyValue]:
 	"""The stages of a mapping program, ending with `MappingRead`."""
 	members: dict[str, AnyValue] = {}
@@ -519,15 +614,34 @@ def mappingStages(program: AnyValue, plans: list[MappingScopePlan], mode: str) -
 
 	def HandlesResolve(env, state):
 		"""State → {state, correspondence, unresolved}: each scope instance's target handle (key-derived or source-qualified)."""
+		state = implicitReferences(state, model, plans)
 		index = StateIndex(state, model)
 		unfolder = Unfolder(index, None)
 		correspondence: dict[str, str] = {}
 		targets: dict[str, dict[str, str]] = {}
+		scopeTargets: dict[str, dict[str, str]] = {}
 		unresolved: list[dict] = []
-		for plan in plans:
+		for plan in sorted(plans, key=lambda item: item.update):
+			if plan.update:
+				unfolder = Unfolder(index, correspondence, targets, scopeTargets)
 			occurrences = []
+			targetConflicts = set()
 			for handle in index.handlesOf(plan.source):
 				occurrence = unfolder.occurrence(plan, handle) or {"value": {"$handle": handle, "$scope": index.scope, "$type": index.typeOf(handle)}, "location": f"/{plan.name}/{escape(handle)}"}
+				if plan.update:
+					if plan.when:
+						keys = plan.segmentKeys[tuple(plan.when["path"])]
+						if any(pointer in occurrence.get("conflicts", {}) for pointer in pointersOf(occurrence["value"], keys)):
+							unresolved.append({"type": plan.target, "handle": handle, "location": occurrence["location"], "reasons": [str(MappingCodes.InputConflicting)]})
+							continue
+						value = valueAt(occurrence["value"], keys)
+						if value is None or textOf(value) != plan.when["value"]:
+							continue
+					if any(pointer in occurrence.get("conflicts", {}) for path in plan.presenceInputs for pointer in pointersOf(occurrence["value"], path)):
+						unresolved.append({"type": plan.target, "handle": handle, "location": occurrence["location"], "reasons": [str(MappingCodes.InputConflicting)]})
+						continue
+					if any(pointer in occurrence.get("conflicts", {}) for path in plan.targetInputs for pointer in pointersOf(occurrence["value"], path)):
+						targetConflicts.add(occurrence["location"])
 				occurrences.append({"value": occurrence["value"], "location": occurrence["location"]})
 			result = yield from collect(handleStages[plan.name])(env, occurrences)
 			resolved = iter(result["value"])
@@ -538,19 +652,28 @@ def mappingStages(program: AnyValue, plans: list[MappingScopePlan], mode: str) -
 						"reasons": [reasonCode(entry["reason"]) for entry in result["ledger"] if entry.get("source") == occurrence["location"]]})
 					continue
 				value = next(resolved)
+				if plan.update and plan.presence and not isPresent(value.get("present")):
+					continue
+				if occurrence["location"] in targetConflicts:
+					unresolved.append({"type": plan.target, "handle": occurrence["value"]["$handle"], "location": occurrence["location"], "reasons": [str(MappingCodes.InputConflicting)]})
+					continue
 				if isinstance(value.get("handle"), str):
-					correspondence.setdefault(occurrence["value"]["$handle"], value["handle"])
-					targets.setdefault(occurrence["value"]["$handle"], {}).setdefault(plan.target, value["handle"])
-		return {"state": state, "correspondence": correspondence, "targets": targets, "unresolved": unresolved}
+					if not plan.update:
+						correspondence.setdefault(occurrence["value"]["$handle"], value["handle"])
+						targets.setdefault(occurrence["value"]["$handle"], {}).setdefault(plan.target, value["handle"])
+					scopeTargets.setdefault(occurrence["value"]["$handle"], {})[plan.name] = value["handle"]
+				elif plan.update:
+					unresolved.append({"type": plan.target, "handle": occurrence["value"]["$handle"], "location": occurrence["location"], "reasons": [str(MappingCodes.ReferenceUnmapped)]})
+		return {"state": state, "correspondence": correspondence, "targets": targets, "scopeTargets": scopeTargets, "unresolved": unresolved}
 
 	def unfold(resolved):
 		index = StateIndex(resolved["state"], model)
-		unfolder = Unfolder(index, resolved["correspondence"], resolved.get("targets"))
+		unfolder = Unfolder(index, resolved["correspondence"], resolved.get("targets"), resolved.get("scopeTargets"))
 		scopes = []
 		for plan in plans:
 			occurrences, skipped = [], []
 			for handle in index.handlesOf(plan.source):
-				if plan.target not in resolved.get("targets", {}).get(handle, {}):
+				if plan.name not in resolved.get("scopeTargets", {}).get(handle, {}):
 					continue
 				contexts = [None] + sorted(unfolder.contexts(handle, plan.reach)) if any(info.contextual for info in plan.lines) or plan.contextualScope else [None]
 				for context in contexts:
@@ -586,7 +709,7 @@ def mappingStages(program: AnyValue, plans: list[MappingScopePlan], mode: str) -
 			if variants:
 				projected = yield from collect(variantStages[plan.name])(env, [item[1] for item in variants])
 			scopes.append({**scope, "records": main["value"], "gaps": main["ledger"], "variants": [
-				{"occurrence": item[0]["location"], "pointer": item[2], "meta": item[3], "lines": [(info.section, info.key) for info in item[4]], "location": item[1]["location"]}
+				{"occurrence": item[0]["location"], "pointer": item[2], "meta": item[3], "lines": [(info.section, info.record) for info in item[4]], "location": item[1]["location"]}
 				for item in variants], "variantRecords": projected["value"], "variantGaps": projected["ledger"]})
 		return {**unfolded, "scopes": scopes}
 
@@ -606,7 +729,7 @@ def mappingStages(program: AnyValue, plans: list[MappingScopePlan], mode: str) -
 def emitMapping(program: AnyValue, plans: list[MappingScopePlan], collected: dict, runTime: str) -> dict:
 	"""The mapping's spec-02 log and report data, in the shape re-running shares with bindings."""
 	emitter = MappingEmitter(program, plans, runTime)
-	for plan, scope in zip(plans, collected["scopes"]):
+	for plan, scope in sorted(zip(plans, collected["scopes"]), key=lambda item: item[0].update):
 		byLocation = {item["location"]: item for item in scope["occurrences"]}
 		records = {record["source"]: record for record in scope["records"]}
 		for entry in scope["gaps"]:

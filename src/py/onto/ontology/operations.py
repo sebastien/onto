@@ -105,6 +105,22 @@ def _checkAnnotations(model: Model, ann: Annotations, places: set[str], loc: Loc
 				diag.error("reference", f"ctx must name an entity or an n-ary relation: '{value}'", loc)
 
 
+def _checkFacetCondition(model: Model, decl: Decl, condition: object, diag: Diagnostics) -> None:
+	"""`{when=Attr:Value}`: a single-valued, non-derived scalar attribute of the subject, and a value of its type."""
+	attrPath, colon, value = condition.partition(":") if isinstance(condition, str) else ("", "", "")
+	attr = model.lookup(decl.subject, attrPath) if colon and attrPath and value else None
+	if attr is None or attrPath.split(".")[0] in model.facets(decl.subject):
+		diag.error("annotation", f"when must be Attr:Value, Attr an attribute of '{decl.subject}': '{condition}'", decl.loc)
+		return
+	resolved = model.resolveType(attr.type, attr.ann)
+	if attr.derived or (attr.card or model.defaultCard) in MULTI or resolved.kind not in ("builtin", "vocab"):
+		diag.error("annotation", f"when needs a single-valued, observed scalar attribute: '{attrPath}'", decl.loc)
+	elif resolved.kind == "vocab" and not resolved.open and value not in (resolved.values or []):
+		diag.error("annotation", f"when value '{value}' is not a value of '{attrPath}'", decl.loc)
+	elif resolved.kind == "builtin" and resolved.builtin == "Boolean" and value not in ("true", "false"):
+		diag.error("annotation", f"when value '{value}' is not a boolean", decl.loc)
+
+
 def _typeCycle(model: Model, type: TypeExpr | None) -> bool:
 	"""True when following aliases and attribute reuse from `type` comes back to a visited type."""
 	seen: set[str] = set()
@@ -447,6 +463,8 @@ def _validate(model: Model, diag: Diagnostics) -> None:
 			if not subject or (subject.kind != "entity" and not isAssociation(subject)):
 				diag.error("reference", f"Facet subject is not an entity or association: '{decl.subject}'", decl.loc)
 				continue
+			if (condition := annotation(decl.ann, "when")) is not None:
+				_checkFacetCondition(model, decl, condition, diag)
 			name = lastSegment(decl.path)
 			if name in model.ownNames(decl.subject):
 				diag.error("collision", f"Facet '{name}' collides with an attribute or role of '{decl.subject}'", decl.loc)

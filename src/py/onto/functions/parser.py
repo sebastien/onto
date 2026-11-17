@@ -43,6 +43,11 @@ def _splitValues(text: str, separator: str) -> list[str]:
 def _signature(text: str, namespace: str, uses: dict[str, str]) -> SignatureType:
 	collection = text.endswith("*")
 	name = text[:-1] if collection else text
+	if name.startswith("Range<") and name.endswith(">"):
+		element = _signature(name[6:-1], namespace, uses)
+		if element.collection or element.range:
+			raise ValueError(f"Invalid signature type '{text}'")
+		return SignatureType(element.builtin, element.path, collection, True)
 	if name in BUILTINS:
 		return SignatureType(builtin=name, collection=collection)
 	if name == "any":
@@ -66,9 +71,9 @@ def _functionAnnotations(text: str | None, loc: Loc, diag: Diagnostics) -> list[
 
 
 def _signatureFromJson(data: Any) -> SignatureType:
-	value = _jsonObject(data, (), ("builtin", "path", "collection"))
+	value = _jsonObject(data, (), ("builtin", "path", "collection", "range"))
 	variants = set(value) & {"builtin", "path"}
-	if len(variants) != 1 or "collection" in value and value["collection"] is not True:
+	if len(variants) != 1 or any(key in value and value[key] is not True for key in ("collection", "range")):
 		raise ValueError("Invalid signature type variant or collection flag")
 	if "builtin" in value and value["builtin"] not in BUILTINS:
 		raise ValueError("Unknown signature built-in")

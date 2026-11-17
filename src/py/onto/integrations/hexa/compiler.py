@@ -732,6 +732,14 @@ class LineInfo:
 	also: str | None = None
 	contextual: bool = False
 	contextType: str | None = None
+	qualifiers: tuple[str, ...] = ()
+	slot: str = ""  # the record key, when exclusive lines share the target `key`
+	when: dict | None = None  # the line's condition `{path, value}`
+	unless: dict | None = None  # a default's: `{path, values}` of its exclusive siblings
+
+	@property
+	def record(self) -> str:
+		return self.slot or self.key
 
 	def sourcePath(self, paths: list[list[str]]) -> list[str]:
 		"""The pointers of the source input's path; none for literals and facets."""
@@ -765,6 +773,7 @@ class MappingScopeCompiler:
 		self.positions: dict[str, AnyValue] = {}
 		self.lines: list[LineInfo] = []
 		self.roots: dict[str, AnyValue] = {}
+		self.sourceRefs: dict[str, tuple[str, list[str]]] = {}  # `$ref<n>` -> (source type, key path): `ref(S, Key)`
 
 	# --- paths ---------------------------------------------------------------
 
@@ -837,6 +846,8 @@ class MappingScopeCompiler:
 			return self.source.resolveType(last.attr.type, last.attr.ann)
 		if "call" in expr:
 			name = expr["call"]
+			if self.isSourceRef(expr):
+				return self.source.resolveType(TypeExpr(path=expr["args"][0]["path"][0]))
 			if name in BUILTIN_RESULTS:
 				return ResolvedType("builtin", builtin=BUILTIN_RESULTS[name])
 			evaluator = self.owner.calls.evaluator
@@ -879,6 +890,11 @@ class MappingScopeCompiler:
 			return self.pathValue(expr["path"])[0]
 		if "call" in expr:
 			name, args = expr["call"], expr["args"]
+			if self.isSourceRef(expr):
+				# Resolved while unfolding: the source instance's handle from its key, as a reference read from the state.
+				key = next((name for name, item in self.sourceRefs.items() if item == (args[0]["path"][0], args[1]["path"])), f"$ref{len(self.sourceRefs)}")
+				self.sourceRefs[key] = (args[0]["path"][0], args[1]["path"])
+				return optional(self.root(key))
 			if name == "ref":
 				return self.reference(args[0]["path"][0], self.expression(args[1]))
 			return derive(self.owner.calls.transform(name), *[self.expression(arg) for arg in args])
@@ -887,6 +903,14 @@ class MappingScopeCompiler:
 		if "meta" in expr:
 			return optional(self.root(f"${expr['meta']}"))
 		return literal(expr)
+
+	def isSourceRef(self, expr: Expression) -> bool:
+		"""`ref(S, Key)` written in a mapping names a source type; generated reverses name target types."""
+		if expr.get("call") != "ref" or len(expr["args"]) != 2 or "path" not in expr["args"][1]:
+			return False
+		mapping = self.owner.mapping
+		typePath = expr["args"][0]["path"][0]
+		return mapping.fromNamespace != mapping.toNamespace and typePath.startswith(mapping.fromNamespace + "/") and self.source.get(typePath) is not None
 
 	def reference(self, typePath: str, key: AnyValue) -> AnyValue:
 		"""A generated `ref(T, Key)`: the handle from `T`'s policy key, else source-qualified with the key."""
@@ -909,9 +933,11 @@ class MappingScopeCompiler:
 	def condition(self, when: dict, value: AnyValue) -> AnyValue:
 		return derive(V.When, derive(V.TextEquals, self.pathValue(when["path"])[0], when["value"]), value)
 
-	def lineValue(self, line: AnyValue) -> tuple[AnyValue, LineInfo]:
+	def lineValue(self, line: AnyValue, exclusive: dict | None = None) -> tuple[AnyValue, LineInfo]:
+		"""`exclusive`, for the default of exclusive lines: the `{path, values}` of its siblings' conditions."""
 		read = self.paths(line.expr)
-		inputs = read + ([line.when["path"]] if line.when else [])
+		inputs = read + [path for expr in line.qualifiers.values() for path in self.paths(expr)] + ([line.when["path"]] if line.when else [])
+		inputs += [exclusive["path"]] if exclusive else []
 		# The source input comes from the expression (`{src=Path}`, else its first path), never from `when`.
 		source = 0 if read else -1
 		if line.src:
@@ -942,8 +968,12 @@ class MappingScopeCompiler:
 				accepted = [relation.participants[0 if inverse else 1].type for relation, inverse in self.target.verbs(self.scope.target, line.verb)]
 				value = self.owner.correspond(value, actual.path if actual is not None and actual.kind in ("entity", "relation") else None, accepted)
 			info = LineInfo("links" if line.verb else "values", key, inputs, source, also)
+		info.qualifiers = tuple(line.qualifiers)
+		info.when, info.unless = line.when, exclusive
 		if line.when:
 			value = self.condition(line.when, value)
+		elif exclusive:
+			value = derive(V.WhenNone, self.pathValue(exclusive["path"])[0], exclusive["values"], value)
 		info.contextual = any(segment.context for path in inputs for segment in self.segments(path))
 		facet = self.target.facets(self.scope.target).get(line.facet) if line.facet else self.target.facetOf(self.scope.target, info.key)
 		info.contextType = annotation(facet.ann, "ctx") if facet else None
@@ -952,25 +982,53 @@ class MappingScopeCompiler:
 	def template(self) -> dict[str, AnyValue]:
 		candidates = self.owner.mapping.header.get("candidates") is True
 		sections: dict[str, dict] = {"values": {}, "facets": {}, "links": {}}
-		for line in self.scope.lines:
-			if line.candidate and not candidates:
-				continue
-			value, info = self.lineValue(line)
-			sections[info.section][info.key + "?"] = value
+		qualifiers = {}
+		active = [line for line in self.scope.lines if not line.candidate or candidates]
+		groups: dict[str, list] = {}
+		for line in active:
+			groups.setdefault(f"[{line.facet}]" if line.facet else line.target or line.verb, []).append(line)
+		for line in active:
+			# Exclusive lines of one target (spec-04): one record key each; the default applies when no condition matches.
+			group = groups[f"[{line.facet}]" if line.facet else line.target or line.verb]
+			conditions = [item.when for item in group if item.when]
+			exclusive = {"path": conditions[0]["path"], "values": [when["value"] for when in conditions]} if len(group) > 1 and not line.when else None
+			value, info = self.lineValue(line, exclusive)
+			if len(group) > 1:
+				info.slot = f"{info.key}#{group.index(line)}"
+			sections[info.section][info.record + "?"] = value
 			self.lines.append(info)
+			if line.qualifiers:
+				qualifiers[info.record] = {key + "?": self.expression(expr) for key, expr in line.qualifiers.items()}
 		record: dict[str, AnyValue] = {"type": self.scope.target, "scope": self.name, "handle": optional(self.root("$target"))}
 		if self.scope.valid is not None:
 			record["valid?"] = derive(V.Valid, self.expression(self.scope.valid))
 		if self.scope.ctx is not None:
 			record["ctx?"] = derive(V.Correspond, self.expression(self.scope.ctx))
-		return record | sections | {"source": Location}
+		if self.scope.present is not None:
+			record["present?"] = self.expression(self.scope.present)
+		return record | sections | ({"qualifiers": qualifiers} if qualifiers else {}) | {"source": Location}
 
 	def handleTemplate(self) -> dict[str, AnyValue]:
 		"""`{handle}`: derived from the key line of `T`'s policy, else source-qualified."""
+		if self.scope.into is not None:
+			actual = self.exprType(self.scope.into)
+			value = self.owner.correspond(self.expression(self.scope.into), actual.path, [self.scope.target])
+			if any(segment.multi for path in self.paths(self.scope.into) for segment in self.segments(path)):
+				# A multi-valued selector names its one member; several are ambiguous, never the first.
+				value = derive(V.Single, value)
+			record = {"handle?": derive(V.Field, value, ["ref"])}
+			if self.scope.present is not None:
+				record["present?"] = self.expression(self.scope.present)
+			return record
 		policy = self.owner.policy(self.scope.target)
 		short = lastSegment(self.scope.target)
 		if policy is None:
-			return {"handle": derive(V.SourceHandle, short, optional(self.root("$scope")), optional(self.root("$handle")), self.scope.source)}
+			scope = optional(self.root("$scope"))
+			if self.scope.name:
+				scope = derive(V.builtin("concat"), scope, "/@", self.scope.name)
+			return {"handle": derive(V.SourceHandle, short, scope, optional(self.root("$handle")), self.scope.source)}
+		if self.scope.name:
+			raise CompileError(V.MappingCodes.PolicyUnsupported, "Named scopes currently require source-qualified identities")
 		key = policy.keys[0]
 		line = next((item for item in self.scope.lines if item.target == key and (not item.candidate or self.owner.mapping.header.get("candidates") is True)), None)
 		if line is None:
@@ -994,7 +1052,8 @@ class MappingScopeCompiler:
 		"""Every path the scope reads: `{key: {segment, children}}`, references continuing under their type."""
 		tree: dict = {}
 		paths = [path for line in self.scope.lines for path in self.paths(line.expr) + ([line.when["path"]] if line.when else [])]
-		paths += self.paths(self.scope.valid) + self.paths(self.scope.ctx) + ([self.scope.when["path"]] if self.scope.when else [])
+		paths += [path for line in self.scope.lines for expr in line.qualifiers.values() for path in self.paths(expr)]
+		paths += self.paths(self.scope.valid) + self.paths(self.scope.ctx) + self.paths(self.scope.present) + self.paths(self.scope.into) + ([self.scope.when["path"]] if self.scope.when else [])
 		for steps in paths:
 			node = tree
 			for segment in self.segments(steps):
@@ -1049,10 +1108,12 @@ class MappingCompiler:
 		return found
 
 	def compile(self) -> list[MappingScopeCompiler]:
-		ordered = sorted(self.mapping.scopes, key=lambda item: (item.source, item.target))
+		ordered = sorted(self.mapping.scopes, key=lambda item: (item.source, item.target, item.name or ""))
 		result = []
 		for scope in ordered:
 			name = lastSegment(scope.source) + lastSegment(scope.target)
+			if scope.name:
+				name += "_" + scope.name
 			result.append(MappingScopeCompiler(self, scope, name))
 		return result
 

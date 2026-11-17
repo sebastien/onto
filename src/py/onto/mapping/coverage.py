@@ -59,7 +59,7 @@ class MappingCoverage:
 	def scope(self, scope: MappingScope) -> None:
 		candidates = self.mapping.header.get("candidates") is True
 		conditions = [scope.when["path"]] if scope.when else []
-		conditions += expressionPaths(scope.ctx) + expressionPaths(scope.valid)
+		conditions += expressionPaths(scope.ctx) + expressionPaths(scope.valid) + expressionPaths(scope.present) + expressionPaths(scope.into)
 		self.record(scope, conditions, None, "condition", None)
 		targetType = self.target.display(scope.target)
 		for line in scope.lines:
@@ -69,6 +69,8 @@ class MappingCoverage:
 			member = f"[{line.facet}]" if line.facet else f".{line.target or line.verb}"
 			status = "ambiguous" if line.candidate and not candidates else "direct" if isDirect(line.expr) else "transformed"
 			self.record(scope, expressionPaths(line.expr), targetType + member, status, line.doc)
+			for expr in line.qualifiers.values():
+				self.record(scope, expressionPaths(expr), targetType + member, "ambiguous" if status == "ambiguous" else "transformed", line.doc)
 			if line.when:
 				self.record(scope, [line.when["path"]], None, "ambiguous" if status == "ambiguous" else "condition", None)
 
@@ -100,6 +102,10 @@ class MappingCoverage:
 		for scope in self.mapping.scopes:
 			self.scope(scope)
 		excluded = {self.source.display(item.path): (item.reason, item.doc) for item in self.mapping.exclusions}
+		for key in self.keys():
+			parents = [path for path in excluded if key.startswith(path + ".")]
+			if parents:
+				excluded.setdefault(key, excluded[max(parents, key=len)])
 		targets: list[str] = []
 		for path in dict.fromkeys(scope.target for scope in self.mapping.scopes):
 			for entity in reversed(self.target.model.lineage(path)):

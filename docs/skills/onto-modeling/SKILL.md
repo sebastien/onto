@@ -42,6 +42,7 @@ Make the smallest model that answers the need. Do not add attributes "in case".
 | A kind of thing, for its whole life | `E < Base` | 4.3 |
 | A role, a variant, or a domain's view of a thing | `F of E` | 4.2, 4.3, 8.4 |
 | A judgement about a thing, made in a context | `F of E {ctx=C}` | 6.1 |
+| A variant of a record, chosen by one of its values | `F of E {when=Attr:Value}` | 4.2 |
 | A plain link | `S -verb/inverse-> T L:R` | 7.1 |
 | A link with roles, a share, a status, or its own identity | `R(Role: T, ...) {kind=state}` | 7.3 |
 | Something that happened between things | `R(...) {kind=event}` | 7.3 |

@@ -38,6 +38,9 @@
             "rev": {
               "$ref": "#/$defs/token"
             },
+            "name": {
+              "$ref": "#/$defs/token"
+            },
             "format": {
               "enum": [
                 "json",
@@ -369,11 +372,14 @@
       }
     },
     "signatureType": {
-      "description": "A concrete spec-01 type expression for @fn; `collection` marks `T*`. Unrestricted `any` is reserved for built-in functions.",
+      "description": "A concrete spec-01 type expression for @fn; `collection` marks `T*`, `range` marks `Range<T>`. Unrestricted `any` is reserved for built-in functions.",
       "type": "object",
       "unevaluatedProperties": false,
       "properties": {
         "collection": {
+          "const": true
+        },
+        "range": {
           "const": true
         }
       },
