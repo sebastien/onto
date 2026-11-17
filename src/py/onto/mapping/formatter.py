@@ -62,7 +62,7 @@ def printMapping(mapping: Mapping) -> str:
 	def annotations(item: Any, keys: tuple[str, ...]) -> str:
 		parts = []
 		for key in ANNOTATION_KEYS:
-			value = (item.qualifiers.get(key) if key in QUALIFIER_KEYS else getattr(item, key, None)) if key in keys else None
+			value = (item.qualifiers.get(key) if key in QUALIFIER_KEYS else getattr(item, "asType" if key == "as" else key, None)) if key in keys else None
 			if value is None or value is False:
 				continue
 			if key in ("reverse", "candidate"):
@@ -72,6 +72,8 @@ def printMapping(mapping: Mapping) -> str:
 				value = expressionText(value, left)
 			elif key == "when":
 				value = printExpression({"path": value["path"]}) + ":" + value["value"]
+			elif key == "as":
+				value = right(value)
 			parts.append(f"{key}={value}")
 		return " {" + ", ".join(parts) + "}" if parts else ""
 	header = dict(mapping.header)
@@ -93,7 +95,7 @@ def printMapping(mapping: Mapping) -> str:
 		lines += ["", withDoc(f"{left(scope.source)} -> {right(scope.target)}" + annotations(scope, ("name", "into", "present", "when", "ctx", "valid")), scope.doc)]
 		for line in sorted(scope.lines, key=lineKey):
 			text = f"[{line.facet}]" if line.facet else f"{line.target or line.verb} <- {expressionText(line.expr, left)}"
-			lines.append(withDoc("  " + text + annotations(line, ("when", "src", *QUALIFIER_KEYS, "reverse", "candidate")), line.doc))
+			lines.append(withDoc("  " + text + annotations(line, ("when", "src", "as", *QUALIFIER_KEYS, "reverse", "candidate")), line.doc))
 	if mapping.exclusions:
 		lines.append("")
 		for item in sorted(mapping.exclusions, key=lambda item: item.path):
@@ -122,6 +124,8 @@ def mappingToJson(mapping: Mapping) -> dict[str, Any]:
 		for line in sorted(scope.lines, key=lineKey):
 			entry = {key: getattr(line, key) for key in ("target", "facet", "verb", "expr", "when", "src", "doc") if getattr(line, key) is not None}
 			entry.update({key: True for key in ("reverse", "candidate") if getattr(line, key)})
+			if line.asType:
+				entry["as"] = line.asType
 			if line.qualifiers:
 				entry["qualifiers"] = line.qualifiers
 			lines.append(entry)

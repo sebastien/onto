@@ -369,6 +369,37 @@ D/PersonName =
 Fields use attribute syntax. Namespace children are not fields: `D/PersonName/X`
 is a separate type, unrelated to the structure.
 
+#### Keyed structures
+
+```text
+Society/Phone/Use = Mobile|Home|Work|...
+Society/Phone =
+  1 Use Society/Phone/Use {key}
+  1 Number Core/PhoneNumber
+
+Society/Person
+  * Phones Society/Phone
+```
+
+A structure whose values are several per instance (a multi-valued attribute)
+names each **element** by its `{key}` field: a person's mobile phone is
+`Phones[Mobile]`, its number `Phones[Mobile].Number`. The key field's vocabulary
+is the managed list of keys (`Primary`, `Secondary`, `Home`, `Work`, ...): a
+closed one fixes them, an open one admits others.
+
+- A structure has at most one `{key}` field; it is required (`1`), observed and
+  typed by a vocabulary. On a structure field, `{key}` has this meaning only.
+- A multi-valued attribute of a keyed structure holds at most one element per
+  key: each element is its fields' values under that key. The key field's value
+  is the key, so it is never stated on its own.
+- A multi-valued attribute of a structure without a key field cannot tell its
+  elements apart: `check` warns.
+- Elements are addressed in observations (`h.Phones[Mobile].Number 021…`,
+  [spec-02](spec-02-observations.md#statements)), and in binding and mapping
+  lines and paths (`Phones[Mobile].Number <- MobilePhone`,
+  [spec-04](spec-04-mapping.md#expressions)). Ontology paths (views, exclusions,
+  coverage) name the field without a key: `Person.Phones.Number`.
+
 ### Entities and specialisations
 
 `E < Base` declares a subtype that shares the base's identity: an instance of `E`

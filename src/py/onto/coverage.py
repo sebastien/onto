@@ -7,6 +7,7 @@ from typing import Any
 
 from .observations import Claim, Observations, reconcileObservations
 from .ontology import Decl, Model, Ontology, viewRelations
+from .ontology.model import unkeyed
 from .text import Diagnostics, annotation, lastSegment
 
 # -----------------------------------------------------------------------------
@@ -220,8 +221,23 @@ class Elements:
 			found = self.verb(path, verb)
 			return found[0] if found else None
 		if target:
+			target = unkeyed(target)  # `Phones[Mobile].Number` assigns the field `Phones.Number`
 			return f"{self.owner(path, target.split('.')[0])}.{target}"
 		return None
+
+
+def impliedKeys(elements: "Elements", path: str, target: str | None) -> list[str]:
+	"""The key fields a keyed target (`Phones[Mobile].Number`) assigns by its keys (`Phones.Use`)."""
+	result = []
+	parts = (target or "").split(".")
+	for index, part in enumerate(parts):
+		if "[" not in part:
+			continue
+		prefix = unkeyed(".".join(parts[:index + 1]))
+		field = elements.model.elementKey(elements.model.lookup(path, prefix))
+		if field is not None:
+			result.append(f"{elements.owner(path, prefix.split('.')[0])}.{prefix}.{field.name}")
+	return result
 
 
 def coverageRows(keys: list[str], reads: dict[str, list[tuple[str | None, str, str | None]]], excluded: dict[str, tuple[str, str | None]]) -> list[CoverageRow]:

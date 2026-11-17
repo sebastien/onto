@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 
-from ..expressions import Expression
+from ..expressions import Expression, keyedSteps
 from ..functions.model import Function, FunctionLibrary
 from ..ontology.model import Decl, MapLine, Model, Ontology
 from ..text import Loc, annotation, lastSegment
@@ -135,7 +135,7 @@ class Reverser:
 			return self.solve(scope, line, inner, solved)
 		if "path" not in expr:
 			raise Lossy("literals, metadata and '??' are not reversible")
-		steps = expr["path"]
+		steps = keyedSteps(expr["path"])
 		owner, index = scope.source, 0
 		facet = self.model.facetOf(owner, steps[0])
 		attr = self.model.lookup(owner, ".".join(steps[:2])) if facet and len(steps) > 1 else self.model.lookup(owner, steps[0])
@@ -171,7 +171,7 @@ class Reverser:
 		candidates = self.mapping.header.get("candidates") is True
 		lines = [line for line in scope.lines if candidates or not line.candidate]
 		# Conditions translate only through direct lines (`Target <- Path`), whose values are equal.
-		assigned = {".".join(line.expr["path"]): line.target or line.verb for line in lines if line.expr and "path" in line.expr and not line.facet}
+		assigned = {".".join(keyedSteps(line.expr["path"])): line.target or line.verb for line in lines if line.expr and "path" in line.expr and line.expr["path"] != [{"root": True}] and not line.facet}
 		reverse = MappingScope(source=scope.target, target=scope.source, doc=scope.doc)
 		try:
 			if scope.name or scope.present or scope.into:

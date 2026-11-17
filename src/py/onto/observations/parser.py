@@ -17,6 +17,7 @@ from decimal import (
 from typing import (
 	Any,
 )
+from ..ontology.model import RE_ELEMENT_PATH
 from ..ontology import (
 	Attr,
 	Decl,
@@ -428,6 +429,9 @@ class _Resolver:
 				if not attr:
 					self.diag.error("reference", f"Unknown attribute '{owner}.{statement.p}'", statement.loc)
 					continue
+				if error := self.model.elementPathError(owner, statement.p):
+					self.diag.error("key", error, statement.loc)
+					continue
 				facet = self.model.facetOf(owner, statement.p)
 				claim = base | {"p": statement.p} | self.context(statement, facet, meta)
 				try:
@@ -525,7 +529,7 @@ def _jsonClaim(value: Any, retract: bool) -> Claim:
 	if form == "facet":
 		_jsonString(claim["facet"], isName)
 	if form == "p":
-		_jsonString(claim["p"], lambda text: re.fullmatch(rf"{HANDLE}(?:\.{HANDLE})*", text) is not None)
+		_jsonString(claim["p"], lambda text: RE_ELEMENT_PATH.fullmatch(text) is not None)
 		if "v" not in claim and not retract:
 			raise ValueError("An attribute claim requires v")
 	if "v" in claim:

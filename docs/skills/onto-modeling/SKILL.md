@@ -53,6 +53,7 @@ Make the smallest model that answers the need. Do not add attributes "in case".
 | Someone else's classification | Its own vocabulary and a `@map` | 3.6 |
 | A quantity | A type with `cur`, `unit`, `period` or `scale` | 2.1, 2.2 |
 | A recurring group of values | A structure `T =` + fields | 2.4 |
+| Several such groups per thing, told apart by a use (home, work, primary) | A structure keyed by a vocabulary field `{key}`, `* Phones Phone` | 2.4, 4.1 |
 | Text with a meaning (code, identifier) | An alias `T = Text` | 2.6 |
 | Several values | `* Names T` | 4.1 |
 | A value implied by others | `~ Name T <- inputs` | 4.5 |

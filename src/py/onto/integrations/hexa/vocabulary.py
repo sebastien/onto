@@ -362,18 +362,19 @@ def correspond(value: AnyValue) -> AnyValue:
 	return {"ref": value["target"], **({"type": value["targetType"]} if "targetType" in value else {})}
 
 
-def correspondAs(value: AnyValue, typePath: str) -> AnyValue:
+def correspondAs(value: AnyValue, typePath: str, emitted: bool = False) -> AnyValue:
 	"""`{ref, targets}` → `{ref: targets[typePath]}`: a source instance with several target instances
-	(several scope lines for its type) is referred to by the one of the type the receiver accepts."""
+	(several scope lines for its type) is referred to by the one of the type the receiver accepts.
+	`emitted` (`{as=T}`): a target its scope lines' conditions skip is a gap, not an implicit instance."""
 	if isAbsent(value):
 		return ABSENT_VALUE
 	if value is None or value == UNKNOWN:
 		return value
 	if isinstance(value, dict) and "set" in value:
-		return {"set": [correspondAs(item, typePath) for item in value["set"]], **({"partial": True} if value.get("partial") else {})}
+		return {"set": [correspondAs(item, typePath, emitted) for item in value["set"]], **({"partial": True} if value.get("partial") else {})}
 	target = value.get("targets", {}).get(typePath) if isinstance(value, dict) else None
-	if target is None:
-		raise Gap(CorrespondAs.ReferenceUnmapped)
+	if target is None or emitted and typePath in value.get("skipped", ()):
+		raise Gap((CorrespondEmitted if emitted else CorrespondAs).ReferenceUnmapped)
 	return {"ref": target, "type": typePath}
 
 
@@ -654,6 +655,10 @@ Single = transform("Onto.Single", single, inputs=[Any], output=Any, gaps=["Refer
 CorrespondAs = transform("Onto.CorrespondAs", correspondAs, inputs=[Any, Text], output=Any, gaps=["ReferenceUnmapped"],
 	examples=[{"input": [{"ref": "Client_9", "target": "Person_9", "targets": {"Crm/Person": "Person_9", "Crm/Relationship": "Relationship_9"}}, "Crm/Person"], "output": {"ref": "Person_9", "type": "Crm/Person"}},
 		{"input": [{"ref": "x", "targets": {}}, "Crm/Person"], "gap": "ReferenceUnmapped"}])
+CorrespondEmitted = transform("Onto.CorrespondEmitted", lambda value, typePath: correspondAs(value, typePath, True), inputs=[Any, Text], output=Any,
+	gaps=["ReferenceUnmapped"], examples=[
+		{"input": [{"ref": "MA_1", "targets": {"T/Application": "Application_1"}}, "T/Application"], "output": {"ref": "Application_1", "type": "T/Application"}},
+		{"input": [{"ref": "MA_2", "targets": {"T/Application": "Application_2"}, "skipped": ["T/Application"]}, "T/Application"], "gap": "ReferenceUnmapped"}])
 Valid = transform("Onto.Valid", valid, inputs=[Any], output=Any, gaps=["Invalid"],
 	examples=[{"input": ["2026-09-01"], "output": "2026-09-01"}, {"input": ["2026-02-30"], "gap": "Invalid"}])
 At = transform("Onto.At", timeValue, inputs=[Any], output=Any, gaps=["Invalid"],
@@ -699,7 +704,7 @@ for builtinName, builtinExamples in BUILTIN_EXAMPLES.items():
 
 CODECS = {"EpochDate": EpochDate, "IntegerText": IntegerText, "SplitText": SplitText, "DateTimePattern": DateTimePattern,
 	"DecimalNumber": DecimalNumber, "DecimalPlaces": DecimalPlaces, "Case": Case}
-TRANSFORMS = {item.name: item for item in (Read, Set, TextEquals, When, WhenNone, Coalesce, Handle, SourceHandle, Ref, HandleKey, Correspond, CorrespondAs, Single, Valid, At,
+TRANSFORMS = {item.name: item for item in (Read, Set, TextEquals, When, WhenNone, Coalesce, Handle, SourceHandle, Ref, HandleKey, Correspond, CorrespondAs, CorrespondEmitted, Single, Valid, At,
 	FormatName, Field, Nullable, QualifierConvert, ToInteger, ToVocabulary, Given, Members, *BUILTIN_TRANSFORMS.values())}
 
 
@@ -765,7 +770,7 @@ def vocabularyConformance() -> int:
 __all__ = [
 	"ABSENT_VALUE", "BindingCodes", "MappingCodes", "Integral", "IsoDuration", "EpochDate", "IntegerText", "SplitText",
 	"DateTimePattern", "DecimalNumber", "DecimalPlaces", "Case", "DatePattern", "DecimalText", "Read", "Set", "TextEquals", "When", "WhenNone",
-	"Coalesce", "Handle", "SourceHandle", "Ref", "HandleKey", "Correspond", "CorrespondAs", "Single", "Valid", "At", "FormatName", "Field", "Nullable",
+	"Coalesce", "Handle", "SourceHandle", "Ref", "HandleKey", "Correspond", "CorrespondAs", "CorrespondEmitted", "Single", "Valid", "At", "FormatName", "Field", "Nullable",
 	"QualifierConvert", "ToInteger", "ToVocabulary", "Given", "Members", "TRANSFORMS", "CODECS", "builtin", "functionTransform", "functionCodec",
 	"reasonCode", "vocabularyConformance", "isAbsent", "decimalText", "documentValue", "encodeKey", "decodeKey",
 	"handleOf", "textOf",

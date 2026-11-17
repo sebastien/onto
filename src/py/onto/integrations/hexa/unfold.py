@@ -174,9 +174,11 @@ class Unfolder:
 	"""Turn scope instances into trees limited to the scope's reach, with metadata tables and conflicts."""
 
 	def __init__(self, index: StateIndex, correspondence: dict[str, str] | None, targets: dict[str, dict[str, str]] | None = None,
-		scopeTargets: dict[str, dict[str, str]] | None = None):
+		scopeTargets: dict[str, dict[str, str]] | None = None, skipped: dict[str, set[str]] | None = None):
 		self.index = index
 		self.correspondence = correspondence
+		# Source handle -> target types whose scope lines' `when` all skip it (no instance is emitted)
+		self.skipped = skipped or {}
 		# Source handle -> {target type: target handle}, for source types with several scope lines
 		self.targets = targets or {}
 		self.scopeTargets = scopeTargets or {}
@@ -188,8 +190,10 @@ class Unfolder:
 			if handle in self.targets:
 				# The target's type, so a target emitted by no scope (e.g. one its `when` skips) is implicit, not untyped
 				result["targetType"] = next(iter(self.targets[handle]))
-		if len(self.targets.get(handle, {})) > 1:
+		if self.targets.get(handle):
 			result["targets"] = self.targets[handle]
+		if self.skipped.get(handle):
+			result["skipped"] = sorted(self.skipped[handle])
 		if children:
 			result["of"] = self.subtree(handle, children, f"{pointer}/of", meta, conflicts, context)
 		return result
@@ -621,6 +625,8 @@ def mappingStages(program: AnyValue, plans: list[MappingScopePlan], mode: str) -
 		targets: dict[str, dict[str, str]] = {}
 		scopeTargets: dict[str, dict[str, str]] = {}
 		unresolved: list[dict] = []
+		selected: dict[str, set[str]] = {}  # source handle -> target types an identity scope's `when` selects it for
+		present: set[str] = set()  # locations of instances with an existence claim
 		for plan in sorted(plans, key=lambda item: item.update):
 			if plan.update:
 				unfolder = Unfolder(index, correspondence, targets, scopeTargets)
@@ -628,6 +634,8 @@ def mappingStages(program: AnyValue, plans: list[MappingScopePlan], mode: str) -
 			targetConflicts = set()
 			for handle in index.handlesOf(plan.source):
 				occurrence = unfolder.occurrence(plan, handle) or {"value": {"$handle": handle, "$scope": index.scope, "$type": index.typeOf(handle)}, "location": f"/{plan.name}/{escape(handle)}"}
+				if "exists" in occurrence:
+					present.add(occurrence["location"])
 				if plan.update:
 					if plan.when:
 						keys = plan.segmentKeys[tuple(plan.when["path"])]
@@ -659,16 +667,20 @@ def mappingStages(program: AnyValue, plans: list[MappingScopePlan], mode: str) -
 					continue
 				if isinstance(value.get("handle"), str):
 					if not plan.update:
+						# An instance known only by reference (no existence claim) cannot be tested: it is not skipped
+						if plan.when is None or occurrence["location"] not in present or textOf(valueAt(occurrence["value"], plan.segmentKeys[tuple(plan.when["path"])]) or "") == plan.when["value"]:
+							selected.setdefault(occurrence["value"]["$handle"], set()).add(plan.target)
 						correspondence.setdefault(occurrence["value"]["$handle"], value["handle"])
 						targets.setdefault(occurrence["value"]["$handle"], {}).setdefault(plan.target, value["handle"])
 					scopeTargets.setdefault(occurrence["value"]["$handle"], {})[plan.name] = value["handle"]
 				elif plan.update:
 					unresolved.append({"type": plan.target, "handle": occurrence["value"]["$handle"], "location": occurrence["location"], "reasons": [str(MappingCodes.ReferenceUnmapped)]})
-		return {"state": state, "correspondence": correspondence, "targets": targets, "scopeTargets": scopeTargets, "unresolved": unresolved}
+		skipped = {handle: set(types) - selected.get(handle, set()) for handle, types in targets.items() if set(types) - selected.get(handle, set())}
+		return {"state": state, "correspondence": correspondence, "targets": targets, "scopeTargets": scopeTargets, "unresolved": unresolved, "skipped": skipped}
 
 	def unfold(resolved):
 		index = StateIndex(resolved["state"], model)
-		unfolder = Unfolder(index, resolved["correspondence"], resolved.get("targets"), resolved.get("scopeTargets"))
+		unfolder = Unfolder(index, resolved["correspondence"], resolved.get("targets"), resolved.get("scopeTargets"), resolved.get("skipped"))
 		scopes = []
 		for plan in plans:
 			occurrences, skipped = [], []

@@ -32,9 +32,9 @@ DO
 ```onto
 PhoneNumber = Text
 
-ContactPoint =
-  Number PhoneNumber
-  Use Home|Mobile|Work
+ContactPoint =                                  -- Keyed by its use: Phones[Mobile].Number
+  1 Number PhoneNumber
+  1 Use Home|Mobile|Work {key}
 
 Person
   * Phones ContactPoint

@@ -7,6 +7,8 @@ from typing import Any
 
 from ..binding.operations import ExpressionResolver, Inferred, checkAssignment, checkScalarTarget, compatible
 from ..binding.parser import qualifyPath
+from ..expressions import keyedSteps
+from ..ontology.model import unkeyed
 from ..coverage import _Selection, _selections
 from ..functions.model import Function, FunctionLibrary, FunctionsDocument
 from ..functions.operations import resolveFunctions
@@ -97,6 +99,18 @@ def checkExclusive(name: str, lines: list[MappingLine], facet: bool) -> None:
 			" (`when` on one path with distinct values) and at most one line without `when`")
 
 
+def chosenTarget(model: Model, targetModel: Model, mapping: Mapping, inferred: Inferred, asType: str, accepted: list[str]) -> Inferred:
+	"""`{as=T}`: a reference translated to the target of type `T` among its source type's scope lines."""
+	kind, plural = inferred
+	if kind is None or kind.kind not in ("entity", "relation"):
+		raise ValueError("as requires a reference expression")
+	if asType not in {scope.target for scope in correspondenceScopes(model, mapping, kind.path)}:
+		raise ValueError(f"as={asType}: no scope line maps '{kind.path}' to it")
+	if not any(asType == item or targetModel.isA(asType, item) for item in accepted):
+		raise ValueError(f"as={asType}: the target does not accept it")
+	return targetModel.resolveType(TypeExpr(path=asType)), plural
+
+
 def checkElement(model: Model, path: str) -> None:
 	if model.get(path):
 		return
@@ -147,6 +161,7 @@ class MappingExpressionResolver(ExpressionResolver):
 		return super().resolve(expr)
 
 	def path(self, steps: list[str]) -> Inferred:
+		steps = keyedSteps(steps)
 		self.paths.add(".".join(steps))
 		owner, segments, plural = self.owner, list(steps), False
 		while segments:
@@ -159,7 +174,9 @@ class MappingExpressionResolver(ExpressionResolver):
 				kind = self.model.resolveType(attr.type, attr.ann)
 				if end < len(segments) and kind.kind not in ("entity", "relation"):
 					continue
-				if not all(selected(self.model, self.selections, owner, leaf) for leaf in leafMembers(self.model, owner, member)):
+				if error := self.model.elementPathError(owner, member):
+					raise ValueError(error)
+				if not all(selected(self.model, self.selections, owner, unkeyed(leaf)) for leaf in leafMembers(self.model, owner, member)):
 					raise ValueError(f"Path '{owner}.{member}' reads outside the mapping view")
 				facet = self.model.facetOf(owner, member)
 				if facet and (context := annotation(facet.ann, "ctx")):
@@ -420,8 +437,14 @@ def resolveMapping(fromOntology: Ontology, toOntology: Ontology, doc: MappingDoc
 							raise ValueError(f"{name}: qualifier '{qualifier}' requires a single text or vocabulary value")
 				if attr and inferred[0] is not None and inferred[0].kind in ("entity", "relation") and targetModel.resolveType(attr.type).kind not in ("entity", "relation"):
 					raise ValueError(f"{name}: incompatible reference expression for a scalar target")
-				inferred = resolver.translate(inferred, acceptedTypes(targetModel, scope.target, name, attr))
+				accepted = acceptedTypes(targetModel, scope.target, name, attr)
+				if line.asType:
+					inferred = chosenTarget(model, targetModel, mapping, inferred, line.asType, accepted)
+				else:
+					inferred = resolver.translate(inferred, accepted)
 				if attr:
+					if error := targetModel.elementPathError(scope.target, name):
+						raise ValueError(error)
 					checkScalarTarget(targetModel, attr, name)
 					expected = targetModel.resolveType(attr.type, attr.ann)
 					if expected.kind == "range" and line.expr is not None and "text" in line.expr:

@@ -313,6 +313,7 @@ meta     := "$valid" | "$at" | "$src" | "$format"
 | `"asset class"` in a path | A field name that is not a plain name (bindings only): `row."asset class"` |
 | `a[*]` | Each element of a list (bindings only) |
 | `a[0]` | One element of a list, from 0 (bindings only) |
+| `Attr[Key]` | The element `Key` of a [keyed structure](spec-01-ontology.md#keyed-structures) (mappings): `Phones[Mobile].Number`. Binding and mapping targets name elements the same way |
 | `$` | The document root (bindings); alone, the scope instance itself, as a reference (mappings) |
 | `^` | The record enclosing the current one: in `a[*].b[*]`, the element of `a`. `^.^` goes one further |
 | `Ref.Attr` | Through a reference: the attribute of the referenced instance (mappings) |
@@ -465,7 +466,7 @@ deliberately not bound, for [coverage](#coverage). `reason` is required.
 @map <Name> <From> -> <To> [{annotations}] [-- doc]
   <FromValue> <match> <ToValue> [-- doc]
 <FromType> -> <ToType> [{name=<Name>, into=<expr>, present=<expr>, when=<path:value>, ctx=<expr>, valid=<expr>}] [-- doc]
-  <target> <- <expr> [{when=<path:value>, src=<path>, cur=<expr>, period=<expr>, reverse, candidate}] [-- doc]
+  <target> <- <expr> [{when=<path:value>, src=<path>, as=<Type>, cur=<expr>, period=<expr>, reverse, candidate}] [-- doc]
   [<Facet>] [{annotations}]
 - <From path> {reason=<reason>} [-- doc]
 ```
@@ -522,6 +523,13 @@ state to an instance of `T`. Body lines give `T`'s values.
   Client`, for a `Party` member, is the client's `Person`. When several lines fit
   the receiver (including two lines to the same type), or none does, the
   reference is an error.
+- `{as=T}` on a line chooses the target type its reference translates to, when
+  several fit: `concerns <- ref(MortgageApplication, Id) {as=Application}`. `T`
+  must be the target of a scope line of the reference's source type, and one the
+  receiver accepts. An instance that line's `when` skips has no such target: the
+  reference is a gap (`Mapping.ReferenceUnmapped`), never another of its
+  targets. An instance known only by reference, whose condition cannot be read,
+  takes `T`.
 - `ref(S, Key)` reads the source instance of type `S` whose key (its binding
   `id`) is the value of path `Key`: the handle `<S>_<key>` of
   [scope lines](#scope-lines), a reference translated like any other. It is
@@ -1157,7 +1165,7 @@ Warnings:
    bindings); body lines sorted by target (`[Facet]` lines first).
 5. Exclusions sorted by path.
 
-Annotations follow the order `id`, `name`, `into`, `present`, `when`, `src`, `ctx`, `valid`, `deleted`,
+Annotations follow the order `id`, `name`, `into`, `present`, `when`, `src`, `as`, `ctx`, `valid`, `deleted`,
 `null`, `cur`, `period`, `reverse`, `candidate`, `reason`. Header keys follow the order of their
 tables. Spacing, docs and comments follow
 spec-01; a declaration with a body is surrounded by blank lines.

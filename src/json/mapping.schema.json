@@ -285,6 +285,15 @@
                 "items": {
                   "$ref": "#/$defs/line"
                 }
+              },
+              "name": {
+                "$ref": "#/$defs/name"
+              },
+              "present": {
+                "$ref": "#/$defs/expr"
+              },
+              "into": {
+                "$ref": "#/$defs/expr"
               }
             }
           }
@@ -463,13 +472,23 @@
               "type": "array",
               "items": {
                 "anyOf": [
-                  { "type": "string" },
-                  { "type": "boolean" },
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "boolean"
+                  },
                   {
                     "type": "object",
-                    "required": ["ref"],
+                    "required": [
+                      "ref"
+                    ],
                     "additionalProperties": false,
-                    "properties": { "ref": { "$ref": "#/$defs/name" } }
+                    "properties": {
+                      "ref": {
+                        "$ref": "#/$defs/name"
+                      }
+                    }
                   }
                 ]
               }
@@ -728,6 +747,22 @@
             },
             "doc": {
               "$ref": "#/$defs/doc"
+            },
+            "as": {
+              "$ref": "#/$defs/path",
+              "description": "Mappings: the target type the line's references translate to"
+            },
+            "qualifiers": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "cur": {
+                  "$ref": "#/$defs/expr"
+                },
+                "period": {
+                  "$ref": "#/$defs/expr"
+                }
+              }
             }
           }
         },
@@ -783,6 +818,22 @@
             },
             "doc": {
               "$ref": "#/$defs/doc"
+            },
+            "as": {
+              "$ref": "#/$defs/path",
+              "description": "Mappings: the target type the line's references translate to"
+            },
+            "qualifiers": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "cur": {
+                  "$ref": "#/$defs/expr"
+                },
+                "period": {
+                  "$ref": "#/$defs/expr"
+                }
+              }
             }
           }
         }

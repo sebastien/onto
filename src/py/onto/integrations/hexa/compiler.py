@@ -10,7 +10,7 @@ from hexa.shapes import Any, Bool, DateOnly, DatePattern, DateTime, Decimal, Dec
 
 from ...binding.model import Binding, BindingLine, BindingScope
 from ...binding.operations import BUILTIN_RESULTS
-from ...expressions import Expression, printExpression
+from ...expressions import Expression, keyedSteps, printExpression
 from ...formats.model import Formats
 from ...functions.model import FunctionLibrary
 from ...functions.operations import _resolveSignature
@@ -116,7 +116,8 @@ def valueShape(model: Model, attr: Attr) -> AnyValue:
 
 
 def slotName(*parts: str) -> str:
-	return ".".join(segment for part in parts for segment in part.replace("/", ".").split(".") if segment)
+	# NOTE: An element key (`Phones[Mobile]`) is a segment of its own, `Phones.KeyMobile`: hexa names are dotted names.
+	return ".".join(segment for part in parts for segment in part.replace("[", ".Key").replace("]", "").replace("/", ".").split(".") if segment)
 
 
 def isIndex(step: AnyValue) -> bool:
@@ -779,6 +780,7 @@ class MappingScopeCompiler:
 
 	def segments(self, steps: list[str]) -> list[Segment]:
 		"""Walk attribute `steps` from the scope's source type, through facets, structures and references."""
+		steps = keyedSteps(steps)
 		result: list[Segment] = []
 		current, index = self.scope.source, 0
 		while index < len(steps):
@@ -923,7 +925,7 @@ class MappingScopeCompiler:
 		if expr is None:
 			return []
 		if "path" in expr:
-			return [] if expr["path"] == SELF else [expr["path"]]
+			return [] if expr["path"] == SELF else [keyedSteps(expr["path"])]
 		if "call" in expr:
 			return [path for index, arg in enumerate(expr["args"]) if not (expr["call"] == "ref" and index == 0) for path in self.paths(arg)]
 		if "coalesce" in expr:
@@ -962,7 +964,10 @@ class MappingScopeCompiler:
 				attr = self.target.lookup(self.scope.target, key)
 			else:
 				attr = None
-			if attr is not None:
+			if line.asType and actual is not None and actual.kind in ("entity", "relation"):
+				# `{as=T}`: the instance's target of type T, which its scope line must have emitted
+				value = derive(V.CorrespondEmitted, value, line.asType)
+			elif attr is not None:
 				value = self.convert(value, actual, attr)
 			elif line.verb:
 				accepted = [relation.participants[0 if inverse else 1].type for relation, inverse in self.target.verbs(self.scope.target, line.verb)]

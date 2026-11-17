@@ -149,6 +149,7 @@ recomputed display marker; declaring a type does not itself make a handle implic
 | `h:Type[F1, F2]` / `h[F1]` | Facets `F1`, `F2` apply to `h` (an entity or association instance) |
 | `h.Attr Value` / `h:Type.Attr Value` | Attribute value (optionally typing the handle) |
 | `h.Attr.Field Value` | Field of a structured attribute value |
+| `h.Attr[Key].Field Value` | Field of the element `Key` of a [keyed structure](spec-01-ontology.md#keyed-structures) |
 | `h.Facet.Attr Value` | Facet attribute value; implies the facet applies |
 | `[r:] s verb o` | Binary relation instance `r` (inverse verbs accepted) |
 | `r.Attr Value` / `r.Role h` | Relation attribute / participant |
@@ -208,7 +209,7 @@ Interpretation follows the ontology type, not the spelling.
 | Duration | Number in the type's unit; ISO 8601 duration (`P2Y6M`) when the unit is unknown |
 | Range | `low..high`, `low..`, `..high`, or one value `v` (read `v..v`); each bound in the encoding of the range's type, inclusive, `low <= high`. Stored as `low..high` with canonical bounds |
 | Reference | A handle (`p1`) or typed mention (`p2:Person`) |
-| Structure | Field paths `Attr.Field Value`, one line each |
+| Structure | Field paths `Attr.Field Value`, one line each; on a multi-valued keyed structure, per element: `Attr[Key].Field Value` |
 | Collection | `[a, b]` complete set; `[a, b, ...]` incomplete; `[]` known empty |
 | Unknown | `?` |
 | Absent | `null`: confirmed absence of a single value |
@@ -321,7 +322,8 @@ its own `src` and `at`.
 | Form | Withdraws |
 | --- | --- |
 | `- h.Attr Value` | The claim of that value |
-| `- h.Attr` | All claims on that slot |
+| `- h.Attr` | All claims on that slot; for a keyed structure, every element |
+| `- h.Attr[Key]` | The element `Key` of a keyed structure: all its fields |
 | `- s verb o` / `- r` | The relation instance and its attributes |
 | `- h[F]` | Applicability of facet `F` and its attribute claims |
 | `- h` | Instance `h` and every claim about it |
@@ -340,6 +342,13 @@ its own `src` and `at`.
   - confirmed absence → `null` / `[]`;
   - corrected value → a new claim (which supersedes within the same source).
 - Retracting a claim that does not exist is a warning, not an error.
+
+Each element of a keyed structure is its own slots (`h.Phones[Mobile].Number`,
+`h.Phones[Home].Number`): sources supersede, conflict and are withdrawn element
+by element. A key must be a value of the key field's vocabulary; a field path of
+a keyed attribute without a key (`h.Phones.Number`), a key on an attribute that
+has none, or a statement of the key field itself (`h.Phones[Mobile].Use`) is an
+error (`key`).
 
 ## Identity links
 

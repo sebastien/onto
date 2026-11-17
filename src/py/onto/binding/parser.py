@@ -10,6 +10,7 @@ from ..expressions import Expression, expressionFromJson, parseExpression
 from ..functions.model import FUNCTIONS_FORMAT, FunctionDeclaration
 from ..functions.parser import _readFunctionsJson, _splitValues, parseFunctionDeclaration, parseFunctionExample
 from ..observations.parser import _jsonObject, _jsonString
+from ..ontology.model import RE_ELEMENT_PATH
 from ..text import Diagnostics, Loc, Source, isName, isPath, isToken, parseArguments, scanUnquoted, sourceLines, splitAnnotations, splitDoc
 from .model import BINDING_FORMAT, HEADER_KEYS, Binding, BindingDocument, BindingExclusion, BindingLine, BindingScope, Condition
 
@@ -172,7 +173,7 @@ def readBindingJson(data: Any) -> Binding:
 				raise ValueError("A binding line needs exactly one target kind")
 			kind = next(key for key in ("target", "facet", "verb") if key in line)
 			line = _jsonObject(line, (kind,) if kind == "facet" else (kind, "expr"), ("when", "doc") if kind == "facet" else ("when", "null", "doc"))
-			name = _jsonString(line[kind], isName if kind == "facet" else lambda text: bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*", text)))
+			name = _jsonString(line[kind], isName if kind == "facet" else lambda text: bool(RE_ELEMENT_PATH.fullmatch(text)))
 			entry = BindingLine(**{kind: name}, doc=readDoc(line))
 			if "expr" in line:
 				entry.expr = expressionFromJson(line["expr"], binding=True)
@@ -233,7 +234,7 @@ def parseBinding(source: Source) -> BindingDocument:
 					entry = BindingLine(facet=match[1], **bindingAnnotations(annotations, ("when",)), doc=docText, loc=line.loc)
 				else:
 					parts = re.split(r"[ \t]+<-[ \t]+", body, maxsplit=1)
-					if len(parts) != 2 or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*", parts[0]):
+					if len(parts) != 2 or not RE_ELEMENT_PATH.fullmatch(parts[0]):
 						raise ValueError("Invalid binding body line")
 					entry = BindingLine(target=parts[0], expr=parseExpression(parts[1], binding=True), **bindingAnnotations(annotations, ("when", "null")), doc=docText, loc=line.loc)
 				current.lines.append(entry)

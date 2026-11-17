@@ -1047,9 +1047,18 @@ Found mapping the AdviceLink CRM to AdviceOS (adviceos-data `TODO_ONTO.md`):
   Generated reverses keep `ref(T, Key)` over target types. A line whose `when`
   is false (or a default whose sibling matched) reports no projection gaps
   (`lineApplies`). Tests: `T06-014`.
-- **Open: multi-valued structures.** spec-02 encodes structure values as field
-  paths, so members of a multi-valued structure attribute cannot be told apart;
-  an element constructor in mappings needs element identity in spec-02 first.
+- **Conditional facets.** `{when=Attr:Value}` on a facet (spec-01): checked on
+  declaration (`_checkFacetCondition`: a single-valued, observed scalar attribute
+  of the subject and a value of its type) and in observations
+  (`_checkFacetConditions`, code `when`, per source, overlapping `valid`).
+  Tests: `T01-013`.
+- **Keyed structures.** A structure's `{key}` vocabulary field keys the elements
+  of a multi-valued attribute: attribute paths `Phones[Mobile].Number`
+  (`RE_ELEMENT_PATH`, `unkeyed`, `Model.elementKey`, `Model.elementPathError`),
+  in observations (statements, JSON, schema; retraction by element or attribute),
+  binding and mapping targets, and mapping paths (`{key: ...}` steps,
+  `keyedSteps`). Unkeyed multi-valued structures warn (`key`). Hexa slot names
+  write keys as `Phones.KeyMobile`. Tests: `T02-009`, `T06-015`.
 
 ## Workspace hygiene
 

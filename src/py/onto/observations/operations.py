@@ -85,7 +85,8 @@ def _retracts(retraction: Claim, claim: Claim, sources: dict[str, str]) -> bool:
 	if "facet" in retraction:
 		return claim.get("facet") == retraction["facet"] or claim.get("p", "").startswith(f"{retraction['facet']}.")
 	if "p" in retraction:
-		return claim.get("p") == retraction["p"] or claim.get("p", "").startswith(retraction["p"] + ".")
+		# `- h.Phones` withdraws every element (`Phones[Mobile].Number`), `- h.Phones[Mobile]` one of them.
+		return claim.get("p") == retraction["p"] or claim.get("p", "").startswith((retraction["p"] + ".", retraction["p"] + "["))
 	return True
 
 

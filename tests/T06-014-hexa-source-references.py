@@ -129,3 +129,82 @@ def test_source_references_are_lossy_under_reversal():
 def test_invalid_source_references_are_rejected(expr):
 	with pytest.raises(FormatError):
 		loadMapping(SOURCE, TARGET, Source("m", MAPPING.replace("ref(Client, ForeignId)", expr)))
+
+
+# -----------------------------------------------------------------------------
+#
+# CHOSEN TARGETS (`{as=T}`)
+#
+# -----------------------------------------------------------------------------
+
+
+AS_SOURCE = loadOntology([Source("s2.onto", """@ontology S2
+App
+  Id Integer {key}
+  Advice Text
+Record
+  Id Integer {key}
+Tag
+  Record Record
+  Table Text
+  ForeignId Integer
+""")])
+AS_TARGET = loadOntology([Source("t2.onto", """@ontology T2
+Matter
+Debt
+Note
+Note -concerns/hasNote-> Matter
+Note -concerns/hasNote-> Debt
+""")])
+AS_MAPPING = """@mapping S2 -> T2
+
+App -> Debt {when=Advice:None}
+
+App -> Matter {when=Advice:Full}
+
+Record -> Note
+
+Tag -> Note {into=Record}
+  concerns <- ref(App, ForeignId) {when=Table:AppId, as=Matter}
+"""
+
+
+def asMapped(state: str, text: str = AS_MAPPING):
+	mapping = loadMapping(AS_SOURCE, AS_TARGET, Source("m.map", text))
+	ops = HexaMappingOperator(AS_SOURCE, AS_TARGET, mode="lenient")
+	program = ops.compile(mapping)
+	obs = loadObservations(AS_SOURCE, Source("o.obs", "@obs S2 at=2026-11-18\n@scope s\n@src f=fixture\n@src f\nRecord_1:Record\nTag_1:Tag\n  Record Record_1\n  Table AppId\n  ForeignId 5\n" + state))
+	result = asyncio.run(run({"ClockRead": lambda context: "2026-11-18"}, program.stages.MappingRead, observationsToJson(reconcileObservations(AS_SOURCE, obs))))
+	log, report = ops.result(program, result)
+	return observationsToJson(log), report
+
+
+def test_as_chooses_the_target_its_instance_has():
+	log, report = asMapped("App_5:App\n  Advice Full\n")
+	assert not report.gaps
+	assert [set(claim["roles"].values()) for claim in log["claims"] if ".concerns." in claim.get("rel", "")] == [{"Note_s_2FRecord_2F1", "Matter_s_2FApp_2F5"}]
+
+
+def test_as_a_target_its_instance_was_not_mapped_to_is_a_gap():
+	log, report = asMapped("App_5:App\n  Advice None\n")
+	assert [gap.reason for gap in report.gaps] == ["Mapping.ReferenceUnmapped"]
+	assert not any(".concerns." in claim.get("rel", "") for claim in log["claims"])
+
+
+def test_as_an_instance_known_only_by_reference_takes_the_chosen_target():
+	log, report = asMapped("")
+	assert not report.gaps
+	assert [set(claim["roles"].values()) for claim in log["claims"] if ".concerns." in claim.get("rel", "")] == [{"Note_s_2FRecord_2F1", "Matter_s_2FApp_2F5"}]
+
+
+def test_as_prints_and_round_trips():
+	mapping = loadMapping(AS_SOURCE, AS_TARGET, Source("m", AS_MAPPING))
+	assert "concerns <- ref(App, ForeignId) {when=Table:AppId, as=Matter}" in printMapping(mapping)
+	data = mappingToJson(mapping)
+	assert mappingToJson(mappingFromJson(AS_SOURCE, AS_TARGET, data)) == data
+
+
+@pytest.mark.parametrize("annotation", ["", ", as=Note", ", as=Missing"])
+def test_without_a_valid_as_the_reference_is_ambiguous_or_rejected(annotation: str):
+	with pytest.raises(FormatError):
+		loadMapping(AS_SOURCE, AS_TARGET, Source("m", AS_MAPPING.replace(", as=Matter", annotation)))

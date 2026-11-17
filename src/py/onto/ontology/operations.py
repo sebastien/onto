@@ -121,6 +121,23 @@ def _checkFacetCondition(model: Model, decl: Decl, condition: object, diag: Diag
 		diag.error("annotation", f"when value '{value}' is not a boolean", decl.loc)
 
 
+def _checkKeyedStructures(model: Model, diag: Diagnostics) -> None:
+	"""A structure keys its elements by at most one required, observed vocabulary field marked `{key}`; a multi-valued
+	structure attribute without one cannot tell its elements apart (a warning)."""
+	for decl in model.ontology.decls:
+		if decl.kind == "type" and decl.fields:
+			keys = [field for field in decl.fields if annotation(field.ann, "key")]
+			if len(keys) > 1:
+				diag.error("key", f"Structure '{decl.path}' has several key fields: {', '.join(field.name for field in keys)}", keys[1].loc or decl.loc)
+			for field in keys[:1]:
+				resolved = model.resolveType(field.type, field.ann)
+				if resolved.kind != "vocab" or field.derived or (field.card or model.defaultCard) != "1":
+					diag.error("key", f"Key field '{decl.path}.{field.name}' must be a required, observed vocabulary (its values are the element keys)", field.loc or decl.loc)
+		for attr in decl.attrs if decl.kind in ("entity", "facet", "relation") else decl.fields or [] if decl.kind == "type" else []:
+			if (attr.card or model.defaultCard) in MULTI and model.structOf(attr.type) and model.elementKey(attr) is None:
+				diag.warn("key", f"'{decl.path}.{attr.name}' holds several structures without a key field: its elements cannot be told apart", attr.loc or decl.loc)
+
+
 def _typeCycle(model: Model, type: TypeExpr | None) -> bool:
 	"""True when following aliases and attribute reuse from `type` comes back to a visited type."""
 	seen: set[str] = set()
@@ -488,6 +505,7 @@ def _validate(model: Model, diag: Diagnostics) -> None:
 		elif decl.kind == "map":
 			_validateMap(model, decl, diag)
 	_validateExtensions(model, diag)
+	_checkKeyedStructures(model, diag)
 	_checkViewCycles(model, diag)
 	_checkLayering(model, diag)
 	# NOTE: A verb read from an entity must identify one relation for any compatible object type.

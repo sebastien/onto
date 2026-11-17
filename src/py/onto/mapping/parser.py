@@ -10,7 +10,7 @@ from ..expressions import expressionFromJson, parseExpression
 from ..functions.model import FUNCTIONS_FORMAT, FunctionDeclaration
 from ..functions.parser import _readFunctionsJson, parseFunctionDeclaration, parseFunctionExample
 from ..observations.parser import _jsonObject, _jsonString
-from ..ontology.model import Decl, RE_ATTR_PATH, RE_MAP, RE_VIEW_ARROW
+from ..ontology.model import Decl, RE_ATTR_PATH, RE_ELEMENT_PATH, RE_MAP, RE_VIEW_ARROW
 from ..ontology.parser import _Context, _declFromJson, _parseMapLine
 from ..text import Diagnostics, Loc, Source, isName, isPath, isToken, parseAnnotations, parseArguments, sourceLines, splitAnnotations, splitDoc
 from .model import HEADER_KEYS, MAPPING_FORMAT, QUALIFIER_KEYS, Mapping, MappingDocument, MappingExclusion, MappingLine, MappingScope
@@ -48,7 +48,7 @@ def mappingAnnotations(text: str | None, allowed: tuple[str, ...]) -> dict[str, 
 	for part in annotationParts(text):
 		key, separator, value = part.partition("=")
 		key, value = key.strip(), value.strip()
-		if key not in allowed or key in result or key in result.get("qualifiers", {}):
+		if key not in allowed or key in result or key in result.get("qualifiers", {}) or key == "as" and "asType" in result:
 			raise ValueError(f"Invalid or duplicate mapping annotation '{key}'")
 		if key in ("reverse", "candidate"):
 			if separator:
@@ -66,6 +66,8 @@ def mappingAnnotations(text: str | None, allowed: tuple[str, ...]) -> dict[str, 
 			result[key] = condition(value, binding=False)
 		elif key == "src" and RE_ATTR_PATH.fullmatch(value):
 			result[key] = value
+		elif key == "as" and isPath(value):
+			result["asType"] = value
 		elif key == "reason" and value in ("ignore", "out-of-scope"):
 			result[key] = value
 		else:
@@ -132,8 +134,8 @@ def readMappingJson(data: Any) -> Mapping:
 			if not isinstance(line, dict) or len(set(line) & {"target", "facet", "verb"}) != 1:
 				raise ValueError("A mapping line requires one target kind")
 			kind = next(key for key in ("target", "facet", "verb") if key in line)
-			line = _jsonObject(line, (kind,) if kind == "facet" else (kind, "expr"), ("when", "candidate", "doc") if kind == "facet" else ("when", "src", "reverse", "candidate", "doc", "qualifiers"))
-			name = _jsonString(line[kind], isName if kind == "facet" else lambda text: bool(RE_ATTR_PATH.fullmatch(text)))
+			line = _jsonObject(line, (kind,) if kind == "facet" else (kind, "expr"), ("when", "candidate", "doc") if kind == "facet" else ("when", "src", "as", "reverse", "candidate", "doc", "qualifiers"))
+			name = _jsonString(line[kind], isName if kind == "facet" else lambda text: bool(RE_ELEMENT_PATH.fullmatch(text)))
 			entry = MappingLine(**{kind: name}, doc=readDoc(line))
 			if "expr" in line:
 				entry.expr = expressionFromJson(line["expr"])
@@ -143,6 +145,8 @@ def readMappingJson(data: Any) -> Mapping:
 				entry.when = readCondition(line["when"], binding=False)
 			if "src" in line:
 				entry.src = _jsonString(line["src"], lambda text: bool(RE_ATTR_PATH.fullmatch(text)))
+			if "as" in line:
+				entry.asType = _jsonString(line["as"], isPath)
 			for key in ("reverse", "candidate"):
 				if key in line:
 					if line[key] is not True:
@@ -203,9 +207,11 @@ def parseMapping(source: Source) -> MappingDocument:
 					entry = MappingLine(facet=match[1], **mappingAnnotations(annotations, ("when", "candidate")), doc=docText, loc=line.loc)
 				else:
 					parts = re.split(r"[ \t]+<-[ \t]+", body, maxsplit=1)
-					if len(parts) != 2 or not RE_ATTR_PATH.fullmatch(parts[0]):
+					if len(parts) != 2 or not RE_ELEMENT_PATH.fullmatch(parts[0]):
 						raise ValueError("Invalid mapping assignment")
-					entry = MappingLine(target=parts[0], expr=parseExpression(parts[1]), **mappingAnnotations(annotations, ("when", "src", *QUALIFIER_KEYS, "reverse", "candidate")), doc=docText, loc=line.loc)
+					entry = MappingLine(target=parts[0], expr=parseExpression(parts[1]), **mappingAnnotations(annotations, ("when", "src", "as", *QUALIFIER_KEYS, "reverse", "candidate")), doc=docText, loc=line.loc)
+					if entry.asType:
+						entry.asType = qualifyPath(entry.asType, doc.toNamespace, doc.uses)
 				current.lines.append(entry)
 				continue
 			current = None

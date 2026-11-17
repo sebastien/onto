@@ -51,7 +51,9 @@ PATH = rf"{HANDLE}(?:/{HANDLE})*"
 REF = rf"{HANDLE}(?::{PATH})?"
 RE_REF = re.compile(rf"({HANDLE})(?::({PATH}))?")
 RE_HEADER = re.compile(rf"({HANDLE})(?::({PATH}))?(?:\[([^\]]*)\])?")
-RE_VALUE = re.compile(rf"({REF})\.({HANDLE}(?:\.{HANDLE})*)(?:\s+(.+))?")
+# NOTE: An attribute segment may name an element of a keyed structure: `Phones[Mobile]`.
+ELEMENT = rf"{HANDLE}(?:\[{PATH}\])?"
+RE_VALUE = re.compile(rf"({REF})\.({ELEMENT}(?:\.{ELEMENT})*)(?:\s+(.+))?")
 RE_LINK = re.compile(rf"(?:({HANDLE}):\s+)?({REF})\s+([a-z][A-Za-z0-9_]*)\s+({REF}|\?)")
 RE_IDENTITY = re.compile(rf"({REF})\s+(!=|=)\s+({REF})")
 RE_DECIMAL = re.compile(r"([+-]?)(\d*(?:\.\d*)?)(?:[eE]([+-]?\d+))?", re.ASCII)

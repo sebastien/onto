@@ -99,6 +99,9 @@ RE_PARTICIPANT = re.compile(r"(?:([A-Za-z_][A-Za-z0-9_]*)\s*:\s*)?(?:([1?+*])\s+
 RE_ENTITY_DECL = re.compile(r"(\S+)(?:\s+<\s+(\S+))?")
 RE_ATTRIBUTE = re.compile(r"(?:([1?+*])\s+)?(?:(~)\s+)?([A-Za-z_][A-Za-z0-9_]*)(?:\s+(.*))?")
 RE_ATTR_PATH = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
+# NOTE: An attribute path naming elements of keyed structures: `Phones[Mobile].Number` (spec-01 keyed structures).
+RE_ELEMENT_PATH = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\[[A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*\])?(?:\.[A-Za-z_][A-Za-z0-9_]*(?:\[[A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*\])?)*")
+RE_ELEMENT_KEY = re.compile(r"\[[^\]]*\]")
 RE_INPUT = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*")
 RE_VIEW_ARROW = re.compile(r"([A-Za-z_][A-Za-z0-9_/]*)\.([a-z][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_/]*)")
 RE_VIEW_LINE = re.compile(
@@ -276,6 +279,11 @@ def vocabularyValues(values: list[str], ordered: bool = False) -> list[str]:
 # -----------------------------------------------------------------------------
 
 
+def unkeyed(path: str) -> str:
+	"""An attribute path without its element keys: `Phones[Mobile].Number` is `Phones.Number`."""
+	return RE_ELEMENT_KEY.sub("", path) if "[" in path else path
+
+
 class Model:
 	"""Lookups over an ontology: declarations, lineage, attributes, facets and types."""
 
@@ -389,6 +397,7 @@ class Model:
 			self._looking.discard(key)
 
 	def _lookup(self, ownerPath: str, attrPath: str) -> Attr | None:
+		attrPath = unkeyed(attrPath)
 		decl = self.get(ownerPath)
 		if not decl:
 			return None
@@ -417,6 +426,41 @@ class Model:
 				return None
 			attr = next((item for item in struct.fields or [] if item.name == name), None)
 		return attr
+
+	def elementKey(self, attr: Attr | None) -> Attr | None:
+		"""The `{key}` field keying the elements of a multi-valued structure attribute, if any."""
+		struct = self.structOf(attr.type) if attr and (attr.card or self.defaultCard) in MULTI else None
+		return next((field for field in struct.fields or [] if annotation(field.ann, "key")), None) if struct else None
+
+	def elementPathError(self, ownerPath: str, attrPath: str) -> str | None:
+		"""Why `attrPath` misnames keyed elements: a missing, unknown or misplaced `[Key]`; None when it is well formed."""
+		if not RE_ELEMENT_PATH.fullmatch(attrPath):
+			return f"Invalid attribute path '{attrPath}'"
+		parts = attrPath.split(".")
+		facet = self.facetOf(ownerPath, unkeyed(attrPath))
+		start = 1 if facet else 0
+		for index in range(start, len(parts)):
+			name, _, key = parts[index].partition("[")
+			prefix = ".".join(unkeyed(part) for part in parts[:index] + [name])
+			attr = self.lookup(ownerPath, prefix)
+			if attr is None:
+				return None  # unknown attributes are reported by the caller
+			field = self.elementKey(attr)
+			if field is None:
+				if key:
+					return f"'{prefix}' has no keyed elements"
+				continue
+			if not key:
+				if index + 1 == len(parts):
+					continue  # the whole attribute: `- h.Phones` withdraws every element
+				return f"'{prefix}' needs an element key: {prefix}[Key]"
+			key = key[:-1]
+			resolved = self.resolveType(field.type, field.ann)
+			if resolved.kind == "vocab" and not resolved.open and key not in (resolved.values or []):
+				return f"'{key}' is not a value of '{prefix}' keys ({field.name})"
+			if index + 1 < len(parts) and parts[index + 1] == field.name and index + 2 == len(parts):
+				return f"'{prefix}[{key}].{field.name}' is implied by the key"
+		return None
 
 	def structOf(self, type: TypeExpr | None) -> Decl | None:
 		"""The structure declaration a type expression denotes, following aliases."""

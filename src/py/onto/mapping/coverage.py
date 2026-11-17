@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..coverage import CoverageReport, Elements, _selections, coverageRows
+from ..coverage import CoverageReport, Elements, _selections, coverageRows, impliedKeys
 from ..expressions import Expression
 from ..ontology.model import Model, Ontology
 from .model import Mapping, MappingScope
@@ -20,7 +20,8 @@ def expressionPaths(expr: Expression | None) -> list[list[str]]:
 		return []
 	if "path" in expr:
 		# `$` (the scope instance) reads no source element
-		return [] if expr["path"] == [{"root": True}] else [expr["path"]]
+		# An element key (`Phones[Mobile].Number`) reads the field `Phones.Number`
+		return [] if expr["path"] == [{"root": True}] else [[step for step in expr["path"] if not (isinstance(step, dict) and "key" in step)]]
 	if "call" in expr:
 		args = expr["args"][1:] if expr["call"] == "ref" else expr["args"]
 		return [path for arg in args for path in expressionPaths(arg)]
@@ -66,6 +67,7 @@ class MappingCoverage:
 			key = self.target.assigned(scope.target, line.target, line.facet, line.verb)
 			if key and (candidates or not line.candidate):
 				self.assigned.add(key)
+				self.assigned.update(impliedKeys(self.target, scope.target, line.target))
 			member = f"[{line.facet}]" if line.facet else f".{line.target or line.verb}"
 			status = "ambiguous" if line.candidate and not candidates else "direct" if isDirect(line.expr) else "transformed"
 			self.record(scope, expressionPaths(line.expr), targetType + member, status, line.doc)

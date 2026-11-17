@@ -90,6 +90,7 @@ Customs/Code = C6109|C0808|...
 | `T = {hierarchical}` + tree | Taxonomy |
 | `D/T = A\|B {extends=T}` | Values a later domain adds to open vocabulary `T` |
 | `T =` + body | Structure: fields, no identity |
+| `1 Use U {key}` in a structure | Keyed structure: a multi-valued attribute holds one element per key, `Phones[Mobile].Number` |
 | `E` / `E < Base` + body | Entity / specialisation (single inheritance) |
 | `F of E` + body | Facet of an entity or an association |
 | `F of E {ctx=C}` | Contextual facet: values hold within an instance of `C` |

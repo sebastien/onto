@@ -42,6 +42,12 @@ def _path(steps: Any, binding: bool) -> list[str | dict[str, Any]]:
 				raise ValueError("Invalid expression path field")
 			result.append(step)
 			continue
+		if not binding and isinstance(step, dict) and set(step) == {"key"}:
+			# In a mapping, `Phones[Mobile]` names an element of a keyed structure (spec-01 keyed structures)
+			if index == 0 or not isinstance(steps[index - 1], str) or not isinstance(step["key"], str) or not isPath(step["key"]):
+				raise ValueError("An element key follows an attribute: Attr[Key]")
+			result.append(dict(step))
+			continue
 		if not binding and step == {"root": True} and len(steps) == 1:
 			# In a mapping, `$` alone is the scope instance itself (spec-04 Expressions)
 			result.append(dict(step))
@@ -102,6 +108,8 @@ def _printPath(steps: list[str | dict[str, Any]]) -> str:
 			result += "[*]"
 		elif "index" in step:
 			result += f"[{step['index']}]"
+		elif "key" in step:
+			result += f"[{step['key']}]"
 		elif "up" in step:
 			result += ".".join("^" for _ in range(step["up"]))
 		else:
@@ -172,6 +180,14 @@ class _Parser:
 					raise ValueError("Expected '*' or a nonnegative list index")
 				if not self.take("]"):
 					raise ValueError("Unclosed list step")
+			elif not self.binding and isinstance(steps[-1], str) and self.take("["):
+				match = re.match(r"[A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*", self.text[self.pos:])
+				if not match:
+					raise ValueError("Expected an element key")
+				steps.append({"key": match[0]})
+				self.pos += len(match[0])
+				if not self.take("]"):
+					raise ValueError("Unclosed element key")
 			else:
 				break
 		return {"path": steps}
@@ -237,6 +253,17 @@ class _Parser:
 # HIGH-LEVEL API
 #
 # -----------------------------------------------------------------------------
+
+
+def keyedSteps(steps: list[Any]) -> list[Any]:
+	"""Mapping path steps with element keys folded into their attribute: `Phones`, `{key: Mobile}` is `Phones[Mobile]`."""
+	result: list[Any] = []
+	for step in steps:
+		if isinstance(step, dict) and set(step) == {"key"} and result and isinstance(result[-1], str):
+			result[-1] += f"[{step['key']}]"
+		else:
+			result.append(step)
+	return result
 
 
 def parseExpression(text: str, *, binding: bool = False, field: bool = True) -> Expression:

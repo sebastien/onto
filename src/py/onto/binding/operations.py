@@ -329,6 +329,8 @@ def resolveBinding(ontology: Ontology, doc: BindingDocument, libraries: list[Fun
 				inferred = resolver.resolve(line.expr)
 				attr = model.lookup(scope.type, name)
 				if attr:
+					if error := model.elementPathError(scope.type, name):
+						raise ValueError(error)
 					checkScalarTarget(model, attr, name)
 					checkAssignment(model, inferred, model.resolveType(attr.type, attr.ann), (attr.card or model.defaultCard) in ("*", "+"), name)
 				else:

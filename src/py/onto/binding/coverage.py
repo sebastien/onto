@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..coverage import CoverageReport, CoverageRow, Elements, coverageRows
+from ..coverage import CoverageReport, CoverageRow, Elements, coverageRows, impliedKeys
 from ..expressions import Expression, printExpression
 from ..inventory.model import CONTAINER_TYPES, Inventory
 from ..ontology.model import Model, Ontology
@@ -113,6 +113,8 @@ class BindingCoverage:
 		self.record(steps, conditions, None, "condition")
 		for line in scope.lines:
 			key = self.elements.assigned(scope.type, line.target, line.facet, line.verb)
+			if key:
+				self.assigned.update(impliedKeys(self.elements, scope.type, line.target))
 			if key:
 				self.assigned.add(key)
 			member = f"[{line.facet}]" if line.facet else f".{line.target or line.verb}"
