@@ -6,12 +6,12 @@ import json
 
 import pytest
 
-from tests._helpers import _schemaValidator, _specExample
+from tests.helpers import schemaValidator, specExample
 
 
 @pytest.mark.parametrize("index", [1, 2])
 def testMappingAndFunctionSpecExamplesMatchSchema(index: int) -> None:
-	_schemaValidator("mapping").validate(json.loads(_specExample("spec-04-mapping", index, kind="json")))
+	schemaValidator("mapping").validate(json.loads(specExample("spec-04-mapping", index, kind="json")))
 
 
 @pytest.mark.parametrize("signature,valid", [
@@ -20,7 +20,7 @@ def testMappingAndFunctionSpecExamplesMatchSchema(index: int) -> None:
 	({"builtin": "Text", "typo": True}, False), ({"collection": True}, False),
 ])
 def testSignatureVariantsAreExclusiveAndClosed(signature: dict, valid: bool) -> None:
-	assert _schemaValidator("mapping", "signatureType").is_valid(signature) is valid
+	assert schemaValidator("mapping", "signatureType").is_valid(signature) is valid
 
 
 @pytest.mark.parametrize("value,valid", [
@@ -30,11 +30,11 @@ def testSignatureVariantsAreExclusiveAndClosed(signature: dict, valid: bool) -> 
 	({"set": [{"unknown": True}]}, False),
 ])
 def testFunctionExamplesUseObservationValues(value: object, valid: bool) -> None:
-	assert _schemaValidator("mapping", "value").is_valid(value) is valid
+	assert schemaValidator("mapping", "value").is_valid(value) is valid
 
 
 def testFormatMetadataKeepsTheRenamedContract() -> None:
-	validator = _schemaValidator("mapping", "expr")
+	validator = schemaValidator("mapping", "expr")
 	assert validator.is_valid({"meta": "format"})
 	assert not validator.is_valid({"meta": "codec"})
 

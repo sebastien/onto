@@ -31,6 +31,7 @@ Client
   * Advisers Adviser
   Id Integer {key}
   Owner Adviser
+  * Tags Text
 """)])
 
 BINDING = """@binding Crm
@@ -43,6 +44,7 @@ Client <- $ {id=id}
   Advisers <- ref(Adviser, advisers[*].id)
   Id <- id
   Owner <- ref(Adviser, ownerId)
+  Tags <- tags
 """
 
 SRC = "crm:client/1"
@@ -75,6 +77,12 @@ def test_ref_applies_to_each_member_of_a_collection():
 def test_ref_of_a_collection_skips_null_members_and_keeps_partial_sets():
 	assert reference("Crm/Adviser", [3, None]) == [{"ref": "Adviser_3", "type": "Crm/Adviser"}]
 	assert reference("Crm/Adviser", {"set": [3], "partial": True}) == {"set": [{"ref": "Adviser_3", "type": "Crm/Adviser"}], "partial": True}
+
+
+def test_a_collection_member_type_mismatch_is_a_field_gap():
+	text, report = read({"id": 1, "owner": None, "ownerId": 7, "advisers": [], "tags": ["valid", False]})
+	assert "Client_1.Owner Adviser_7:Adviser" in text and "Client_1.Tags" not in text
+	assert [(gap.target, gap.reason) for gap in report.gaps] == [("Crm/Client.Tags", "Binding.TypeMismatch")]
 
 
 # -----------------------------------------------------------------------------

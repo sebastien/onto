@@ -155,8 +155,9 @@ path entry that is not a directory is a warning.
 - Bindings and observations are loaded file by file; several may share a
   namespace key.
 - Indexing problems (`cli.kind`, `cli.read`) are reported for the files a
-  command names or reads; `ls` reports them all. A broken file elsewhere in the
-  project does not fail `onto state statement.obs`.
+  command names or reads; `ls` and whole-workspace `check` and `fmt` report
+  them all. A broken file elsewhere in the project does not fail
+  `onto state statement.obs`.
 
 ### Context
 
@@ -371,20 +372,28 @@ omitted and reported as warnings at their own line (`LossyLine.loc`): `exchange-
 warning map.lossy: Exchange/Instrument -> Finance/Instrument: 'AssetClass' is
 not reversed: @map 'AssetClassFromCode' is not exact and one-to-one`.
 
-#### `onto run FILE.bind DOCUMENT... | FILE.map STATE.obs... [--src TOKEN] [--impl MODULE]... [--at TIME] [--strict]`
+#### `onto run FILE.bind DOCUMENT... | FILE.map STATE.obs... [--src TOKEN] [--impl MODULE]... [--at TIME] [--max-nodes N] [--report FILE] [--strict]`
 
 Runs a binding over source documents, or a mapping over observations of its
 `From` ontology, through the hexa integration ([spec-06](spec-06-hexa.md)), and
 prints the observations log it produces (`--json`: its JSON form).
 
 - A binding reads JSON documents, or CSV ones when its header says
-  `format=csv`. Each document's source token is `--src`, else its path.
-- A mapping reads observations files; several form one state (their source
-  aliases are kept apart), reconciled before the run.
+  `format=csv`. Each document's source token is `--src`, else its path; in
+  `--src`, `{path}` is the document's path and `{stem}` the same without its
+  extension (`--src crm:{stem}` gives `crm:clients/9` for `clients/9.json`).
+- A mapping reads observations files and reconciles them as one state before the
+  run. Statement defaults and source aliases are resolved per file. All inputs
+  must declare the same `@scope` or all omit it. Without a scope, the same handle
+  cannot appear in multiple inputs.
 - `--impl` names the modules implementing the functions the file calls, as
   for `fn test`. `--at` sets the run time recorded on the claims (default: now).
 - The run is one-shot: it compares with no previous output, so it retracts
   nothing; re-running against a store belongs to the host.
+- `--max-nodes` raises hexa's input limit for large states (hexa spec-004
+  limits). `--report FILE` also writes the gaps as JSON,
+  `{"format": "onto.run-report/1", "gaps": [{target, reason, src, location, handle}]}`,
+  for tools; `--json` keeps the observations as its result.
 - What a run could not produce is reported as `run.gap` warnings on the file:
   target, reason, source and location. With `--strict` they are errors, and
   the run is strict (spec-06).

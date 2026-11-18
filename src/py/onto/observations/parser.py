@@ -60,10 +60,10 @@ from .model import (
 	RE_VALUE,
 	Statement,
 	TypeDeclaration,
-	_time,
-	_useType,
-	_valueIdentity,
-	_valueKey,
+	timestampValue,
+	useType,
+	typedValueIdentity,
+	valueKey,
 	canonicalNumber,
 	parseInterval,
 )
@@ -75,7 +75,7 @@ from .model import (
 # -----------------------------------------------------------------------------
 
 
-def _metadata(pairs: list[tuple[str, str | bool]], loc: Loc, diag: Diagnostics) -> dict[str, Any]:
+def metadata(pairs: list[tuple[str, str | bool]], loc: Loc, diag: Diagnostics) -> dict[str, Any]:
 	result = dict(pairs)
 	for key, value in pairs:
 		try:
@@ -88,7 +88,7 @@ def _metadata(pairs: list[tuple[str, str | bool]], loc: Loc, diag: Diagnostics) 
 			if not isinstance(value, str):
 				raise ValueError(f"'{key}' needs a value")
 			if key == "at":
-				_time(value)
+				timestampValue(value)
 			elif key == "valid":
 				parseInterval(value)
 			elif key == "ctx" and (not isName(value) or value == "none"):
@@ -105,12 +105,12 @@ def _metadata(pairs: list[tuple[str, str | bool]], loc: Loc, diag: Diagnostics) 
 	return result
 
 
-def _rangeOrder(element: ResolvedType) -> Callable[[Any], Any] | None:
+def rangeOrder(element: ResolvedType) -> Callable[[Any], Any] | None:
 	"""A sort key for the bounds of a range of `element`, or None when its values have no comparable order."""
 	if element.builtin in ("Integer", "Number", "Amount", "Percent"):
 		return Decimal
 	if element.builtin in ("Date", "DateTime"):
-		return _time
+		return timestampValue
 	if element.builtin == "Duration":
 		# NOTE: An ISO 8601 duration (unit unknown) has no comparable magnitude here.
 		return lambda value: None if RE_DURATION.fullmatch(str(value)) else Decimal(value)
@@ -120,7 +120,7 @@ def _rangeOrder(element: ResolvedType) -> Callable[[Any], Any] | None:
 	return None
 
 
-def _members(text: str) -> tuple[list[str], bool]:
+def rawMembers(text: str) -> tuple[list[str], bool]:
 	if not text.endswith("]"):
 		raise ValueError("Unterminated collection")
 	body = text[1:-1]
@@ -147,7 +147,7 @@ def _members(text: str) -> tuple[list[str], bool]:
 # -----------------------------------------------------------------------------
 
 
-class _Resolver:
+class ObservationResolver:
 	"""Resolve typed mentions before checking references, allowing forward references."""
 
 	def __init__(self, ontology: Ontology, doc: ObservationsDocument):
@@ -225,7 +225,7 @@ class _Resolver:
 				raise ValueError(f"'{text}' is not a boolean")
 			return text == "true"
 		if builtin in ("Date", "DateTime"):
-			_time(text)
+			timestampValue(text)
 			if ("T" in text) != (builtin == "DateTime"):
 				raise ValueError(f"'{text}' is not a {builtin}")
 		if builtin == "Duration":
@@ -245,7 +245,7 @@ class _Resolver:
 		if not low and not high:
 			raise ValueError("A range needs at least one bound")
 		bounds = [self.scalar(bound, element, loc) if bound else None for bound in (low, high)]
-		if None not in bounds and (order := _rangeOrder(element)) is not None:
+		if None not in bounds and (order := rangeOrder(element)) is not None:
 			left, right = order(bounds[0]), order(bounds[1])
 			if left is not None and right is not None and left > right:
 				raise ValueError(f"Range '{text}' has its low bound above its high bound")
@@ -253,7 +253,7 @@ class _Resolver:
 
 	def value(self, raw: str, attr: Attr, statement: Statement) -> Any:
 		card = attr.card or self.model.defaultCard
-		resolved = _useType(self.model, attr, statement.meta)
+		resolved = useType(self.model, attr, statement.meta)
 		if raw == "?":
 			return {"unknown": True}
 		if raw == "null":
@@ -263,14 +263,13 @@ class _Resolver:
 		if raw.startswith("["):
 			if card not in ("+", "*"):
 				raise ValueError("Collection on a single-valued slot")
-			members, partial = _members(raw)
+			members, partial = rawMembers(raw)
 			if not members and not partial and card == "+":
 				raise ValueError("[] contradicts cardinality +")
 			values = [self.scalar(item, resolved, statement.loc) for item in members]
-			numeric = resolved.builtin in ("Integer", "Number", "Amount", "Percent", "Duration")
-			if len({_valueIdentity(value, numeric) for value in values}) != len(values):
+			if len({typedValueIdentity(value, resolved) for value in values}) != len(values):
 				raise ValueError("Duplicate collection members")
-			return {"set": sorted(values, key=_valueKey), **({"partial": True} if partial else {})}
+			return {"set": sorted(values, key=valueKey), **({"partial": True} if partial else {})}
 		return self.scalar(raw, resolved, statement.loc)
 
 	def link(self, statement: Statement, meta: dict[str, Any], report: bool = True) -> Claim | None:
@@ -437,7 +436,7 @@ class _Resolver:
 				try:
 					if statement.raw is not None:
 						claim["v"] = self.value(statement.raw, attr, statement)
-						for conflict in _useType(self.model, attr, meta).conflicts:
+						for conflict in useType(self.model, attr, meta).conflicts:
 							self.diag.error("qualifier", conflict, statement.loc)
 					elif any(key in meta for key in QUALIFIERS):
 						self.diag.error("meta", "Measurement qualifiers require a value", statement.loc)
@@ -448,23 +447,31 @@ class _Resolver:
 			actual = self.instances.get(handle, {}).get("type")
 			if not actual or not self.model.isA(actual, expected):
 				self.diag.error("type", f"'{handle}' is '{actual}', expected '{expected}'", loc)
-		if mode == "strict":
-			return Observations(dict(self.doc.obs), dict(self.doc.sources), dict(sorted(self.instances.items())), claims, retractions, self.diag.check())
-		# Document-level errors cannot safely be assigned to a gap.
-		if any(item.level == "error" and item.loc is None for item in self.diag.items):
-			self.diag.check()
-		errors: dict[Loc, list[Diagnostic]] = {}
-		for item in self.diag.items:
-			if item.level == "error" and item not in errors.get(item.loc, []):
-				errors.setdefault(item.loc, []).append(item)
-		gaps = [Gap(statement.n, statement.rawLine, splitAnnotations(statement.text)[0], statement.loc,
-			deepcopy(statement.meta), statement.ctx, tuple(replace(item, level="warning") for item in errors[statement.loc]))
-			for statement in self.doc.statements if statement.loc in errors]
-		blocked = {gap.n for gap in gaps}
-		warnings = list(dict.fromkeys(replace(item, level="warning") for item in self.diag.items))
-		return Observations(dict(self.doc.obs), dict(self.doc.sources), dict(sorted(self.instances.items())),
-			[claim for claim in claims if claim["n"] not in blocked],
-			[claim for claim in retractions if claim["n"] not in blocked], warnings, gaps)
+		observations = Observations(dict(self.doc.obs), dict(self.doc.sources), dict(sorted(self.instances.items())), claims, retractions)
+		return validateStatements(self.doc, observations, self.diag.items, mode)
+
+
+def validateStatements(doc: ObservationsDocument, observations: Observations, diagnostics: list[Diagnostic], mode: str) -> Observations:
+	"""Reject errors in strict mode; in lenient mode hold whole statements as inert gaps."""
+	if not diagnostics:
+		return observations
+	statements = {statement.loc: statement for statement in doc.statements}
+	allDiagnostics = observations.diagnostics + diagnostics
+	if mode == "strict" or any(item.level == "error" and item.loc not in statements for item in diagnostics):
+		return replace(observations, diagnostics=Diagnostics(allDiagnostics).check())
+	errors: dict[Loc, list[Diagnostic]] = {}
+	for item in dict.fromkeys(diagnostics):
+		if item.level == "error":
+			errors.setdefault(item.loc, []).append(replace(item, level="warning"))
+	gaps = [Gap(statement.n, statement.rawLine, splitAnnotations(statement.text)[0], statement.loc,
+		deepcopy(statement.meta), statement.ctx, tuple(errors[statement.loc]))
+		for statement in doc.statements if statement.loc in errors]
+	blocked = {gap.n for gap in gaps}
+	return replace(observations,
+		claims=[claim for claim in observations.claims if claim["n"] not in blocked],
+		retractions=[claim for claim in observations.retractions if claim["n"] not in blocked],
+		diagnostics=list(dict.fromkeys(replace(item, level="warning") for item in allDiagnostics)),
+		gaps=sorted(observations.gaps + gaps, key=lambda gap: gap.n))
 
 # -----------------------------------------------------------------------------
 #
@@ -473,7 +480,7 @@ class _Resolver:
 # -----------------------------------------------------------------------------
 
 
-def _jsonObject(value: Any, required: tuple[str, ...], optional: tuple[str, ...] = ()) -> dict[str, Any]:
+def jsonObject(value: Any, required: tuple[str, ...], optional: tuple[str, ...] = ()) -> dict[str, Any]:
 	if not isinstance(value, dict):
 		raise ValueError("Expected a JSON object")
 	if not set(required) <= value.keys() or value.keys() - set(required + optional):
@@ -481,33 +488,33 @@ def _jsonObject(value: Any, required: tuple[str, ...], optional: tuple[str, ...]
 	return value
 
 
-def _jsonString(value: Any, check: Callable[[str], bool] = isToken) -> str:
+def jsonString(value: Any, check: Callable[[str], bool] = isToken) -> str:
 	if not isinstance(value, str) or not check(value):
 		raise ValueError(f"Invalid JSON string '{value}'")
 	return value
 
 
-def _jsonValue(value: Any, member: bool = False) -> Any:
+def jsonValue(value: Any, member: bool = False) -> Any:
 	if isinstance(value, (str, bool)) or value is None and not member:
 		return value
 	if not isinstance(value, dict):
 		raise ValueError("A value must be a string, boolean, reference, collection, unknown or null")
 	if set(value) == {"ref"}:
-		_jsonString(value["ref"], isName)
+		jsonString(value["ref"], isName)
 	elif set(value) == {"unknown"} and value["unknown"] is True and not member:
 		pass
 	elif set(value) in ({"set"}, {"set", "partial"}) and not member:
 		if not isinstance(value["set"], list) or "partial" in value and value["partial"] is not True:
 			raise ValueError("Invalid collection")
 		for item in value["set"]:
-			_jsonValue(item, True)
+			jsonValue(item, True)
 	else:
 		raise ValueError("Invalid value members or non-concrete collection member")
 	return value
 
 
-def _jsonClaim(value: Any, retract: bool) -> Claim:
-	claim = _jsonObject(value, ("n",), ("s", "exists", "facet", "p", "v", "rel", "roles", "same", "distinct", *META_KEYS))
+def jsonClaim(value: Any, retract: bool) -> Claim:
+	claim = jsonObject(value, ("n",), ("s", "exists", "facet", "p", "v", "rel", "roles", "same", "distinct", *META_KEYS))
 	if type(claim["n"]) is not int or claim["n"] < 1:
 		raise ValueError("n must be a positive statement ordinal")
 	forms = [key for key in ("exists", "facet", "p", "rel", "same", "distinct") if key in claim]
@@ -519,30 +526,30 @@ def _jsonClaim(value: Any, retract: bool) -> Claim:
 		if "s" in claim or not isinstance(pair, list) or len(pair) != 2:
 			raise ValueError("Identity links require two handles and no s")
 		for handle in pair:
-			_jsonString(handle, isName)
+			jsonString(handle, isName)
 	if "s" in claim:
-		_jsonString(claim["s"], isName)
+		jsonString(claim["s"], isName)
 	elif form not in ("rel", "same", "distinct"):
 		raise ValueError("A non-relation claim requires s")
 	if form == "exists" and claim["exists"] is not True:
 		raise ValueError("exists must be true")
 	if form == "facet":
-		_jsonString(claim["facet"], isName)
+		jsonString(claim["facet"], isName)
 	if form == "p":
-		_jsonString(claim["p"], lambda text: RE_ELEMENT_PATH.fullmatch(text) is not None)
+		jsonString(claim["p"], lambda text: RE_ELEMENT_PATH.fullmatch(text) is not None)
 		if "v" not in claim and not retract:
 			raise ValueError("An attribute claim requires v")
 	if "v" in claim:
 		if form != "p":
 			raise ValueError("Only attribute claims have v")
-		_jsonValue(claim["v"])
+		jsonValue(claim["v"])
 	if form == "rel":
-		_jsonString(claim["rel"], lambda text: re.fullmatch(rf"{PATH}\.[a-z][A-Za-z0-9_]*\.{PATH}", text) is not None)
+		jsonString(claim["rel"], lambda text: re.fullmatch(rf"{PATH}\.[a-z][A-Za-z0-9_]*\.{PATH}", text) is not None)
 		if "roles" not in claim or not isinstance(claim["roles"], dict):
 			raise ValueError("A binary claim requires roles")
 		for role, handle in claim["roles"].items():
-			_jsonString(role, isName)
-			_jsonString(handle, lambda text: text == "?" or isName(text))
+			jsonString(role, isName)
+			jsonString(handle, lambda text: text == "?" or isName(text))
 	elif "roles" in claim:
 		raise ValueError("Only binary claims have roles")
 	for key in META_KEYS:
@@ -555,41 +562,41 @@ def _jsonClaim(value: Any, retract: bool) -> Claim:
 			if type(claim[key]) not in (int, float) or not 0 <= claim[key] <= 1:
 				raise ValueError("conf must be a number within 0..1")
 		else:
-			_jsonString(claim[key])
+			jsonString(claim[key])
 	return {key: deepcopy(item) for key, item in claim.items() if key != "conflict"}
 
 
-def _readObservationsJson(ontology: Ontology, value: Any) -> Observations:
-	data = _jsonObject(value, ("format", "obs", "sources", "instances", "claims", "retractions"), ("gaps",))
+def readObservationsJson(ontology: Ontology, value: Any) -> Observations:
+	data = jsonObject(value, ("format", "obs", "sources", "instances", "claims", "retractions"), ("gaps",))
 	if data["format"] != OBSERVATIONS_FORMAT:
 		raise ValueError(f"format must be '{OBSERVATIONS_FORMAT}'")
-	obs = _jsonObject(data["obs"], ("ontology",), (*HEADER_KEYS, "scope"))
-	_jsonString(obs["ontology"], isPath)
+	obs = jsonObject(data["obs"], ("ontology",), (*HEADER_KEYS, "scope"))
+	jsonString(obs["ontology"], isPath)
 	for key in HEADER_KEYS:
 		if key in obs:
-			_jsonString(obs[key])
+			jsonString(obs[key])
 	if obs.get("scope") is not None:
-		_jsonString(obs["scope"])
+		jsonString(obs["scope"])
 	sources, instances = data["sources"], data["instances"]
 	if not isinstance(sources, dict) or not isinstance(instances, dict):
 		raise ValueError("sources and instances must be objects")
 	for alias, token in sources.items():
-		_jsonString(alias, isName)
-		_jsonString(token)
+		jsonString(alias, isName)
+		jsonString(token)
 	model = Model(ontology)
 	for handle, instance in instances.items():
-		_jsonString(handle, isName)
-		_jsonObject(instance, ("type",), ("implicit",))
+		jsonString(handle, isName)
+		jsonObject(instance, ("type",), ("implicit",))
 		if "implicit" in instance and instance["implicit"] is not True:
 			raise ValueError("implicit must be true when present")
-		path = _jsonString(instance["type"], lambda text: model.get(text) is not None)
+		path = jsonString(instance["type"], lambda text: model.get(text) is not None)
 		if model.get(path).kind not in ("entity", "relation"):
 			raise ValueError(f"'{path}' is not an instance type")
 	groups = []
 	for key in ("claims", "retractions"):
 		if not isinstance(data[key], list):
 			raise ValueError(f"{key} must be an array")
-		group = [_jsonClaim(claim, key == "retractions") for claim in data[key]]
+		group = [jsonClaim(claim, key == "retractions") for claim in data[key]]
 		for claim in group:
 			if "s" in claim and claim["s"] not in instances:
 				raise ValueError(f"Unregistered subject '{claim['s']}'")
@@ -605,19 +612,22 @@ def _readObservationsJson(ontology: Ontology, value: Any) -> Observations:
 	gaps = data.get("gaps", [])
 	if not isinstance(gaps, list):
 		raise ValueError("gaps must be an array")
-	return Observations(deepcopy(obs) | {"scope": obs.get("scope")}, dict(sources), registry, *groups,
-		gaps=[_jsonGap(gap) for gap in gaps])
+	gaps = [jsonGap(gap) for gap in gaps]
+	ordinals = {gap.n for gap in gaps}
+	if len(ordinals) != len(gaps) or any(claim["n"] in ordinals for group in groups for claim in group):
+		raise ValueError("Gap ordinals must be unique and cannot occur on claims or retractions")
+	return Observations(deepcopy(obs) | {"scope": obs.get("scope")}, dict(sources), registry, *groups, gaps=gaps)
 
 
-def _jsonGap(value: Any) -> Gap:
-	data = _jsonObject(value, ("n", "raw", "text", "loc", "meta", "diagnostics"), ("ctx",))
+def jsonGap(value: Any) -> Gap:
+	data = jsonObject(value, ("n", "raw", "text", "loc", "meta", "diagnostics"), ("ctx", "witnesses"))
 	if type(data["n"]) is not int or data["n"] < 1:
 		raise ValueError("A gap requires a positive statement ordinal")
 	for key in ("raw", "text"):
-		_jsonString(data[key], lambda text: bool(text.strip()) and "\n" not in text and "\r" not in text)
-	loc = _jsonObject(data["loc"], ("file", "line"))
+		jsonString(data[key], lambda text: bool(text.strip()) and "\n" not in text and "\r" not in text)
+	loc = jsonObject(data["loc"], ("file", "line"))
 	if loc["file"] is not None:
-		_jsonString(loc["file"], lambda text: bool(text))
+		jsonString(loc["file"], lambda text: bool(text))
 	if type(loc["line"]) is not int or loc["line"] < 1:
 		raise ValueError("A gap requires a positive source line")
 	location = Loc(loc["file"], loc["line"])
@@ -625,21 +635,32 @@ def _jsonGap(value: Any) -> Gap:
 	if not isinstance(meta, dict):
 		raise ValueError("Gap meta must be an object")
 	for key, item in meta.items():
-		_jsonString(key, isName)
-		_jsonString(item)
+		jsonString(key, isName)
+		jsonString(item)
 	diag = Diagnostics()
-	if _metadata(list(meta.items()), location, diag) != meta or diag.hasErrors():
+	if metadata(list(meta.items()), location, diag) != meta or diag.hasErrors():
 		raise ValueError("Invalid gap metadata")
 	if "ctx" in data:
-		_jsonString(data["ctx"], lambda text: isName(text) and text != "none")
+		jsonString(data["ctx"], lambda text: isName(text) and text != "none")
 	if not isinstance(data["diagnostics"], list) or not data["diagnostics"]:
 		raise ValueError("A gap requires diagnostics")
 	diagnostics = []
 	for item in data["diagnostics"]:
-		_jsonObject(item, ("code", "message"))
-		diagnostics.append(Diagnostic("warning", _jsonString(item["code"], isName),
-			_jsonString(item["message"], lambda text: bool(text)), location))
-	return Gap(data["n"], data["raw"], data["text"], location, dict(meta), data.get("ctx"), tuple(diagnostics))
+		jsonObject(item, ("code", "message"))
+		diagnostics.append(Diagnostic("warning", jsonString(item["code"], lambda text: all(isName(part) for part in text.split("."))),
+			jsonString(item["message"], lambda text: bool(text)), location))
+	witnesses = []
+	if "witnesses" in data:
+		if not isinstance(data["witnesses"], list) or not data["witnesses"]:
+			raise ValueError("Gap witnesses must be a nonempty array")
+		ordinals = {data["n"]}
+		for item in data["witnesses"]:
+			witness = jsonClaim(item, False)
+			if "p" not in witness or witness["n"] in ordinals:
+				raise ValueError("Gap witnesses must be attribute claims from distinct other statements")
+			ordinals.add(witness["n"])
+			witnesses.append(witness)
+	return Gap(data["n"], data["raw"], data["text"], location, dict(meta), data.get("ctx"), tuple(diagnostics), tuple(witnesses))
 
 
 # -----------------------------------------------------------------------------
@@ -686,7 +707,7 @@ def parseObservations(source: Source) -> ObservationsDocument:
 				for key, _ in header:
 					if key not in HEADER_KEYS:
 						diag.error("header", f"Unknown @obs key '{key}'", line.loc)
-				_metadata([(key, value) for key, value in header if key != "rev"], line.loc, diag)
+				metadata([(key, value) for key, value in header if key != "rev"], line.loc, diag)
 				doc.obs = {"ontology": namespace, **dict(header), "scope": None}
 				defaults = {key: value for key, value in header if key != "rev"}
 			elif directive == "@src" and "=" in args:
@@ -696,7 +717,7 @@ def parseObservations(source: Source) -> ObservationsDocument:
 					doc.sources[key] = value
 			elif directive in ("@src", "@at") and isToken(args):
 				key = directive[1:]
-				_metadata([(key, args)], line.loc, diag)
+				metadata([(key, args)], line.loc, diag)
 				defaults[key] = args
 			elif directive == "@ctx" and isName(args):
 				ctx = None if args == "none" else args
@@ -722,7 +743,7 @@ def parseObservations(source: Source) -> ObservationsDocument:
 			continue
 		retract = text.startswith("- ")
 		body, ann = splitAnnotations(text[2:] if retract else text)
-		meta = defaults | _metadata(parseAnnotations(ann, line.loc, diag), line.loc, diag)
+		meta = defaults | metadata(parseAnnotations(ann, line.loc, diag), line.loc, diag)
 		base = dict(n=len(doc.statements) + 1, loc=line.loc, meta=meta, retract=retract, ctx=ctx,
 			text=text, rawLine=rawLines[line.loc.line - 1])
 		if match := RE_IDENTITY.fullmatch(body):

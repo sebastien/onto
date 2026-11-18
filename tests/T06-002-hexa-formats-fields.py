@@ -11,10 +11,10 @@ pytest.importorskip("hexa.shapes")
 
 from hexa.runtime import run  # noqa: E402
 
-from onto import Source, inventoryFromDocuments, loadBinding, loadOntology, observationsToJson, parseFormats, parseInventory, printInventory  # noqa: E402
+from onto import Source, inventoryFromDocuments, loadBinding, loadOntology, observationsToJson, parseFormats, parseInventory, printFormats, printInventory  # noqa: E402
 from onto.integrations.hexa.operations import HexaBindingOperator, bindingFormatsUpdate, programEncoding  # noqa: E402
 from onto.integrations.hexa.stages import classify  # noqa: E402
-from tests._helpers import _specExample  # noqa: E402
+from tests.helpers import specExample  # noqa: E402
 
 # -----------------------------------------------------------------------------
 #
@@ -23,10 +23,10 @@ from tests._helpers import _specExample  # noqa: E402
 # -----------------------------------------------------------------------------
 
 
-EXCHANGE = loadOntology([Source("exchange.onto", _specExample("spec-04-mapping", 1))])
-FEED = json.loads(_specExample("spec-04-mapping", 0, "json"))
-FORMATS = parseFormats(Source("exchange.formats", _specExample("spec-04-mapping", 15)))
-TEXT = _specExample("spec-04-mapping", 2).replace('date(payableDate, "YYYYMMDD")', "date(payableDate, $format)")
+EXCHANGE = loadOntology([Source("exchange.onto", specExample("spec-04-mapping", 1))])
+FEED = json.loads(specExample("spec-04-mapping", 0, "json"))
+FORMATS = parseFormats(Source("exchange.formats", specExample("spec-04-mapping", 15)))
+TEXT = specExample("spec-04-mapping", 2).replace('date(payableDate, "YYYYMMDD")', "date(payableDate, $format)")
 BINDING = loadBinding(EXCHANGE, Source("exchange.bind", TEXT))
 FIELD = "instruments[*].dividends[*].payableDate"
 
@@ -70,6 +70,21 @@ def test_runs_tally_formats_and_update_the_formats_file():
 	assert updated.entries[FIELD].seen == {"YYYYMMDD": 413, "YYYY-MM-DD": 5}
 	assert changes == []
 	assert updated.entries["instruments[*].name"].format == "trim"
+
+
+def test_indexed_formats_survive_save_and_reload():
+	ontology = loadOntology([Source("rows.onto", "@ontology Rows\nRow\n  Day Date\n")])
+	binding = loadBinding(ontology, Source("rows.bind", "@binding Rows\n@at <- at\nRow <- rows[*][0] {id=id}\n  Day <- date(day, $format)\n"))
+	ops = HexaBindingOperator(ontology)
+	feed = {"rows": [[{"id": "one", "day": "13/02/2026"}]], "at": "2026-02-14"}
+	_, report = readRun(ops, ops.compile(binding), feed)
+	path = "rows[*][0].day"
+	assert report.formats[path] == {"DD/MM/YYYY": 1}
+	learned, _ = ops.formatsUpdate(None, report)
+	reloaded = parseFormats(Source("rows.formats", printFormats(learned)))
+	feed["rows"][0][0]["day"] = "01/02/2026"
+	log, _ = readRun(ops, ops.compile(binding, formats=reloaded), feed)
+	assert [claim["v"] for claim in log.claims if claim.get("p") == "Day"] == ["2026-02-01"]
 
 
 def test_a_switch_of_most_frequent_format_is_a_change():

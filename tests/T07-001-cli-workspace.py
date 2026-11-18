@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import json
 
-from tests._cli import onto
+from tests.cli import onto
 
 # -----------------------------------------------------------------------------
 #
@@ -56,6 +56,8 @@ def test_patterns_follow_gitignore():
 	assert matches("*.onto", "a/b/c.onto") and not matches("/*.onto", "a/c.onto") and matches("/*.onto", "c.onto")
 	assert matches("a/**/z.onto", "a/z.onto") and matches("a/**/z.onto", "a/b/c/z.onto") and matches("build/**", "build/x/y")
 	assert matches("x?.onto", "x1.onto") and not matches("x?.onto", "x/.onto") and matches("[ab].onto", "b.onto")
+	assert matches("a/x**z/*.onto", "a/xyz/file.onto") and not matches("a/x**z/*.onto", "a/x/y/z/file.onto")
+	assert parseRule("[z-a].onto") is None
 	assert parseRule("# comment") is None and parseRule("   ") is None and parseRule("!keep").negated and parseRule("dir/").directoryOnly
 
 
@@ -67,11 +69,13 @@ def test_files_sharing_a_mapping_header_form_one_mapping(workspace):
 	issuers = [block for block in scopes if block.lstrip().startswith("Issuer ->")]
 	assert issuers, "the spec mapping maps issuers"
 	(workspace / "finance/exchange-finance.map").write_text(header + "\n" + "\n\n".join(block for block in scopes if block not in issuers))
-	(workspace / "finance/exchange-issuers.map").write_text(header + "\n\n" + "\n\n".join(issuers) + "\n")
+	(workspace / "finance/exchange-issuers.map").write_text(header.split(" referential=")[0] + "\n\n" + "\n\n".join(issuers) + "\n")
 	_, out, _ = onto("ls", "mapping")
 	assert "finance/exchange-finance.map finance/exchange-issuers.map" in out
 	status, _, err = onto("check", "finance/exchange-finance.map")
 	assert status == 0 and "reference" not in err, err
+	status, _, err = onto("check", "finance/exchange-issuers.map")
+	assert status == 0, err
 
 
 def test_files_sharing_a_namespace_form_one_ontology(workspace):
@@ -87,6 +91,15 @@ def test_whole_workspace_checks_clean(workspace):
 	assert status == 0 and err == "no problems in 12 files\n"
 
 
+def test_whole_workspace_reports_unreadable_files_without_failing_named_commands(workspace):
+	(workspace / "unreadable.onto").write_bytes(b"\xff")
+	for argv in (("check",), ("fmt", "--check")):
+		status, _, err = onto(*argv)
+		assert status == 1 and "unreadable.onto: error cli.read:" in err
+	assert onto("check", "finance/finance.onto")[0] == 0
+	assert onto("fmt", "--check", "finance/finance.onto")[0] == 0
+
+
 # -----------------------------------------------------------------------------
 #
 # CONTEXT
@@ -98,6 +111,19 @@ def test_mapping_context_comes_from_the_workspace(workspace):
 	status, _, err = onto("check", "finance/exchange-finance.map")
 	# NOTE: Exchange, Finance, Markets and MarketIds; the referential's `from=Exchange` is shared.
 	assert status == 0 and err == "no problems in 1 file (5 read)\n"
+
+
+def test_mapping_index_recognizes_tab_separated_uses(workspace):
+	mapping = workspace / "finance/exchange-finance.map"
+	mapping.write_text(mapping.read_text().replace("@use ", "@use\t"))
+	status, _, err = onto("check", "finance/exchange-finance.map")
+	assert status == 0, err
+
+
+def test_malformed_header_does_not_abort_indexing(workspace):
+	(workspace / "broken.onto").write_text("@ontology=Demo\n")
+	status, _, err = onto("ls")
+	assert status == 1 and "broken.onto:1: error cli.kind:" in err
 
 
 def test_context_errors_are_reported_in_their_own_file(workspace):
@@ -135,6 +161,7 @@ def test_search_path_and_no_workspace(workspace, tmp_path, monkeypatch):
 	assert onto("--no-workspace", "-I", str(workspace), "check", binding)[0] == 0
 	monkeypatch.setenv("ONTO_PATH", str(workspace))
 	assert "Exchange->Finance" in onto("ls")[1]
+	assert "Exchange->Finance" not in onto("--no-workspace", "ls")[1]
 
 
 def test_standard_input_needs_a_kind(workspace, monkeypatch):

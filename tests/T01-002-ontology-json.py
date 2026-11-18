@@ -10,7 +10,7 @@ import pytest
 
 from onto.ontology import Ontology, formatOntology, loadOntology, normaliseOntology, ontologyFromJson, ontologyToJson, printOntology
 from onto.text import FormatError, Source
-from tests._helpers import _specExample
+from tests.helpers import specExample
 
 # -----------------------------------------------------------------------------
 #
@@ -18,8 +18,8 @@ from tests._helpers import _specExample
 #
 # -----------------------------------------------------------------------------
 
-EXAMPLE = _specExample("spec-01-ontology")
-EXCERPT = json.loads(_specExample("spec-01-ontology", kind="json"))
+EXAMPLE = specExample("spec-01-ontology")
+EXCERPT = json.loads(specExample("spec-01-ontology", kind="json"))
 
 
 def load(text: str) -> Ontology:
@@ -163,9 +163,12 @@ EMAIL = {"name": "Email", "card": "?", "type": {"builtin": "Text"}, "ann": {"key
 		{**JSON, "format": "other"},
 		{**JSON, "bogus": 1},
 		{**JSON, "header": None},
+		{**JSON, "header": 42},
+		{**JSON, "header": True},
 		{**JSON, "header": {"rev": 1}},
 		{**JSON, "decls": {}},
 		{**JSON, "decls": [{"kind": "widget", "path": "A"}]},
+		{**JSON, "decls": [{"kind": [], "path": "A"}]},
 		{**JSON, "ids": {"Finance/Person": 1}},
 		changed(JSON, PERSON, base=None, extra=1),
 		changed(JSON, PERSON, doc=None, base=None, attrs=[{**EMAIL, "card": None}]),
@@ -187,6 +190,14 @@ EMAIL = {"name": "Email", "card": "?", "type": {"builtin": "Text"}, "ann": {"key
 	],
 )
 def testMalformedJsonIsRejected(data):
+	assert errors(data) == ["json"]
+
+
+@pytest.mark.parametrize("count", [0, 1, 3])
+def testBinaryJsonRequiresExactlyTwoParticipants(count: int):
+	data = toJson("@ontology A\nP\nQ\nP -has-> Q\n")
+	relation = data["decls"][-1]
+	relation["participants"] = (relation["participants"] + [{"role": "Extra", "card": "1", "type": "A/P"}])[:count]
 	assert errors(data) == ["json"]
 
 

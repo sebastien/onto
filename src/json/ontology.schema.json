@@ -16,8 +16,6 @@
         "rev": { "$ref": "#/$defs/token" },
         "src": { "$ref": "#/$defs/token" },
         "card": { "$ref": "#/$defs/card" },
-        "default": { "$ref": "#/$defs/token" },
-        "layer": { "$ref": "#/$defs/name" },
         "cards": { "enum": ["stated", "inferred", "assumed"] },
         "rel": { "$ref": "#/$defs/counts" },
         "layering": { "enum": ["declared"] }
@@ -89,7 +87,12 @@
         {
           "description": "Range of an orderable type (`Range<T>`): a built-in or a declared type.",
           "type": "object", "required": ["range"], "additionalProperties": false,
-          "properties": { "range": { "$ref": "#/$defs/type" } }
+          "properties": {
+            "range": {
+              "$ref": "#/$defs/type",
+              "anyOf": [{ "required": ["builtin"] }, { "required": ["path"] }]
+            }
+          }
         }
       ]
     },
@@ -145,6 +148,8 @@
         },
         {
           "type": "object", "required": ["kind", "path", "participants"], "additionalProperties": false,
+          "if": { "required": ["arrow"] },
+          "then": { "properties": { "participants": { "maxItems": 2 } } },
           "properties": {
             "kind": { "const": "relation" }, "path": { "$ref": "#/$defs/relationPath" },
             "participants": {

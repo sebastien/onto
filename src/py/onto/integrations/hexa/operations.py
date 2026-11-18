@@ -87,7 +87,7 @@ class HexaBindingOperator:
 		# Fields whose writing formats a run learns: those body lines read, except `$format` dates (learned from their patterns).
 		program.writeFields = {printExpression({"path": path}, binding=True) for scope in binding.scopes for line in scope.lines if line.expr is not None
 			and not ("call" in line.expr and {"meta": "format"} in line.expr["args"])
-			for steps in documentPaths(line.expr) if (path := absolute(scope.path["path"], steps))}
+			for steps in documentPaths(line.expr) if (path := absolute(scope.path["path"], steps, binding.scopes))}
 		members = bindingStages(program)
 		header = binding.header
 		settings = RunSettings(self.ontology, bindingBy(binding), self.mode, str(header.get("complete", "document")),
@@ -160,13 +160,14 @@ class HexaMappingOperator:
 			template = item.template()
 			handleTemplate = item.handleTemplate()
 			scope = ScopeProgram(item.name, item.scope.target, "", item.shape(), template, source=item.scope.source)
-			paths = [steps for info in item.lines for steps in info.inputs] + ([item.scope.when["path"]] if item.scope.when else [])
-			scopePaths = item.paths(item.scope.ctx) + item.paths(item.scope.valid) + item.paths(item.scope.present) + item.paths(item.scope.into) + ([item.scope.when["path"]] if item.scope.when else [])
+			whenPaths = [item.when["path"]] if item.when else []
+			paths = [steps for info in item.lines for steps in info.inputs] + whenPaths
+			scopePaths = item.paths(item.scope.ctx) + item.paths(item.scope.valid) + item.paths(item.scope.present) + item.paths(item.scope.into) + whenPaths
 			contextualScope = any(segment.context for path in scopePaths for segment in item.segments(path))
 			if contextualScope:
 				for info in item.lines:
 					info.contextual = True
-			plans.append(MappingScopePlan(item.name, item.scope.source, item.scope.target, item.reach(), item.lines, item.scope.when, handleTemplate, scope,
+			plans.append(MappingScopePlan(item.name, item.scope.source, item.scope.target, item.reach(), item.lines, item.when, handleTemplate, scope,
 				{(info.section, info.record): info for info in item.lines}, {tuple(steps): [segment.key for segment in item.segments(steps)] for steps in paths},
 				item.scope.ctx is not None, contextualScope,
 				[[segment.key for segment in item.segments(path)] for path in item.paths(item.scope.ctx)], "$self" in item.roots,

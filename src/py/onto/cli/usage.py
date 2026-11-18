@@ -138,7 +138,7 @@ COMMANDS = (
 		"Compare combined ontology models, not source files",
 		"Compare two independent sets of ontology text files or JSON snapshots. Declaration placement, comments "
 		"and layout do not matter. Prints semantic changes, or structured changes with --json. "
-		"Exit 1 means changes or input errors; exit 2 means invalid usage.",
+		"Exit 1 means changes; exit 2 means input errors or invalid usage.",
 		(Argument("files", "*"),),
 		(
 			Option(("--before",), "Files making up the old model", "FILE", nargs="+"),
@@ -214,9 +214,11 @@ COMMANDS = (
 		"calls, as for 'fn test'.",
 		(Argument("file"), Argument("inputs", "+")),
 		(
-			Option(("--src",), "Source token of the documents (default: each document's path)", "TOKEN"),
+			Option(("--src",), "Source token of the documents; {path} and {stem} name each document (default: its path)", "TOKEN"),
 			Option(("--impl",), "Python module providing IMPLEMENTATIONS (repeatable)", "MODULE", repeat=True, default=[]),
 			Option(("--at",), "Run time recorded on the claims (default: now)", "TIME"),
+			Option(("--max-nodes",), "Largest input hexa accepts, in nodes (default: hexa's limit)", "N"),
+			Option(("--report",), "Write what the run could not produce to FILE, as JSON: {format, gaps: [{target, reason, src, location, handle}]}", "FILE"),
 			Option(("--strict",), "Report values that could not be produced as errors (exit 1)"),
 			LENIENT,
 		),
@@ -296,19 +298,20 @@ class Parser(argparse.ArgumentParser):
 		kwargs.setdefault("suggest_on_error", True)
 		super().__init__(*args, **kwargs)
 		self.command = command
+		self.flags: list[str] = []
 
 	def error(self, message: str) -> NoReturn:
 		"""Raise a `UsageError`, suggesting the closest option of an unrecognized one."""
 		if message.startswith("unrecognized arguments:"):
 			for token in message.split(":", 1)[1].split():
-				matches = get_close_matches(token.split("=", 1)[0], list(self._option_string_actions), n=1)
+				matches = get_close_matches(token.split("=", 1)[0], self.flags, n=1)
 				if matches:
 					message += f". Did you mean {matches[0]}?"
 					break
 		raise UsageError(message, self.command)
 
 
-def addOption(parser: argparse.ArgumentParser, option: Option, suppress: bool = False) -> None:
+def addOption(parser: Parser, option: Option, suppress: bool = False) -> None:
 	"""Declare `option`; `suppress` leaves it unset when absent, so it does not override earlier values."""
 	kwargs: dict[str, Any] = {"dest": option.dest}
 	if suppress:
@@ -325,6 +328,7 @@ def addOption(parser: argparse.ArgumentParser, option: Option, suppress: bool = 
 	else:
 		kwargs["action"] = "store_true"
 	parser.add_argument(*option.flags, **kwargs)
+	parser.flags.extend(option.flags)
 
 
 # -----------------------------------------------------------------------------
@@ -368,7 +372,9 @@ class Arguments:
 			local.add_argument(argument.name, **kwargs)
 		rest = parsed.rest
 		# NOTE: Help and version need no command arguments.
-		if parsed.help or parsed.version or "-h" in rest or "--help" in rest:
+		flags = rest[:rest.index("--")] if "--" in rest else rest
+		parsed.version = parsed.version or "--version" in flags
+		if parsed.help or parsed.version or "-h" in flags or "--help" in flags:
 			parsed.help = parsed.help or not parsed.version
 			return parsed
 		values = local.parse_args(rest)

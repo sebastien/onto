@@ -7,7 +7,7 @@ from typing import Any
 
 from ..binding.parser import qualifyPath, readDoc
 from ..observations.model import RE_DURATION
-from ..observations.parser import _jsonObject, _jsonString
+from ..observations.parser import jsonObject, jsonString
 from ..text import Diagnostics, Loc, Source, isName, isPath, parseArguments, sourceLines, splitDoc
 from .model import REFERENTIAL_FORMAT, Policy, Referential
 
@@ -34,36 +34,36 @@ def checkPolicyShape(policy: Policy) -> None:
 
 
 def readReferentialJson(data: Any) -> Referential:
-	value = _jsonObject(data, ("format", "namespace", "policies"), ("header", "uses"))
+	value = jsonObject(data, ("format", "namespace", "policies"), ("header", "uses"))
 	if value["format"] != REFERENTIAL_FORMAT:
 		raise ValueError("Unknown referential JSON format")
-	namespace = _jsonString(value["namespace"], isPath)
-	header = _jsonObject(value.get("header", {}), (), ("rev",))
+	namespace = jsonString(value["namespace"], isPath)
+	header = jsonObject(value.get("header", {}), (), ("rev",))
 	for token in header.values():
-		_jsonString(token)
+		jsonString(token)
 	uses = value.get("uses", {})
 	if not isinstance(uses, dict) or any(not isinstance(alias, str) or not isName(alias) for alias in uses):
 		raise ValueError("Invalid referential aliases")
 	for path in uses.values():
-		_jsonString(path, isPath)
+		jsonString(path, isPath)
 	if not isinstance(value["policies"], list):
 		raise ValueError("policies must be an array")
 	ref = Referential(namespace, dict(header), dict(uses))
 	for item in value["policies"]:
-		item = _jsonObject(item, ("type",), ("keys", "minted", "from", "implicit", "doc"))
-		policy = Policy(_jsonString(item["type"], isPath), doc=readDoc(item))
+		item = jsonObject(item, ("type",), ("keys", "minted", "from", "implicit", "doc"))
+		policy = Policy(jsonString(item["type"], isPath), doc=readDoc(item))
 		if "keys" in item:
 			if not isinstance(item["keys"], list) or not item["keys"]:
 				raise ValueError("keys must be a nonempty array")
-			policy.keys = [_jsonString(key, isName) for key in item["keys"]]
+			policy.keys = [jsonString(key, isName) for key in item["keys"]]
 		if "minted" in item:
 			if item["minted"] is not True:
 				raise ValueError("minted must be true when present")
 			policy.minted = True
 		if "from" in item:
-			policy.fromNamespace = _jsonString(item["from"], isPath)
+			policy.fromNamespace = jsonString(item["from"], isPath)
 		if "implicit" in item:
-			policy.implicit = _jsonString(item["implicit"])
+			policy.implicit = jsonString(item["implicit"])
 		checkPolicyShape(policy)
 		ref.policies.append(policy)
 	return ref

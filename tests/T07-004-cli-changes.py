@@ -9,7 +9,7 @@ import sys
 import pytest
 
 from onto import Source, loadOntology, ontologyDiff, ontologyFromJson, ontologyToJson
-from tests._cli import onto
+from tests.cli import onto
 
 
 @pytest.fixture
@@ -214,6 +214,28 @@ def test_api_all_properties_and_member_kinds():
 	} <= properties
 	# NOTE: JSON and text models use the same comparison API.
 	assert ontologyDiff(after, ontologyFromJson(ontologyToJson(after))) == []
+
+
+def test_diff_ignores_view_selection_order_even_with_a_shared_path(files):
+	concepts = "Person\nBuyer of Person\nSeller of Person\n@view People\n"
+	a = files("old.onto", concepts + "  Person[Seller]\n  Person[*]\n  Person[Seller, Buyer]\n  Person[Buyer]\n")
+	b = files("new.onto", concepts + "  Person[Buyer]\n  Person[Buyer, Seller]\n  Person[Seller]\n  Person[*]\n")
+	assert onto("diff", a, b) == (0, "", "")
+	assert onto("snap", a, "--format", "onto")[1] == onto("snap", b, "--format", "onto")[1]
+
+
+def test_diff_identifies_declared_domain_order(tmp_path):
+	before, after = "@domain First\n@domain Second\n", "@domain Second\n@domain First\n"
+	assert ontologyDiff(model(before), model(after)) == []
+
+	def layered(domains):
+		return loadOntology([Source("model.onto", "@ontology Model layering=declared\n" + domains)])
+
+	assert ontologyDiff(layered(before), layered(after)) == [{
+		"op": "change", "path": "@ontology", "field": "domainOrder",
+		"before": ["Model/First", "Model/Second"], "after": ["Model/Second", "Model/First"],
+	}]
+	assert ontologyDiff(layered("@domain Meta\n" + before), layered(before + "@domain Meta\n")) == []
 
 
 def test_api_ids_match_attributes_roles_and_values_without_heuristics():

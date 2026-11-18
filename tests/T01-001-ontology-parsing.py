@@ -8,7 +8,7 @@ import pytest
 
 from onto.ontology import Decl, Model, Ontology, TypeExpr, formatOntology, loadOntology
 from onto.text import FormatError, Source
-from tests._helpers import _specExample
+from tests.helpers import specExample
 
 # -----------------------------------------------------------------------------
 #
@@ -17,7 +17,7 @@ from tests._helpers import _specExample
 # -----------------------------------------------------------------------------
 
 # NOTE: The first `text` block of spec-01 is the complete example; later blocks are snippets.
-EXAMPLE = _specExample("spec-01-ontology")
+EXAMPLE = specExample("spec-01-ontology")
 HEAD = "@ontology A\n@use Dimensions as D\n"
 
 
@@ -250,6 +250,7 @@ def testAssociationsHaveFacetsAndRolesActAsAttributes():
 		("@ontology A\nPerson\n   Name Text\n", "indent"),
 		("@ontology A\nPerson\n Name Text\n", "indent"),
 		("@ontology A\nPerson\n\tName Text\n", "indent"),
+		("@ontology A\nPerson\n\u00a0\u00a0Name Text\n", "indent"),
 		("@ontology A\n  Name Text\n", "indent"),
 		("@ontology A\r\nPerson\r\n", "syntax"),
 		("@ontology A\nPerson\n  Name Text {a=b c}\n", "annotation"),

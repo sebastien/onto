@@ -7,7 +7,7 @@ import pytest
 from onto import FormatError, Source, loadOntology, ontologyFromJson, ontologyToJson
 from onto.meta import metaDeclarations
 from onto.ontology import Operator
-from tests._helpers import _schemaValidator
+from tests.helpers import schemaValidator
 
 # -----------------------------------------------------------------------------
 #
@@ -106,7 +106,7 @@ def testNormalFormAndJsonKeepTheDeclaredOrder():
 	data = ontologyToJson(ontology)
 	assert data["header"]["layering"] == "declared"
 	assert [decl["path"] for decl in data["decls"][:2]] == ["A/Zeta", "A/Alpha"]
-	_schemaValidator("ontology").validate(data)
+	schemaValidator("ontology").validate(data)
 	assert ontologyToJson(ontologyFromJson(data)) == data
 	unlayered = loadOntology([Source("main.onto", "@ontology A\n@domain Zeta\n@domain Alpha\n")])
 	assert Operator(unlayered).print().startswith("@ontology A\n\n@domain Alpha\n@domain Zeta\n")

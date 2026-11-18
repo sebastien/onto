@@ -1051,10 +1051,18 @@ Found mapping the AdviceLink CRM to AdviceOS (adviceos-data `TODO_ONTO.md`):
   target of type `T` (`chosenTarget`, `Onto.CorrespondEmitted`): a target the
   scope's `when` skips is a gap (`HandlesResolve` records `skipped`), an
   instance known only by reference takes `T`. Tests: `T06-014`.
+- **`{check=unkeyed}`** silences the unkeyed multi-valued structure warning for a
+  deliberate exception (spec-01 keyed structures). Tests: `T02-009`.
+- **Key-less records keep source-qualified handles** (spec-05 "Producing
+  handles" step 4): `Onto.KeyedHandle` replaces `Onto.Handle` in mapping handle
+  templates; spec-06 aligned (it described a gap). Tests: `T06-004`.
 - **Mappings over several files** (spec-04, spec-07): files with one `@mapping
   From -> To` header are one mapping (`parseMappings`, then one `resolveMapping`;
   `loadMapping` takes a source or a list). The CLI groups them like ontologies.
   Tests: `T04-004`, `T07-001`.
+- **`onto run` options for tools:** `--src` placeholders `{path}`/`{stem}`,
+  `--max-nodes` (hexa input limit), `--report FILE` (gaps as JSON; `--json` stays
+  the observations). Tests: `T07-002`.
 - **`onto run`** (spec-07): one-shot binding and mapping runs through the hexa
   integration (`Commands.cmdRun`, `mergedLogs`); gaps are `run.gap` warnings,
   errors with `--strict`. `bin/onto` adds a sibling `../hexa/src/py` to the path.

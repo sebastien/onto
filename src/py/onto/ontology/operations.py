@@ -18,7 +18,7 @@ from ..text import (
 	lastSegment,
 )
 from .formatter import (
-	_toJson,
+	encodeOntology,
 	normaliseOntology,
 	printOntology,
 )
@@ -40,13 +40,13 @@ from .model import (
 	STATUSES,
 	TypeExpr,
 	ViewLine,
-	_typeKey,
+	typeKey,
 	isAssociation,
 	isSymmetric,
 	vocabularyValues,
 )
 from .parser import (
-	_fromJson,
+	decodeOntology,
 	parseOntology,
 )
 
@@ -57,7 +57,7 @@ from .parser import (
 # -----------------------------------------------------------------------------
 
 
-def _checkAnnotations(model: Model, ann: Annotations, places: set[str], loc: Loc | None, diag: Diagnostics) -> None:
+def checkAnnotations(model: Model, ann: Annotations, places: set[str], loc: Loc | None, diag: Diagnostics) -> None:
 	for key, value in ann:
 		allowed = ANNOTATION_PLACES.get(key, set())
 		if key not in ANNOTATION_PLACES:
@@ -105,7 +105,7 @@ def _checkAnnotations(model: Model, ann: Annotations, places: set[str], loc: Loc
 				diag.error("reference", f"ctx must name an entity or an n-ary relation: '{value}'", loc)
 
 
-def _checkFacetCondition(model: Model, decl: Decl, condition: object, diag: Diagnostics) -> None:
+def checkFacetCondition(model: Model, decl: Decl, condition: object, diag: Diagnostics) -> None:
 	"""`{when=Attr:Value}`: a single-valued, non-derived scalar attribute of the subject, and a value of its type."""
 	attrPath, colon, value = condition.partition(":") if isinstance(condition, str) else ("", "", "")
 	attr = model.lookup(decl.subject, attrPath) if colon and attrPath and value else None
@@ -121,7 +121,7 @@ def _checkFacetCondition(model: Model, decl: Decl, condition: object, diag: Diag
 		diag.error("annotation", f"when value '{value}' is not a boolean", decl.loc)
 
 
-def _checkKeyedStructures(model: Model, diag: Diagnostics) -> None:
+def checkKeyedStructures(model: Model, diag: Diagnostics) -> None:
 	"""A structure keys its elements by at most one required, observed vocabulary field marked `{key}`; a multi-valued
 	structure attribute without one cannot tell its elements apart (a warning)."""
 	for decl in model.ontology.decls:
@@ -134,15 +134,16 @@ def _checkKeyedStructures(model: Model, diag: Diagnostics) -> None:
 				if resolved.kind != "vocab" or field.derived or (field.card or model.defaultCard) != "1":
 					diag.error("key", f"Key field '{decl.path}.{field.name}' must be a required, observed vocabulary (its values are the element keys)", field.loc or decl.loc)
 		for attr in decl.attrs if decl.kind in ("entity", "facet", "relation") else decl.fields or [] if decl.kind == "type" else []:
-			if (attr.card or model.defaultCard) in MULTI and model.structOf(attr.type) and model.elementKey(attr) is None:
+			# `{check=unkeyed}` records a deliberate exception (a source's shape kept as it is)
+			if (attr.card or model.defaultCard) in MULTI and model.structOf(attr.type) and model.elementKey(attr) is None and annotation(attr.ann, "check") != "unkeyed":
 				diag.warn("key", f"'{decl.path}.{attr.name}' holds several structures without a key field: its elements cannot be told apart", attr.loc or decl.loc)
 
 
-def _typeCycle(model: Model, type: TypeExpr | None) -> bool:
+def typeCycle(model: Model, type: TypeExpr | None) -> bool:
 	"""True when following aliases and attribute reuse from `type` comes back to a visited type."""
 	seen: set[str] = set()
 	while type and type.path:
-		key = _typeKey(type)
+		key = typeKey(type)
 		if key in seen:
 			return True
 		seen.add(key)
@@ -155,7 +156,7 @@ def _typeCycle(model: Model, type: TypeExpr | None) -> bool:
 	return False
 
 
-def _checkType(model: Model, type: TypeExpr | None, ann: Annotations, loc: Loc | None, what: str, diag: Diagnostics) -> None:
+def checkType(model: Model, type: TypeExpr | None, ann: Annotations, loc: Loc | None, what: str, diag: Diagnostics) -> None:
 	if type and type.values is not None:
 		valid = isPath if annotation(ann, "hierarchical") is True else isName
 		if not type.values or not all(valid(value) for value in type.values):
@@ -165,7 +166,7 @@ def _checkType(model: Model, type: TypeExpr | None, ann: Annotations, loc: Loc |
 	for conflict in model.resolveType(type, ann).conflicts:
 		diag.error("qualifier", f"{what}: {conflict}", loc)
 	if type and type.range:
-		_checkType(model, type.range, [], loc, what, diag)
+		checkType(model, type.range, [], loc, what, diag)
 		element = model.resolveType(type, ann).element
 		orderable = element and (element.builtin in ORDERABLE or element.kind == "vocab" and element.ordered and not element.hierarchical)
 		if element and element.kind != "unspecified" and not orderable:
@@ -173,8 +174,8 @@ def _checkType(model: Model, type: TypeExpr | None, ann: Annotations, loc: Loc |
 		return
 	if not type or type.builtin or type.values is not None or type.unknown:
 		return
-	if _typeCycle(model, type):
-		diag.error("cycle", f"{what}: type alias or attribute reuse cycle through '{_typeKey(type)}'", loc)
+	if typeCycle(model, type):
+		diag.error("cycle", f"{what}: type alias or attribute reuse cycle through '{typeKey(type)}'", loc)
 		return
 	decl = model.get(type.path)
 	if not decl:
@@ -187,7 +188,7 @@ def _checkType(model: Model, type: TypeExpr | None, ann: Annotations, loc: Loc |
 		diag.error("reference", f"{what}: '{type.path}' is a {kind}, not a type, entity or association", loc)
 
 
-def _checkDefault(model: Model, attr: Attr, what: str, diag: Diagnostics) -> None:
+def checkDefault(model: Model, attr: Attr, what: str, diag: Diagnostics) -> None:
 	"""A default on a closed vocabulary must be one of its values; other types are not checked."""
 	default = next((value for key, value in attr.ann if key == "default"), None)
 	if not isinstance(default, str):
@@ -200,15 +201,15 @@ def _checkDefault(model: Model, attr: Attr, what: str, diag: Diagnostics) -> Non
 		diag.error("annotation", f"{what}: default '{default}' is not a value of its vocabulary", attr.loc)
 
 
-def _checkAttrs(model: Model, owner: Decl, attrs: list[Attr], localNames: Callable[[], set[str]], diag: Diagnostics) -> None:
+def checkAttrs(model: Model, owner: Decl, attrs: list[Attr], localNames: Callable[[], set[str]], diag: Diagnostics) -> None:
 	names: set[str] = set()
 	for attr in attrs:
 		if attr.name in names:
 			diag.error("duplicate", f"Duplicate attribute '{owner.path}.{attr.name}'", attr.loc)
 		names.add(attr.name)
-		_checkType(model, attr.type, attr.ann, attr.loc, f"{owner.path}.{attr.name}", diag)
-		_checkAnnotations(model, attr.ann, placesOf(attr), attr.loc, diag)
-		_checkDefault(model, attr, f"{owner.path}.{attr.name}", diag)
+		checkType(model, attr.type, attr.ann, attr.loc, f"{owner.path}.{attr.name}", diag)
+		checkAnnotations(model, attr.ann, placesOf(attr), attr.loc, diag)
+		checkDefault(model, attr, f"{owner.path}.{attr.name}", diag)
 		for dep in attr.deps or []:
 			if dep.local and dep.local not in localNames():
 				diag.error("reference", f"Unknown dependency '{dep.local}' of '{owner.path}.{attr.name}'", attr.loc)
@@ -228,7 +229,7 @@ def _checkAttrs(model: Model, owner: Decl, attrs: list[Attr], localNames: Callab
 				diag.error("one", f"{where}: '{attr.name}' is required or derived and cannot be exclusive", attr.loc)
 
 
-def _validateMap(model: Model, decl: Decl, diag: Diagnostics, targetModel: Model | None = None) -> None:
+def validateMap(model: Model, decl: Decl, diag: Diagnostics, targetModel: Model | None = None) -> None:
 	def vocabulary(path: str, using: Model) -> set[str] | None:
 		target = using.get(path)
 		resolved = using.resolveType(TypeExpr(path=path)) if target and target.kind == "type" else None
@@ -250,7 +251,7 @@ def _validateMap(model: Model, decl: Decl, diag: Diagnostics, targetModel: Model
 		pairs.add(pair)
 
 
-def _validateExtensions(model: Model, diag: Diagnostics) -> None:
+def validateExtensions(model: Model, diag: Diagnostics) -> None:
 	"""An `{extends=T}` vocabulary adds values to open vocabulary `T`; each value it lists must be new (spec-01 "Extensions")."""
 	for decl in model.ontology.decls:
 		target = annotation(decl.ann, "extends")
@@ -283,7 +284,7 @@ def _validateExtensions(model: Model, diag: Diagnostics) -> None:
 			seen.update(values)
 
 
-def _validateViewLine(model: Model, line: ViewLine, diag: Diagnostics) -> None:
+def validateViewLine(model: Model, line: ViewLine, diag: Diagnostics) -> None:
 	relations = viewRelations(model, line)
 	if relations is not None:
 		if not relations or line.facets is not None:
@@ -312,7 +313,7 @@ def _validateViewLine(model: Model, line: ViewLine, diag: Diagnostics) -> None:
 		diag.error("reference", f"View cannot select {decl.kind} '{line.path}'", line.loc)
 
 
-def _validateRelation(model: Model, decl: Decl, diag: Diagnostics) -> None:
+def validateRelation(model: Model, decl: Decl, diag: Diagnostics) -> None:
 	if len(decl.participants) < 2:
 		diag.error("relation", f"Relation '{decl.path}' needs at least two participants", decl.loc)
 	roles: set[str] = set()
@@ -340,10 +341,10 @@ def _validateRelation(model: Model, decl: Decl, diag: Diagnostics) -> None:
 		shared = contextRoles.get(subjectRole)
 		if not shared or shared.card not in MULTI:
 			diag.error("reference", "A role selected for both subject and object must be multi-valued", decl.loc)
-	_checkAttrs(model, decl, decl.attrs, lambda: roles | {attr.name for attr in decl.attrs}, diag)
+	checkAttrs(model, decl, decl.attrs, lambda: roles | {attr.name for attr in decl.attrs}, diag)
 
 
-def _checkViewCycles(model: Model, diag: Diagnostics) -> None:
+def checkViewCycles(model: Model, diag: Diagnostics) -> None:
 	# NOTE: A view including itself, directly or through other views, selects nothing definite: an error.
 	def includes(view: Decl) -> list[str]:
 		return [line.path for line in view.viewLines if (target := model.get(line.path)) and target.kind == "view"]
@@ -360,45 +361,45 @@ def _checkViewCycles(model: Model, diag: Diagnostics) -> None:
 				pending += includes(model.index[path])
 
 
-def _typeRefs(type: TypeExpr | None) -> list[str]:
+def typeRefs(type: TypeExpr | None) -> list[str]:
 	"""Declaration paths a type expression refers to: a named type, the owner of a reused attribute, or a range's element."""
 	if type and type.range:
-		return _typeRefs(type.range)
+		return typeRefs(type.range)
 	return [type.path] if type and type.path else []
 
 
-def _annRefs(ann: Annotations) -> list[str]:
+def annRefs(ann: Annotations) -> list[str]:
 	"""Declaration paths annotations refer to: path keys and the vocabularies of `?:V` qualifiers."""
 	refs = [value for key, value in ann if key in PATH_KEYS and isinstance(value, str)]
 	return refs + [value[2:] for key, value in ann if key in QUALIFIERS and isinstance(value, str) and value.startswith("?:")]
 
 
-def _attrRefs(attrs: list[Attr] | None) -> list[tuple[str, Loc | None]]:
+def attrRefs(attrs: list[Attr] | None) -> list[tuple[str, Loc | None]]:
 	"""Declaration paths attributes refer to, through their types, derived inputs and annotations."""
 	refs: list[tuple[str, Loc | None]] = []
 	for attr in attrs or []:
-		refs += [(path, attr.loc) for path in _typeRefs(attr.type) + _annRefs(attr.ann)]
+		refs += [(path, attr.loc) for path in typeRefs(attr.type) + annRefs(attr.ann)]
 		refs += [(dep.path, attr.loc) for dep in attr.deps or [] if dep.path]
 	return refs
 
 
-def _declRefs(decl: Decl) -> list[tuple[str, Loc | None]]:
+def declRefs(decl: Decl) -> list[tuple[str, Loc | None]]:
 	"""Declaration paths `decl` refers to. Vocabulary values, map line values and docs are not references."""
 	refs: list[tuple[str, Loc | None]] = []
 	if decl.kind == "type":
-		refs += [(path, decl.loc) for path in _typeRefs(decl.definition)]
-		refs += _attrRefs(decl.fields)
+		refs += [(path, decl.loc) for path in typeRefs(decl.definition)]
+		refs += attrRefs(decl.fields)
 	elif decl.kind == "map":
 		refs += [(path, decl.loc) for path in (decl.mapFrom, decl.mapTo) if path]
 	else:
 		refs += [(path, decl.loc) for path in (decl.base, decl.subject) if path]
 		refs += [(participant.type, decl.loc) for participant in decl.participants]
-		refs += _attrRefs(decl.attrs)
-	refs += [(path, decl.loc) for path in _annRefs(decl.ann)]
+		refs += attrRefs(decl.attrs)
+	refs += [(path, decl.loc) for path in annRefs(decl.ann)]
 	return refs
 
 
-def _checkLayering(model: Model, diag: Diagnostics) -> None:
+def checkLayering(model: Model, diag: Diagnostics) -> None:
 	"""Under `layering=declared`, an element refers only to its own domain and the domains declared before it."""
 	ontology = model.ontology
 	layering = dict(ontology.header).get("layering")
@@ -438,7 +439,7 @@ def _checkLayering(model: Model, diag: Diagnostics) -> None:
 		own = later(*ends) if decl.kind == "relation" and decl.arrow else domainOf(decl.path)
 		if not own:
 			continue
-		for path, loc in _declRefs(decl):
+		for path, loc in declRefs(decl):
 			target = domainOf(path)
 			if target and rank[target] > rank[own]:
 				diag.error(
@@ -448,15 +449,15 @@ def _checkLayering(model: Model, diag: Diagnostics) -> None:
 				)
 
 
-def _validate(model: Model, diag: Diagnostics) -> None:
+def checkOntology(model: Model, diag: Diagnostics) -> None:
 	ontology = model.ontology
 	for decl in ontology.decls:
-		_checkAnnotations(model, decl.ann, placesOf(decl), decl.loc, diag)
+		checkAnnotations(model, decl.ann, placesOf(decl), decl.loc, diag)
 		if decl.kind == "type":
-			_checkType(model, decl.definition, decl.ann, decl.loc, decl.path, diag)
+			checkType(model, decl.definition, decl.ann, decl.loc, decl.path, diag)
 			if decl.fields is not None:
 				fieldNames = {item.name for item in decl.fields}
-				_checkAttrs(model, decl, decl.fields, lambda names=fieldNames: names, diag)
+				checkAttrs(model, decl, decl.fields, lambda names=fieldNames: names, diag)
 		elif decl.kind == "entity":
 			if decl.base:
 				base = model.get(decl.base)
@@ -469,7 +470,7 @@ def _validate(model: Model, diag: Diagnostics) -> None:
 					for attr in decl.attrs:
 						if attr.name in inherited:
 							diag.error("duplicate", f"'{decl.path}.{attr.name}' redeclares an inherited attribute", attr.loc)
-			_checkAttrs(model, decl, decl.attrs, lambda path=decl.path: set(model.entityAttrs(path)), diag)
+			checkAttrs(model, decl, decl.attrs, lambda path=decl.path: set(model.entityAttrs(path)), diag)
 			# NOTE: Facets of a base apply here too, so their names must not equal this entity's attributes.
 			for attr in decl.attrs:
 				facet = model.facets(decl.path).get(attr.name)
@@ -481,7 +482,7 @@ def _validate(model: Model, diag: Diagnostics) -> None:
 				diag.error("reference", f"Facet subject is not an entity or association: '{decl.subject}'", decl.loc)
 				continue
 			if (condition := annotation(decl.ann, "when")) is not None:
-				_checkFacetCondition(model, decl, condition, diag)
+				checkFacetCondition(model, decl, condition, diag)
 			name = lastSegment(decl.path)
 			if name in model.ownNames(decl.subject):
 				diag.error("collision", f"Facet '{name}' collides with an attribute or role of '{decl.subject}'", decl.loc)
@@ -493,21 +494,21 @@ def _validate(model: Model, diag: Diagnostics) -> None:
 			]
 			if clash:
 				diag.error("collision", f"Facet name '{name}' is used twice on '{decl.subject}'", decl.loc)
-			_checkAttrs(
+			checkAttrs(
 				model, decl, decl.attrs,
 				lambda facet=decl: {attr.name for attr in facet.attrs} | model.ownNames(facet.subject), diag,
 			)
 		elif decl.kind == "relation":
-			_validateRelation(model, decl, diag)
+			validateRelation(model, decl, diag)
 		elif decl.kind == "view":
 			for line in decl.viewLines:
-				_validateViewLine(model, line, diag)
+				validateViewLine(model, line, diag)
 		elif decl.kind == "map":
-			_validateMap(model, decl, diag)
-	_validateExtensions(model, diag)
-	_checkKeyedStructures(model, diag)
-	_checkViewCycles(model, diag)
-	_checkLayering(model, diag)
+			validateMap(model, decl, diag)
+	validateExtensions(model, diag)
+	checkKeyedStructures(model, diag)
+	checkViewCycles(model, diag)
+	checkLayering(model, diag)
 	# NOTE: A verb read from an entity must identify one relation for any compatible object type.
 	uses: list[tuple[str, str, str, Decl]] = []
 	for decl in ontology.decls:
@@ -595,43 +596,54 @@ def placesOf(item: Decl | Attr) -> set[str]:
 	return places
 
 
-def _expandHistory(ontology: Ontology, diag: Diagnostics) -> None:
+def expandHistory(ontology: Ontology, diag: Diagnostics) -> None:
 	"""Add the change concept and relation of each `{history}` attribute to `ontology` (spec-01 "History")."""
 	ontology.decls = [decl for decl in ontology.decls if not decl.generated]
-	declared = {decl.path for decl in ontology.decls}
+	occupied = {decl.path for decl in ontology.decls}
 	defaultCard = dict(ontology.header).get("card", "?")
 	generated: list[Decl] = []
 	for owner in ontology.decls:
-		if owner.kind not in ("entity", "facet", "relation") or (owner.kind == "relation" and owner.arrow):
-			continue
-		for attr in owner.attrs:
+		for attr in (owner.fields or []) if owner.kind == "type" else owner.attrs:
 			if annotation(attr.ann, "history") is not True:
 				continue
+			where = f"{owner.path}.{attr.name}"
+			if owner.kind not in ("entity", "facet") and not isAssociation(owner):
+				diag.error("history", f"'{where}' cannot keep a history: its owner must be an entity, facet or association", attr.loc)
+				continue
 			if attr.derived or (attr.card or defaultCard) in MULTI:
-				diag.error("history", f"'{owner.path}.{attr.name}' cannot keep a history: it is derived or multi-valued", attr.loc)
+				diag.error("history", f"'{where}' cannot keep a history: it is derived or multi-valued", attr.loc)
+				continue
+			if attr.name in ("OccurredDate", "Reason"):
+				diag.error("collision", f"'{where}' collides with a generated history attribute of the same name", attr.loc)
 				continue
 			path = f"{owner.path}/{attr.name}Change"
-			if path in declared:
-				diag.error("collision", f"'{path}' is generated by '{owner.path}.{attr.name} {{history}}' and cannot be declared", attr.loc)
-				continue
 			# NOTE: Relations do not start from facets: a facet's history hangs off its subject.
 			subject = owner.subject if owner.kind == "facet" and owner.subject else owner.path
+			relation = arrowPath(subject, "hasChange", path)
+			if clash := next((name for name in (path, relation) if name in occupied), None):
+				diag.error("collision", f"'{clash}' generated by '{where} {{history}}' collides with an existing name", attr.loc)
+				continue
+			occupied.update((path, relation))
 			layer = annotation(owner.ann, "layer")
 			if layer is None and owner.kind == "facet":
 				layer = next((annotation(item.ann, "layer") for item in ontology.decls if item.path == owner.subject), None)
 			name = lastSegment(owner.path)
+			valueAnn = [(key, value) for key, value in attr.ann if key in QUALIFIERS or key in ("ordered", "hierarchical")]
 			generated.append(Decl(
 				kind="entity", path=path, ann=[("layer", layer)] if isinstance(layer, str) else [],
 				doc=f"{name} reaching a value of {attr.name}", loc=attr.loc, generated=True,
 				attrs=[
-					Attr(name=attr.name, card="1", type=attr.type, loc=attr.loc),
+					Attr(name=attr.name, card="1", type=attr.type, ann=valueAnn, loc=attr.loc),
 					Attr(name="OccurredDate", card="?", type=TypeExpr(builtin="Date"), doc="When the value was reached", loc=attr.loc),
 					Attr(name="Reason", card="?", type=TypeExpr(builtin="Text"), doc="Why, as stated", loc=attr.loc),
 				],
 			))
+			subjectRole, objectRole = lastSegment(subject), lastSegment(path)
+			if subjectRole == objectRole:
+				subjectRole, objectRole = "Subject", "Object"
 			generated.append(Decl(
-				kind="relation", path=arrowPath(subject, "hasChange", path), loc=attr.loc, generated=True,
-				participants=[Participant(lastSegment(subject), None, subject), Participant(lastSegment(path), None, path)],
+				kind="relation", path=relation, loc=attr.loc, generated=True,
+				participants=[Participant(subjectRole, None, subject), Participant(objectRole, None, path)],
 				arrow=Arrow("hasChange", "isChangeOf", "1:*"), doc=f"Values {name}.{attr.name} reached, with when and why",
 			))
 	ontology.decls += generated
@@ -640,9 +652,9 @@ def _expandHistory(ontology: Ontology, diag: Diagnostics) -> None:
 def validateOntology(ontology: Ontology) -> Ontology:
 	"""Validate references and structure of `ontology`, updating diagnostics or raising `FormatError`."""
 	diag = Diagnostics(list(ontology.diagnostics))
-	_expandHistory(ontology, diag)
-	_validate(Model(ontology), diag)
-	ontology.diagnostics = diag.check()
+	expandHistory(ontology, diag)
+	checkOntology(Model(ontology), diag)
+	ontology.diagnostics = list(dict.fromkeys(diag.check()))
 	return ontology
 
 
@@ -658,7 +670,7 @@ def formatOntology(sources: list[Source]) -> str:
 
 def ontologyToJson(ontology: Ontology, ids: dict[str, str] | None = None) -> dict[str, Any]:
 	"""Export normalized `ontology`, overriding its identity sidecar with `ids` when supplied."""
-	return _toJson(normaliseOntology(ontology), ids if ids is not None else ontology.ids)
+	return encodeOntology(normaliseOntology(ontology), ids if ids is not None else ontology.ids)
 
 
 def ontologyFromJson(data: Any, name: str = "ontology.json") -> Ontology:
@@ -671,15 +683,15 @@ def ontologyFromJson(data: Any, name: str = "ontology.json") -> Ontology:
 		return FormatError(diag.items)
 
 	try:
-		read = _fromJson(data)
+		read = decodeOntology(data)
 		validateOntology(read)
 		normal = normaliseOntology(read)
 		text = printOntology(normal)
-		expected = _toJson(normal, None)
+		expected = encodeOntology(normal, None)
 	except ValueError as error:
 		raise fail(f"Invalid ontology JSON: {error}") from error
 	ontology = loadOntology([Source(name, text)])
-	if _toJson(normaliseOntology(ontology), None) != expected:
+	if encodeOntology(normaliseOntology(ontology), None) != expected:
 		raise fail("Ontology JSON does not round-trip through its text form")
 	ontology.ids = read.ids
 	return ontology

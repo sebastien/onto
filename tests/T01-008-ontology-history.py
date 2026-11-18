@@ -7,7 +7,7 @@ import pytest
 from onto import FormatError, Source, loadObservations, loadOntology, ontologyFromJson, ontologyToJson
 from onto.meta import metaObservations
 from onto.ontology import Model, Operator
-from tests._helpers import _schemaValidator
+from tests.helpers import schemaValidator
 
 # -----------------------------------------------------------------------------
 #
@@ -65,7 +65,7 @@ def testNormalFormAndJsonKeepOnlyTheFlag():
 	assert "Status Policy/Status {history}" in text and "StatusChange" not in text
 	data = ontologyToJson(ontology)
 	assert all("Change" not in decl["path"] for decl in data["decls"])
-	_schemaValidator("ontology").validate(data)
+	schemaValidator("ontology").validate(data)
 	again = ontologyFromJson(data)
 	assert Model(again).get("A/Policy/StatusChange") and ontologyToJson(again) == data
 
@@ -80,6 +80,33 @@ def testDeclaringTheGeneratedConceptIsAnError():
 	assert "collision" in codes(BODY + "Policy/StatusChange\n")
 
 
+def testDeclaringTheGeneratedRelationIsAnError():
+	assert "collision" in codes(BODY + "Policy -hasChange-> Policy/StatusChange\n")
+
+
+@pytest.mark.parametrize("name", ["OccurredDate", "Reason"])
+def testHistoryAttributeCannotCollideWithGeneratedFields(name: str):
+	assert "collision" in codes(f"Person\n  {name} Text {{history}}\n")
+
+
+def testGeneratedHistoryRelationUsesDistinctRolesWhenEndNamesMatch():
+	model = Model(load("StatusChange\n  Status Text {history}\n"))
+	relation = model.get("A/StatusChange.hasChange.A/StatusChange/StatusChange")
+	assert [role.role for role in relation.participants] == ["Subject", "Object"]
+
+
+def testGeneratedHistoryPreservesQualifiersAndVocabularyFlags():
+	model = Model(load(
+		"Units = Metre|Inch\nAsset\n  Length Number {unit=?:Units, history}\n"
+		"  Stage Z/B|A {ordered, hierarchical, history}\n"
+	))
+	length = model.get("A/Asset/LengthChange").attrs[0]
+	assert model.resolveType(length.type, length.ann).qualifierVocabularies == {"unit": "A/Units"}
+	stage = model.get("A/Asset/StageChange").attrs[0]
+	resolved = model.resolveType(stage.type, stage.ann)
+	assert resolved.ordered and resolved.hierarchical and resolved.values == ["Z", "Z/B", "A"]
+
+
 @pytest.mark.parametrize("attr", ["* Tags Text {history}", "~ Age Number <- ... {history}"])
 def testMultiValuedOrDerivedAttributesHaveNoHistory(attr: str):
 	assert "history" in codes(f"Person\n  {attr}\n")
@@ -88,6 +115,14 @@ def testMultiValuedOrDerivedAttributesHaveNoHistory(attr: str):
 def testHistoryIsAFlagOnAttributes():
 	assert "annotation" in codes("Person\n  Status Text {history=yes}\n")
 	assert "annotation" in codes("Person {history}\n")
+
+
+@pytest.mark.parametrize("body", [
+	"Detail =\n  Status Text {history}\n",
+	"Person\nCompany\nPerson -worksAt-> Company\n  Status Text {history}\n",
+])
+def testHistoryRequiresAnEntityFacetOrAssociationOwner(body: str):
+	assert "history" in codes(body)
 
 
 def testGeneratedDeclarationsRespectLayering():

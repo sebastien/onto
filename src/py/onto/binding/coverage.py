@@ -9,6 +9,7 @@ from ..expressions import Expression, printExpression
 from ..inventory.model import CONTAINER_TYPES, Inventory
 from ..ontology.model import Model, Ontology
 from .model import Binding, BindingScope
+from .operations import enclosingPath, enclosingScope, rootSteps
 
 # -----------------------------------------------------------------------------
 #
@@ -43,19 +44,17 @@ def documentPaths(expr: Expression | None) -> list[Steps]:
 	return []
 
 
-def absolute(scope: Steps | None, steps: Steps) -> Steps:
+def absolute(scope: Steps | None, steps: Steps, scopes: list[BindingScope] | None = None) -> Steps:
 	"""Steps of a path read from a record at `scope`, from the document root, indexes as `[*]`.
 
-	`^` climbs to the enclosing list element; `$` restarts at the root. A JSON root
+	`^` climbs to an enclosing record; `$` restarts at the root. A JSON root
 	object is implicit (`asOf`); a root list keeps its `$[*]`.
 	"""
 	first = steps[0] if steps else None
 	if isinstance(first, dict) and "root" in first:
 		base, steps = [], steps[1:]
 	elif isinstance(first, dict) and "up" in first:
-		eaches = [index for index, step in enumerate(scope or []) if step == EACH]
-		count = first["up"]
-		base = list(scope[:eaches[-1 - count] + 1]) if len(eaches) > count else []
+		base = enclosingPath(rootSteps({"path": scope or []}), first["up"], scopes or [])
 		steps = steps[1:]
 	else:
 		base = list(scope or [])
@@ -91,21 +90,19 @@ class BindingCoverage:
 
 	def record(self, scope: Steps | None, paths: list[Steps], target: str | None, status: str, note: str | None = None) -> None:
 		for steps in paths:
-			path = absolute(scope, steps)
+			if len(steps) == 1 and isinstance(steps[0], dict) and "up" in steps[0]:
+				# A bare ancestor reference reads the enclosing record's key, not the record itself.
+				scopes = self.binding.scopes
+				parent = enclosingScope(enclosingPath(rootSteps({"path": scope or []}), steps[0]["up"], scopes), scopes)
+				if parent is not None:
+					self.record(parent.path["path"], documentPaths(parent.id), None, "condition")
+				continue
+			path = absolute(scope, steps, self.binding.scopes)
 			if path:
 				self.reads.setdefault(pathText(path), []).append((target, status, note))
 
-	def enclosing(self, scope: BindingScope, up: int) -> BindingScope | None:
-		"""The scope line whose records enclose this scope's, `up` lists above."""
-		steps = absolute(None, scope.path["path"])
-		eaches = [index for index, step in enumerate(steps) if step == EACH]
-		if len(eaches) <= up:
-			return None
-		prefix = steps[:eaches[-1 - up] + 1]
-		return next((item for item in self.binding.scopes if absolute(None, item.path["path"]) == prefix), None)
-
 	def scope(self, scope: BindingScope) -> None:
-		steps = absolute(None, scope.path["path"])
+		steps = scope.path["path"]
 		typeName = self.elements.display(scope.type)
 		self.record(None, [scope.path["path"]], typeName, "direct", scope.doc)
 		conditions = documentPaths(scope.id) + documentPaths(scope.valid) + documentPaths(scope.ctx)
@@ -119,12 +116,6 @@ class BindingCoverage:
 				self.assigned.add(key)
 			member = f"[{line.facet}]" if line.facet else f".{line.target or line.verb}"
 			expr = line.expr
-			if expr is not None and "path" in expr and len(expr["path"]) == 1 and isinstance(expr["path"][0], dict) and "up" in expr["path"][0]:
-				# `^` reads the enclosing record's key.
-				parent = self.enclosing(scope, expr["path"][0]["up"])
-				if parent is not None:
-					self.record(absolute(None, parent.path["path"]), documentPaths(parent.id), None, "condition")
-				continue
 			status = "direct" if expr is not None and "path" in expr else "transformed"
 			self.record(steps, documentPaths(expr), typeName + member, status, line.doc)
 			if line.when:

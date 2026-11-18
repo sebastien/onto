@@ -24,7 +24,7 @@ LIBRARY = """\
 
 
 def ontology(attr: str = "~ Level Band <- Score {rule=Rules/Band}", uses: str = ""):
-	return loadOntology([Source("a.onto", f"@ontology A\n{uses}Band = Low|High\nKind = Retail|Business\nAudit\n  Score Integer\n  Count Number\n  Kind Kind\n  {attr}\n")])
+	return loadOntology([Source("a.onto", f"@ontology A\n{uses}Band = Low|High\nKind = Retail|Business\nAudit\n  Score Integer\n  * Scores Integer\n  Count Number\n  Kind Kind\n  {attr}\n")])
 
 
 def library(attr: str = "~ Level Band <- Score {rule=Rules/Band}", uses: str = "", text: str = LIBRARY):
@@ -60,6 +60,7 @@ def testNumbersAreInterchangeableAsInputs():
 	("~ Level Band <- Score {rule=Rules/Bands}", "unknown function"),
 	("~ Level Band <- Score, Count {rule=Rules/Band}", "has 2 inputs"),
 	("~ Level Band <- Kind {rule=Rules/Band}", "input 1"),
+	("~ Level Band <- Scores {rule=Rules/Band}", "input 1"),
 	("~ Level Kind <- Score {rule=Rules/Band}", "result"),
 ])
 def testMismatchesAreErrors(attr: str, message: str):
@@ -71,6 +72,12 @@ def testIncompleteInputsAcceptMoreArguments():
 	text = LIBRARY + "\n@fn Mix Integer, Number -> A/Band\n  1, 2 => Low\n"
 	library("~ Level Band <- Score, ... {rule=Rules/Mix}", text=text)
 	assert errors("~ Level Band <- Score, Count, Kind {rule=Rules/Mix}", text)
+
+
+def testRangeResultChecksItsElementType():
+	text = LIBRARY + "\n@fn Span Integer -> Range<Number>\n  1 => 1..2\n"
+	assert errors("~ Window Range<Date> <- Score {rule=Rules/Span}", text)
+	library("~ Window Range<Number> <- Score {rule=Rules/Span}", text=text)
 
 
 @pytest.mark.parametrize("rule", ["?", "x26", "Other/Band"])

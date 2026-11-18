@@ -22,6 +22,8 @@ def formatsUpdate(previous: Formats | None, counts: dict[str, dict[str, int]]) -
 	entries = deepcopy(previous.entries) if previous else {}
 	changes: list[FormatChange] = []
 	for path, tally in sorted(counts.items()):
+		if not tally:
+			continue
 		entry = entries.setdefault(path, FormatsEntry(path, ""))
 		for name, count in tally.items():
 			entry.seen[name] = entry.seen.get(name, 0) + count

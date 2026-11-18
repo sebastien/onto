@@ -12,7 +12,7 @@ from onto import (
 	parseFormats, parseInventory, printBinding, printCoverageTable, printFormats, printInventory,
 )
 from onto.referential import loadReferential
-from tests._helpers import _specExample
+from tests.helpers import specExample
 
 # -----------------------------------------------------------------------------
 #
@@ -21,19 +21,19 @@ from tests._helpers import _specExample
 # -----------------------------------------------------------------------------
 
 
-EXCHANGE = loadOntology([Source("exchange.onto", _specExample("spec-04-mapping", 1))])
-FINANCE = loadOntology([Source("finance.onto", _specExample("spec-01-ontology"))])
-SHEET = loadOntology([Source("sheet.onto", _specExample("spec-04-mapping", 7))])
-MARKETS = loadFunctions([FINANCE], [Source("markets.fn", _specExample("spec-04-mapping", 3))])
-REFERENTIAL = loadReferential([FINANCE, EXCHANGE], [Source("market-ids.ref", _specExample("spec-04-mapping", 4))])
-BINDING = loadBinding(EXCHANGE, Source("exchange.bind", _specExample("spec-04-mapping", 2)))
-SHEET_BINDING = loadBinding(SHEET, Source("sheet.bind", _specExample("spec-04-mapping", 9)))
-MAPPING = loadMapping(EXCHANGE, FINANCE, Source("exchange-finance.map", _specExample("spec-04-mapping", 5)), libraries=[MARKETS], referentials=[REFERENTIAL])
-SHEET_MAPPING = loadMapping(FINANCE, SHEET, Source("finance-sheet.map", _specExample("spec-04-mapping", 8)))
-FEED = json.loads(_specExample("spec-04-mapping", 0, "json"))
-FORMATS_TEXT = _specExample("spec-04-mapping", 15)
-INVENTORY_TEXT = _specExample("spec-04-mapping", 16)
-TABLE_TEXT = _specExample("spec-04-mapping", 17)
+EXCHANGE = loadOntology([Source("exchange.onto", specExample("spec-04-mapping", 1))])
+FINANCE = loadOntology([Source("finance.onto", specExample("spec-01-ontology"))])
+SHEET = loadOntology([Source("sheet.onto", specExample("spec-04-mapping", 7))])
+MARKETS = loadFunctions([FINANCE], [Source("markets.fn", specExample("spec-04-mapping", 3))])
+REFERENTIAL = loadReferential([FINANCE, EXCHANGE], [Source("market-ids.ref", specExample("spec-04-mapping", 4))])
+BINDING = loadBinding(EXCHANGE, Source("exchange.bind", specExample("spec-04-mapping", 2)))
+SHEET_BINDING = loadBinding(SHEET, Source("sheet.bind", specExample("spec-04-mapping", 9)))
+MAPPING = loadMapping(EXCHANGE, FINANCE, Source("exchange-finance.map", specExample("spec-04-mapping", 5)), libraries=[MARKETS], referentials=[REFERENTIAL])
+SHEET_MAPPING = loadMapping(FINANCE, SHEET, Source("finance-sheet.map", specExample("spec-04-mapping", 8)))
+FEED = json.loads(specExample("spec-04-mapping", 0, "json"))
+FORMATS_TEXT = specExample("spec-04-mapping", 15)
+INVENTORY_TEXT = specExample("spec-04-mapping", 16)
+TABLE_TEXT = specExample("spec-04-mapping", 17)
 
 
 def table(rows) -> set[str]:
@@ -66,6 +66,7 @@ def test_inventory_from_csv_rows_and_mixed_types():
 	assert documentFields(rows, csv=True) == {"$[*]": ["object"], '$[*]."asset class"': ["text"], "$[*].date": ["text"], "$[*].value": ["text", "number"]}
 	assert inventoryFromDocuments([rows], csv=True).types()["$[*].value"] == "text"
 	assert documentFields({"tags": ["a", None], "none": None}) == {"tags[*]": ["text"]}
+	assert documentFields({"": "unaddressable", "name": "addressable"}) == {"name": ["text"]}
 
 
 @pytest.mark.parametrize("text", ["a\ttext\na\tnumber\n", "a\tdate\n", "a.^\ttext\n", "a[0]\ttext\n", "a text\n"])
@@ -113,12 +114,35 @@ def test_formats_ties_choose_by_name():
 	assert updated.entries["a"].format == "DD/MM/YYYY" and len(changes) == 1
 
 
+def test_formats_update_does_not_add_fields_with_no_tally():
+	updated, changes = formatsUpdate(None, {"a": {}})
+	assert not changes
+	assert not parseFormats(Source("f", printFormats(updated))).entries
+
+
+@pytest.mark.parametrize("path", ["rows[*][0].date", "$[0].date"])
+def test_formats_round_trip_fixed_indexes(path):
+	updated, _ = formatsUpdate(None, {path: {"YYYYMMDD": 1}})
+	reloaded = parseFormats(Source("f", printFormats(updated)))
+	assert reloaded.entries[path].seen == {"YYYYMMDD": 1}
+
+
+@pytest.mark.parametrize("separator", ["; ", "and; then ", "\t", "\n"])
+def test_formats_round_trip_separators_that_contain_delimiters(separator):
+	name = f"sep:{separator}"
+	updated, _ = formatsUpdate(None, {"a": {name: 3, "trim": 1}})
+	entry = parseFormats(Source("f", printFormats(updated))).entries["a"]
+	assert entry.format == name and entry.seen == {name: 3, "trim": 1}
+
+
 @pytest.mark.parametrize("text", [
 	"path\tformat\n",
 	"path\tformat\tseen\tpin\na\tbogus\t\n",
 	"path\tformat\tseen\tpin\na\ttrim\ttrim x\n",
 	"path\tformat\tseen\tpin\na\ttrim\ttrim 1\tyes\n",
 	"path\tformat\tseen\tpin\na\ttrim\ttrim 1\na\ttrim\ttrim 1\n",
+	"path\tformat\tseen\tpin\n^.date\ttrim\ttrim 1\n",
+	"path\tformat\tseen\tpin\ntrim(date)\ttrim\ttrim 1\n",
 ])
 def test_invalid_formats_fail(text):
 	with pytest.raises(FormatError):
@@ -155,11 +179,25 @@ def test_mapping_coverage_is_limited_to_the_view():
 
 
 def test_candidates_are_ambiguous_until_enabled():
-	text = _specExample("spec-04-mapping", 5).replace("  Name <- Name\n", "  Name <- Name {candidate}\n")
+	text = specExample("spec-04-mapping", 5).replace("  Name <- Name\n", "  Name <- Name {candidate}\n")
 	mapping = loadMapping(EXCHANGE, FINANCE, Source("m", text), libraries=[MARKETS], referentials=[REFERENTIAL])
 	rows = {(row.source, row.target): row.status for row in mappingCoverage(EXCHANGE, FINANCE, mapping).rows}
 	assert rows[("Instrument.Name", "Instrument.Name")] == "ambiguous"
 	assert "Instrument.Name" in mappingCoverage(EXCHANGE, FINANCE, mapping).unassigned
+
+
+def test_association_facets_and_outgoing_verbs_are_static_coverage_elements():
+	ontology = loadOntology([Source("a", "@ontology A\nPerson\nPlace\nMeeting(Person, Place)\n"
+		"Attended of Meeting\n  Note Text\nMeeting -organisedBy-> Person\n")])
+	binding = loadBinding(ontology, Source("b", "@binding A\nMeeting <- items[*] {id=id}\n  Attended.Note <- note\n"))
+	unassigned = ["Meeting.Person", "Meeting.Place", "Meeting.organisedBy", "Meeting[Attended]"]
+	assert bindingCoverage(ontology, binding).unassigned == unassigned
+	mapping = loadMapping(ontology, ontology, Source("m", "@mapping A -> A\nMeeting -> Meeting\n  Attended.Note <- Attended.Note\n"))
+	report = mappingCoverage(ontology, ontology, mapping)
+	assert "Meeting.Attended.Note\tMeeting.Attended.Note\tdirect" in table(report.rows)
+	assert "Meeting[Attended]\t\tunmapped" in table(report.rows)
+	assert "Meeting.organisedBy\t\tunmapped" in table(report.rows)
+	assert report.unassigned == unassigned
 
 
 # -----------------------------------------------------------------------------
@@ -182,7 +220,7 @@ def test_binding_coverage_document_side():
 
 
 def test_binding_coverage_ontology_side_and_exclusions():
-	text = _specExample("spec-04-mapping", 2).replace("  TaxCredit <- taxCredit\n", "") + "\n- instruments[*].dividends[*].taxCredit {reason=out-of-scope} -- Jurisdiction\n- issuers[*] {reason=ignore}\n"
+	text = specExample("spec-04-mapping", 2).replace("  TaxCredit <- taxCredit\n", "") + "\n- instruments[*].dividends[*].taxCredit {reason=out-of-scope} -- Jurisdiction\n- issuers[*] {reason=ignore}\n"
 	binding = loadBinding(EXCHANGE, Source("b", text))
 	report = bindingCoverage(EXCHANGE, binding, inventoryFromDocuments([FEED]))
 	rows = {(row.source, row.target): row for row in report.rows}
@@ -231,6 +269,14 @@ def test_default_binding_for_csv_and_name_clashes():
 	assert "Row <- $[*] {id=rowId}" in text
 	assert "  AName <- a.name" in text and "  BName <- b.name" in text
 	assert "  Tags <- tags[*]" in text
+
+
+def test_default_binding_uses_unique_targets_and_scalar_ids():
+	inventory = inventoryFromDocuments([{"rows": [{"foo bar": "a", "foo-bar": "b", "tags": ["a"], "id": "01"}]}])
+	scope, = parseBinding(Source("b", printBinding(defaultBinding(inventory, "Sheet")))).scopes
+	assert sorted(line.target for line in scope.lines) == ["FooBar", "FooBar2", "Id", "Tags"]
+	assert scope.id == {"path": ["id"]}
+	assert defaultBinding(inventoryFromDocuments([{"rows": [{"tags": ["a"]}]}]), "Sheet").scopes == []
 
 
 # EOF

@@ -19,8 +19,16 @@ To build the source distribution and wheel without uploading:
 make test-release
 ```
 
-The artifacts are written to `dist/`. To run the tests, rebuild, and
-publish the current version to PyPI:
+The artifacts are written to `dist/`. This target also installs the wheel into
+a temporary environment and checks both CLI entry points outside the checkout.
+Set `UV_PYTHON=3.14` to check the minimum supported Python version.
+
+`make test-hexa` requires the hexa integration to be importable before running
+the suite, so its tests cannot silently skip. It looks in `../hexa/src/py` by
+default; override that with `HEXA_SRC=/path/to/hexa/src/py`.
+
+To run the suite including hexa, rebuild, and publish the current version to
+PyPI:
 
 ```sh
 read -r -s -p 'PyPI token: ' UV_PUBLISH_TOKEN; echo

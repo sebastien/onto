@@ -55,7 +55,7 @@ class CoverageReport:
 
 
 @dataclass(slots=True, frozen=True)
-class _Selection:
+class ViewSelection:
 	owner: str
 	member: str = ""
 	facet: bool = False
@@ -69,12 +69,12 @@ class _Selection:
 # -----------------------------------------------------------------------------
 
 
-def _selections(model: Model, view: Decl) -> set[_Selection]:
-	selected: set[_Selection] = set()
+def viewSelections(model: Model, view: Decl) -> set[ViewSelection]:
+	selected: set[ViewSelection] = set()
 	visited: set[str] = set()
 
 	def attribute(owner: str, member: str, seen: frozenset[str] = frozenset()) -> None:
-		selected.add(_Selection(owner))
+		selected.add(ViewSelection(owner))
 		attr = model.lookup(owner, member)
 		struct = model.structOf(attr.type) if attr else None
 		if struct and struct.fields and struct.path not in seen:
@@ -83,20 +83,20 @@ def _selections(model: Model, view: Decl) -> set[_Selection]:
 		else:
 			facet = model.facetOf(owner, member)
 			context = annotation(facet.ann, "ctx") if facet else None
-			selected.add(_Selection(owner, member, contextType=context))
+			selected.add(ViewSelection(owner, member, contextType=context))
 			if facet:
-				selected.add(_Selection(owner, lastSegment(facet.path), True, context))
+				selected.add(ViewSelection(owner, lastSegment(facet.path), True, context))
 				if context:
-					selected.add(_Selection(context))
+					selected.add(ViewSelection(context))
 
 	def whole(decl: Decl) -> None:
-		selected.add(_Selection(decl.path))
+		selected.add(ViewSelection(decl.path))
 		attrs = model.entityAttrs(decl.path).values() if decl.kind == "entity" else decl.attrs
 		for attr in attrs:
 			attribute(decl.path, attr.name)
 		if decl.kind == "relation":
 			for participant in decl.participants:
-				selected.add(_Selection(participant.type))
+				selected.add(ViewSelection(participant.type))
 				if not decl.arrow:
 					attribute(decl.path, participant.role)
 
@@ -123,9 +123,9 @@ def _selections(model: Model, view: Decl) -> set[_Selection]:
 				for name in facets if line.facets == "*" else line.facets:
 					facet = facets[name]
 					context = annotation(facet.ann, "ctx")
-					selected.add(_Selection(decl.path, name, True, context))
+					selected.add(ViewSelection(decl.path, name, True, context))
 					if context:
-						selected.add(_Selection(context))
+						selected.add(ViewSelection(context))
 					for attr in facet.attrs:
 						attribute(decl.path, f"{name}.{attr.name}")
 
@@ -162,7 +162,6 @@ class Elements:
 		keys = [f"{path}.{leaf}" for attr in decl.attrs if not attr.derived for leaf in self.leaves(path, attr.name)]
 		if decl.kind == "relation":
 			keys += [f"{path}.{participant.role}" for participant in decl.participants]
-			return keys
 		for facet in self.model.facetsOf(path):
 			name = lastSegment(facet.path)
 			keys.append(f"{path}[{name}]")
@@ -226,18 +225,24 @@ class Elements:
 		return None
 
 
-def impliedKeys(elements: "Elements", path: str, target: str | None) -> list[str]:
-	"""The key fields a keyed target (`Phones[Mobile].Number`) assigns by its keys (`Phones.Use`)."""
+def impliedKeyFields(model: Model, path: str, target: str) -> list[str]:
+	"""The key fields named by `target`, e.g. `Phones[Mobile].Number` implies `Phones.Use`."""
 	result = []
-	parts = (target or "").split(".")
+	parts = target.split(".")
 	for index, part in enumerate(parts):
 		if "[" not in part:
 			continue
 		prefix = unkeyed(".".join(parts[:index + 1]))
-		field = elements.model.elementKey(elements.model.lookup(path, prefix))
+		field = model.elementKey(model.lookup(path, prefix))
 		if field is not None:
-			result.append(f"{elements.owner(path, prefix.split('.')[0])}.{prefix}.{field.name}")
+			result.append(f"{prefix}.{field.name}")
 	return result
+
+
+def impliedKeys(elements: Elements, path: str, target: str | None) -> list[str]:
+	"""The declaring elements of the key fields a keyed target assigns."""
+	return [f"{elements.owner(path, member.split('.')[0])}.{member}"
+		for member in impliedKeyFields(elements.model, path, target or "")]
 
 
 def coverageRows(keys: list[str], reads: dict[str, list[tuple[str | None, str, str | None]]], excluded: dict[str, tuple[str, str | None]]) -> list[CoverageRow]:
@@ -270,7 +275,7 @@ def printCoverageTable(rows: list[CoverageRow]) -> str:
 	return "\n".join(lines) + "\n"
 
 
-def _activeHandles(claims: list[Claim]) -> set[str]:
+def activeHandles(claims: list[Claim]) -> set[str]:
 	handles: set[str] = set()
 	for claim in claims:
 		if "s" in claim:
@@ -284,7 +289,7 @@ def _activeHandles(claims: list[Claim]) -> set[str]:
 	return handles
 
 
-def _status(value: Any) -> str:
+def observationStatus(value: Any) -> str:
 	if value is None:
 		return "absent"
 	if isinstance(value, dict):
@@ -310,7 +315,12 @@ def observationsCoverage(ontology: Ontology, observations: Observations, view: s
 		diag.error("reference", f"Unknown view '{view}'")
 		diag.check()
 	state = reconcileObservations(ontology, observations, mode)
-	handles = _activeHandles(state.claims)
+	handles = activeHandles(state.claims)
+	claims = []
+	for claim in state.claims:
+		member = claim.get("p", "")
+		keyFields = impliedKeyFields(model, state.instances[claim["s"]]["type"], member) if "[" in member else []
+		claims.append((claim, unkeyed(member), keyFields))
 
 	def compatible(handle: str, path: str) -> bool:
 		actual = state.instances[handle]["type"]
@@ -318,7 +328,7 @@ def observationsCoverage(ontology: Ontology, observations: Observations, view: s
 
 	items: list[CoverageItem] = []
 	# ponytail: scan claims per requested slot; index subject/context pairs if coverage on large logs is slow.
-	for selection in _selections(model, target):
+	for selection in viewSelections(model, target):
 		owner = model.get(selection.owner)
 		path = selection.owner + (f"[{selection.member}]" if selection.facet else f".{selection.member}" if selection.member else "")
 		# Binary existence is one profile-level request, including anonymous instances.
@@ -330,7 +340,8 @@ def observationsCoverage(ontology: Ontology, observations: Observations, view: s
 		for subject in subjects:
 			for ctx in contexts or [None]:
 				matches = []
-				for claim in state.claims:
+				implied = False
+				for claim, member, keyFields in claims:
 					if binary:
 						if claim.get("rel") == selection.owner:
 							matches.append(claim)
@@ -338,20 +349,24 @@ def observationsCoverage(ontology: Ontology, observations: Observations, view: s
 					if subject is None or claim.get("s") != subject or claim.get("ctx") != ctx:
 						continue
 					if selection.facet:
-						if claim.get("facet") == selection.member or claim.get("p", "").startswith(selection.member + "."):
+						if claim.get("facet") == selection.member or member.startswith(selection.member + "."):
 							matches.append(claim)
 					elif selection.member:
-						member = claim.get("p", "")
+						if selection.member in keyFields:
+							implied = True
+							continue
 						selectedMember = (
 							member == selection.member
 							or structure and member.startswith(selection.member + ".")
-							or member and selection.member.startswith(member + ".") and claim.get("v") in (None, {"unknown": True})
+							or member and selection.member.startswith(member + ".") and observationStatus(claim.get("v")) != "supplied"
 						)
 						if selectedMember:
 							matches.append(claim)
 					elif claim.get("exists") or claim.get("rel") == selection.owner:
 						matches.append(claim)
-				statuses = {_status(claim["v"]) if selection.member and not selection.facet else "supplied" for claim in matches}
+				statuses = {observationStatus(claim["v"]) if selection.member and not selection.facet else "supplied" for claim in matches}
+				if implied:
+					statuses.add("supplied")
 				items.append(CoverageItem(
 					path=path,
 					subject=subject,

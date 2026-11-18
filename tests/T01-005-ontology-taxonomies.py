@@ -7,7 +7,7 @@ import pytest
 from onto import FormatError, Source, loadOntology, ontologyFromJson, ontologyToJson
 from onto.ontology import Model, Operator, TypeExpr
 from onto.observations import loadObservations, observationsFromJson, observationsToJson, printObservationsLog
-from tests._helpers import _schemaValidator
+from tests.helpers import schemaValidator
 
 
 def load(body: str):
@@ -28,7 +28,7 @@ def testCompactAndTreeHaveTheSameCanonicalRepresentation():
 	assert data["decls"][0]["def"]["values"] == [
 		"Clothing", "Clothing/Shirts", "Food", "Food/Fruit", "Food/Fruit/Apple", "Food/Fruit/Pear",
 	]
-	_schemaValidator("ontology").validate(data)
+	schemaValidator("ontology").validate(data)
 	assert ontologyToJson(ontologyFromJson(data)) == data
 	data["decls"][0]["def"]["values"] = ["Food/Fruit/Apple"]
 	assert ontologyToJson(ontologyFromJson(data))["decls"][0]["def"]["values"] == ["Food", "Food/Fruit", "Food/Fruit/Apple"]
@@ -59,7 +59,7 @@ def testInlineTaxonomiesDefaultsAndMapsUseAncestorPaths():
 	text = Operator(ontology).print()
 	assert "Inline Clothing|Clothing/Shirts|Food|Food/Fruit|Food/Fruit/Apple {hierarchical}" in text
 	assert ontologyToJson(ontologyFromJson(ontologyToJson(ontology))) == ontologyToJson(ontology)
-	_schemaValidator("ontology").validate(ontologyToJson(ontology))
+	schemaValidator("ontology").validate(ontologyToJson(ontology))
 	assert "Food/Fruit exact Plant" in text
 
 

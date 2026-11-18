@@ -159,6 +159,8 @@ the source ontology there is a slot named by the namespace, the type's path and
 the attribute path of spec-02 claims (`p`): `Exchange.Dividend.Amount`,
 `Exchange.Instrument.Bond.CouponRate`, `Exchange.Person.Name.Surname`. Since `p`
 is unique within a type, so is the slot name.
+Slot shapes are local to a compiled program: the same name can have a
+different shape in another ontology revision without affecting either program.
 
 An attribute slot's canonical value is the attribute's
 [spec-02 JSON value](spec-02-observations.md#json-form), so captured values,
@@ -528,7 +530,9 @@ BindingRun: BindingRead → OutputPreviousRetrieve → RetractionsCompose
 ### Previous output
 
 `documents` items may carry `replaces`, the `src` token of the snapshot they
-supersede (spec-04 snapshots with one token per date). For each document,
+supersede (spec-04 snapshots with one token per date). Pages sharing a `src`
+are compared together as one partition and must agree on which source they
+replace. For each source partition,
 `OutputPreviousRead({by, src})` returns the previous output: the log of claims
 and retractions with that `by` and `src` (or `replaces`), or `null` when there is
 none. The integration reconciles it with `reconcileObservations` into the
@@ -549,7 +553,11 @@ A slot is **stale** when its input produced a gap rather than disappearing.
   makes that slot of the record's handle stale;
 - a gap at `handle` leaves the instance unidentified. No instance of that scope
   type is retracted by this run for that document, since the missing one cannot be
-  told apart; slot retractions of identified instances proceed.
+  told apart; unmatched instances keep their slots, and slot retractions of
+  identified instances proceed.
+- a failed or conflicting mapping `present=` selector leaves the target
+  declaration and its slots stale. A successfully evaluated false selector
+  instead means that target was not produced.
 
 Stale slots are never retracted; the report lists them with their reasons, as
 spec-04 [removals](spec-04-mapping.md#removals-and-gaps) requires.
@@ -769,13 +777,18 @@ since references need the targets of the instances they point to.
 
 - When `T`'s policy derives the handle from a key `A` (with `from`, only when
   the mapping's `From` is that namespace), the handle template is
-  `Onto.Handle("<T>", <expression of the line assigning A>)`, projected over a
-  first unfold limited to the paths that line reads.
+  `Onto.KeyedHandle("<T>", <expression of the line assigning A>, $Map.Root.Scope,
+  $Map.Root.Handle, "<S>")`, projected over a first unfold limited to the paths
+  that line reads. An instance without a value for `A` keeps its
+  source-qualified handle (spec-05 [Producing handles](spec-05-identities.md#producing-handles),
+  step 4): it is not a gap.
 - Otherwise the handle is source-qualified:
   `Onto.SourceHandle("<T>", $Map.Root.Scope, $Map.Root.Handle, "<S>")`, which
   encodes `<scope>/<S>/<key>` with the source type and the source handle's key, as spec-04 specifies.
 - A key line whose expression reads a reference's target cannot be resolved
   before the targets exist: it fails to compile with `Mapping.KeyReference`.
+- Multiple active assignments to a referential key fail to compile with
+  `Mapping.PolicyUnsupported`, even when their conditions are exclusive.
 - An instance whose handle is a hole gets no target. It produces nothing, and
   references to it are gaps (`Mapping.ReferenceUnmapped`).
 
@@ -849,6 +862,8 @@ line's inputs in the metadata table:
 
 - `src`: the inputs' source when they share one; otherwise the source of the
   line's source input, with the other sources reported as mixed provenance.
+  An unattributed source stays unattributed and has no previous-output
+  partition to compare or retract.
 - `valid`: the intersection of the inputs' `valid`; `conf`: the lowest.
 - `at`: the run's time from `ClockRead`; `by`: `map:<From>-><To>`.
 - A line without inputs (a literal) takes the metadata of the scope instance's

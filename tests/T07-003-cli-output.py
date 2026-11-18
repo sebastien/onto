@@ -6,7 +6,7 @@ import io
 import json
 
 from onto.cli import main, run
-from tests._cli import onto
+from tests.cli import onto
 
 # -----------------------------------------------------------------------------
 #
@@ -111,9 +111,10 @@ def test_stdout_and_stderr_are_separate(workspace):
 # EOF
 
 
-def test_help_and_version_before_a_command_need_no_arguments():
+def test_help_and_version_need_no_command_arguments():
 	assert onto("-h", "json")[1].startswith("Usage: onto json FILE")
 	assert onto("--version", "json")[1].startswith("onto ")
+	assert onto("json", "--version") == onto("--version", "json")
 
 
 def test_json_fmt_result_is_keyed_by_file_even_when_one_fails(workspace):

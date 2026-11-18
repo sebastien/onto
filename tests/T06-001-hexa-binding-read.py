@@ -17,7 +17,7 @@ from onto import Source, loadBinding, loadFunctions, loadOntology, observationsT
 from onto.integrations.hexa import IntegrationUnavailable, vocabularyConformance  # noqa: E402
 from onto.integrations.hexa.compiler import CompileError  # noqa: E402
 from onto.integrations.hexa.operations import HexaBindingOperator, bindingCompile, bindingResult, programEncoding  # noqa: E402
-from tests._helpers import ROOT, _specExample  # noqa: E402
+from tests.helpers import ROOT, specExample  # noqa: E402
 
 # -----------------------------------------------------------------------------
 #
@@ -26,14 +26,14 @@ from tests._helpers import ROOT, _specExample  # noqa: E402
 # -----------------------------------------------------------------------------
 
 
-EXCHANGE = loadOntology([Source("exchange.onto", _specExample("spec-04-mapping", 1))])
-SHEET = loadOntology([Source("sheet.onto", _specExample("spec-04-mapping", 7))])
-BINDING = loadBinding(EXCHANGE, Source("exchange.bind", _specExample("spec-04-mapping", 2)))
-SHEET_BINDING = loadBinding(SHEET, Source("sheet.bind", _specExample("spec-04-mapping", 9)))
-FEED = json.loads(_specExample("spec-04-mapping", 0, "json"))
+EXCHANGE = loadOntology([Source("exchange.onto", specExample("spec-04-mapping", 1))])
+SHEET = loadOntology([Source("sheet.onto", specExample("spec-04-mapping", 7))])
+BINDING = loadBinding(EXCHANGE, Source("exchange.bind", specExample("spec-04-mapping", 2)))
+SHEET_BINDING = loadBinding(SHEET, Source("sheet.bind", specExample("spec-04-mapping", 9)))
+FEED = json.loads(specExample("spec-04-mapping", 0, "json"))
 SRC = "feed:instruments/2026-11-10"
 CLOCK = {"ClockRead": lambda context: "2026-11-11T09:00:00Z"}
-DIVIDEND_RECORD = json.loads(_specExample("spec-06-hexa", 0, "json"))
+DIVIDEND_RECORD = json.loads(specExample("spec-06-hexa", 0, "json"))
 
 
 def read(ops, binding, documents, env=None):
@@ -181,7 +181,7 @@ def test_values_that_do_not_convert_are_gaps_and_nulls_say_nothing():
 
 
 def test_null_policies_claim_null_or_unknown():
-	text = _specExample("spec-04-mapping", 2).replace("  Class <- class\n", "  Class <- class {null=unknown}\n").replace("  Name <- trim(name)\n", "  Name <- trim(name) {null=absent}\n")
+	text = specExample("spec-04-mapping", 2).replace("  Class <- class\n", "  Class <- class {null=unknown}\n").replace("  Name <- trim(name)\n", "  Name <- trim(name) {null=absent}\n")
 	binding = loadBinding(EXCHANGE, Source("b", text))
 	feed = json.loads(json.dumps(FEED))
 	feed["instruments"][0]["class"] = None
@@ -189,6 +189,16 @@ def test_null_policies_claim_null_or_unknown():
 	_, _, log, _ = read(HexaBindingOperator(EXCHANGE), binding, [{"src": SRC, "document": feed}])
 	values = {claim["p"]: claim["v"] for claim in log.claims if claim.get("s") == "Instrument_US0000000001" and "p" in claim}
 	assert values["Class"] == {"unknown": True} and values["Name"] is None
+
+
+def test_header_null_applies_to_direct_and_transformed_reads_unless_overridden():
+	text = specExample("spec-04-mapping", 2).replace("@binding Exchange", "@binding Exchange null=unknown")
+	text = text.replace("  Class <- class\n", "  Class <- class {null=absent}\n")
+	feed = json.loads(json.dumps(FEED))
+	feed["instruments"][0].update({"class": None, "name": None})
+	_, _, log, _ = read(HexaBindingOperator(EXCHANGE), loadBinding(EXCHANGE, Source("b", text)), [{"src": SRC, "document": feed}])
+	values = {claim["p"]: claim["v"] for claim in log.claims if claim.get("s") == "Instrument_US0000000001" and "p" in claim}
+	assert values["Class"] is None and values["Name"] == {"unknown": True}
 
 
 def test_documents_of_a_run_are_aliased_in_order_and_keep_their_own_gaps():
@@ -200,7 +210,7 @@ def test_documents_of_a_run_are_aliased_in_order_and_keep_their_own_gaps():
 
 
 def test_run_time_comes_from_the_clock_effect_without_at():
-	text = _specExample("spec-04-mapping", 2).replace("@at <- asOf\n", "")
+	text = specExample("spec-04-mapping", 2).replace("@at <- asOf\n", "")
 	binding = loadBinding(EXCHANGE, Source("b", text))
 	ops = HexaBindingOperator(EXCHANGE)
 	program = ops.compile(binding)

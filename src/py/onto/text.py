@@ -42,7 +42,7 @@ class Source:
 
 @dataclass(slots=True, frozen=True)
 class Line:
-	"""A significant source line: comments removed, indentation measured."""
+	"""A significant source line; non-space, non-tab indentation has width `-1`."""
 
 	indent: int
 	text: str
@@ -186,7 +186,8 @@ def sourceLines(source: Source) -> list[Line]:
 			continue
 		stripped = text.lstrip()
 		indentation = text[: len(text) - len(stripped)]
-		result.append(Line(len(indentation), stripped, Loc(source.name, index + 1), "\t" in indentation))
+		width = -1 if indentation.strip(" \t") else len(indentation)
+		result.append(Line(width, stripped, Loc(source.name, index + 1), "\t" in indentation))
 	return result
 
 

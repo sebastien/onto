@@ -7,8 +7,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..expressions import Expression
-from ..functions.model import BUILTIN_ARITIES, Function, FunctionLibrary, FunctionsDocument
-from ..functions.operations import _resolveSignature, resolveFunctions
+from ..functions.model import BUILTIN_ARITIES, BUILTIN_RESULTS, Function, FunctionLibrary, FunctionsDocument
+from ..functions.operations import resolveSignature, resolveFunctions
 from ..ontology.model import Model, Ontology, ResolvedType, TypeExpr, isAssociation
 from ..text import Diagnostics, FormatError, Loc, Source, annotation
 from .formatter import bindingToJson, printBinding
@@ -24,10 +24,6 @@ from .parser import parseBinding, qualifyPath, readBindingJson
 
 type Inferred = tuple[ResolvedType | None, bool]
 
-BUILTIN_RESULTS = {
-	"concat": "Text", "split": "Text", "join": "Text", "trim": "Text", "lower": "Text", "upper": "Text", "text": "Text", "format": "Text",
-	"number": "Number", "date": "Date", "datetime": "DateTime", "epoch": "Integer", "sum": "Number", "multiply": "Number", "subtract": "Number", "divide": "Number", "count": "Integer",
-}
 NUMERIC = ("Integer", "Number", "Amount", "Percent")
 
 
@@ -40,11 +36,11 @@ NUMERIC = ("Integer", "Number", "Amount", "Percent")
 
 def rootSteps(path: Expression) -> list[Any]:
 	steps = path["path"]
-	return steps[1:] if steps[0] == {"root": True} else steps
+	return steps[1:] if steps[:1] == [{"root": True}] else steps
 
 
-def enclosingPath(scope: BindingScope, up: int, scopes: list[BindingScope]) -> list[Any]:
-	steps = rootSteps(scope.path)
+def enclosingPath(steps: list[Any], up: int, scopes: list[BindingScope]) -> list[Any]:
+	"""Find an ancestor record, counting both list elements and explicit scope prefixes."""
 	ancestors = [steps[:index + 1] for index, step in enumerate(steps[:-1]) if isinstance(step, dict) and ("each" in step or "index" in step)]
 	# Explicit object scopes also introduce records, including a document-root object.
 	for parent in scopes:
@@ -55,6 +51,12 @@ def enclosingPath(scope: BindingScope, up: int, scopes: list[BindingScope]) -> l
 	if up > len(ancestors):
 		raise ValueError("Ancestor path goes beyond the enclosing records")
 	return ancestors[up - 1]
+
+
+def enclosingScope(path: list[Any], scopes: list[BindingScope]) -> BindingScope | None:
+	"""A bare `^` requires exactly one scope defining the enclosing instance."""
+	parents = [scope for scope in scopes if rootSteps(scope.path) == path]
+	return parents[0] if len(parents) == 1 else None
 
 
 def compatible(model: Model, actual: ResolvedType, expected: ResolvedType) -> bool:
@@ -117,12 +119,12 @@ class ExpressionResolver:
 			if isinstance(steps[0], dict) and "up" in steps[0]:
 				if self.scope is None:
 					raise ValueError("Ancestor paths require a record scope")
-				parent = enclosingPath(self.scope, steps[0]["up"], self.scopes)
+				path = enclosingPath(rootSteps(self.scope.path), steps[0]["up"], self.scopes)
 				if len(steps) == 1:
-					parents = [scope for scope in self.scopes if rootSteps(scope.path) == parent]
-					if len(parents) != 1:
+					parent = enclosingScope(path, self.scopes)
+					if parent is None:
 						raise ValueError("An enclosing instance reference requires one defining parent scope")
-					return self.model.resolveType(TypeExpr(path=parents[0].type)), False
+					return self.model.resolveType(TypeExpr(path=parent.type)), False
 			return None, any(step == {"each": True} for step in steps)
 		if "coalesce" in expr:
 			inferred = [self.resolve(item) for item in expr["coalesce"]]
@@ -195,11 +197,11 @@ class ExpressionResolver:
 		lifted = False
 		for arg, signature in zip(args, function.args):
 			actual, plural = self.resolve(arg)
-			checkAssignment(self.model, (actual, False), _resolveSignature(self.model, signature), True, name)
+			checkAssignment(self.model, (actual, False), resolveSignature(self.model, signature), True, name)
 			if signature.collection and actual is not None and not plural:
 				raise ValueError(f"'{name}' requires a collection argument")
 			lifted |= plural and not signature.collection
-		return _resolveSignature(self.model, function.result), function.result.collection or lifted
+		return resolveSignature(self.model, function.result), function.result.collection or lifted
 
 
 class Operator:

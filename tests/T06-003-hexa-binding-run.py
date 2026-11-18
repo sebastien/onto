@@ -10,11 +10,12 @@ import pytest
 pytest.importorskip("hexa.shapes")
 
 from hexa.runtime import run  # noqa: E402
+from hexa.shapes import Failure  # noqa: E402
 
 from onto import Source, loadBinding, loadOntology, observationsToJson, reconcileObservations  # noqa: E402
 from onto.integrations.hexa.operations import HexaBindingOperator, bindingApprove  # noqa: E402
 from onto.integrations.hexa.runs import outputLog  # noqa: E402
-from tests._helpers import _specExample  # noqa: E402
+from tests.helpers import specExample  # noqa: E402
 
 # -----------------------------------------------------------------------------
 #
@@ -23,9 +24,9 @@ from tests._helpers import _specExample  # noqa: E402
 # -----------------------------------------------------------------------------
 
 
-EXCHANGE = loadOntology([Source("exchange.onto", _specExample("spec-04-mapping", 1))])
-TEXT = _specExample("spec-04-mapping", 2)
-FEED = json.loads(_specExample("spec-04-mapping", 0, "json"))
+EXCHANGE = loadOntology([Source("exchange.onto", specExample("spec-04-mapping", 1))])
+TEXT = specExample("spec-04-mapping", 2)
+FEED = json.loads(specExample("spec-04-mapping", 0, "json"))
 SRC = "feed:instruments"
 BOND = "Instrument_US0000000019"
 EQUITY = "Instrument_US0000000001"
@@ -36,17 +37,17 @@ class Store:
 	"""A host store: appended logs and pending retractions per (by, src)."""
 
 	def __init__(self):
-		self.logs: dict[str, list[dict]] = {}
-		self.pending: dict[str, list[dict]] = {}
+		self.logs: dict[tuple[str, str], list[dict]] = {}
+		self.pending: dict[tuple[str, str], list[dict]] = {}
 		self.requests: list[dict] = []
 
 	def env(self) -> dict:
-		return {"OutputPreviousRead": self.previous, "RetractionsPendingRead": lambda request, context: self.pending.get(request["src"], []),
+		return {"OutputPreviousRead": self.previous, "RetractionsPendingRead": lambda request, context: self.pending.get((request["by"], request["src"]), []),
 			"ClockRead": lambda context: "2026-11-12T00:00:00Z"}
 
 	def previous(self, request, context):
 		self.requests.append(request)
-		logs = self.logs.get(request["src"])
+		logs = self.logs.get((request["by"], request["src"]))
 		if not logs:
 			return None
 		claims, retractions = [], []
@@ -59,10 +60,10 @@ class Store:
 			instances |= log["instances"]
 		return outputLog({**logs[-1], "instances": instances, "sources": {}}, claims, retractions)
 
-	def apply(self, outcome, src=SRC):
+	def apply(self, outcome, src=SRC, by="bind:Exchange"):
 		if outcome.status == "Applied":
-			self.logs.setdefault(src, []).append(outcome.log)
-			self.pending[src] = outcome.held
+			self.logs.setdefault((by, src), []).append(outcome.log)
+			self.pending[by, src] = outcome.held
 
 
 def binding(text: str = TEXT):
@@ -147,13 +148,35 @@ def test_stale_slots_are_kept_and_reported():
 	assert outcome.report.stale == [{"src": SRC, "s": DIVIDEND, "p": "PayableDate", "reason": "DatePattern.Invalid"}]
 
 
-def test_unidentified_records_protect_their_type_from_instance_retractions():
+@pytest.mark.parametrize(("owner", "other", "verb"), [("Person", "Team", "joins"), ("Team", "Person", "hasMember")])
+def test_a_stale_link_protects_only_its_subject_and_verb(owner, other, verb):
+	ontology = loadOntology([Source("links.onto", "@ontology Links\nPerson\nTeam\nPerson -joins/hasMember-> Team\n")])
+	text = f"@binding Links retract=100%\n{owner} <- rows[*] {{id=id}}\n  {verb} <- ref({other}, target)\n"
+	ops = HexaBindingOperator(ontology)
+	program = ops.compile(loadBinding(ontology, Source("links.bind", text)))
+	store = Store()
+
+	def rerun(rows):
+		result = asyncio.run(run(store.env(), program.stages.BindingRun, [{"src": SRC, "document": {"rows": rows}}]))
+		return ops.outcome(program, result)
+
+	first = rerun([{"id": "one", "target": "x"}, {"id": "two", "target": "x"}])
+	assert len([claim for claim in first.log["claims"] if "rel" in claim]) == 2
+	store.apply(first, by="bind:Links")
+	outcome = rerun([{"id": "one", "target": False}, {"id": "two"}])
+	assert [(item["s"], item["verb"]) for item in outcome.report.stale] == [(f"{owner}_one", verb)]
+	assert [set(item["roles"].values()) for item in outcome.log["retractions"]] == [{f"{owner}_two", f"{other}_x"}]
+
+
+def test_unidentified_records_protect_unmatched_slots_but_not_identified_records():
 	store = Store()
 	store.apply(runOnce(store, feed())[1])
 	data = feed()
 	del data["instruments"][1]["isin"]
+	del data["instruments"][0]["name"]
 	_, outcome = runOnce(store, data)
-	assert (BOND, "exists") not in retractions(outcome)
+	assert retractions(outcome) == [(EQUITY, "Name")]
+	assert not outcome.held
 	assert [gap.reason for gap in outcome.report.gaps if gap.target == "Exchange/Instrument"] == ["Binding.KeyMissing"]
 
 
@@ -165,6 +188,25 @@ def test_deleted_records_retract_their_instance_whatever_completeness_says():
 	data["issuers"][0]["status"] = "gone"
 	_, outcome = runOnce(store, data, text=text)
 	assert retractions(outcome) == [("Issuer_C_2D17", "exists")]
+
+
+def test_an_older_lenient_snapshot_does_not_retract_an_explicitly_deleted_record():
+	text = TEXT.replace("format=json", "format=json complete=none").replace("Issuer <- issuers[*] {id=id}", "Issuer <- issuers[*] {id=id, deleted=status:gone}")
+	store = Store()
+	store.apply(runOnce(store, feed(), text=text)[1])
+	def deletedDocument(src, at):
+		data = feed(asOf=at)
+		data["issuers"][0]["status"] = "gone"
+		return {"src": src, "document": data}
+
+	ops = HexaBindingOperator(EXCHANGE, mode="lenient")
+	program = ops.compile(binding(text))
+	result = asyncio.run(run(store.env(), program.stages.BindingRun,
+		[deletedDocument(SRC, "2026-11-09"), deletedDocument("feed:new", "2026-11-11")]))
+	outcome = ops.outcome(program, result)
+	assert outcome.report.safeguards == [f"Binding.SnapshotOlder:{SRC}"]
+	assert retractions(outcome) == [("Issuer_C_2D17", "exists")] and outcome.held == []
+	assert outcome.log["sources"][outcome.log["retractions"][0]["src"]] == "feed:new"
 
 
 # -----------------------------------------------------------------------------
@@ -248,6 +290,52 @@ def test_snapshots_replacing_a_previous_token():
 	assert outcome.log["sources"][retraction["of"]] == "feed:2026-11-10" and outcome.log["sources"][retraction["src"]] == "feed:2026-11-11"
 
 
+def test_explicit_deletion_retracts_the_replaced_token():
+	text = TEXT.replace("Issuer <- issuers[*] {id=id}", "Issuer <- issuers[*] {id=id, deleted=status:gone}")
+	store = Store()
+	old, new = "feed:2026-11-10", "feed:2026-11-11"
+	store.apply(runOnce(store, feed(), text=text, src=old)[1], src=old)
+	data = feed(asOf="2026-11-11")
+	data["issuers"][0]["status"] = "gone"
+	_, outcome = runOnce(store, data, text=text, src=new, replaces=old)
+	assert retractions(outcome) == [("Issuer_C_2D17", "exists")]
+	item = outcome.log["retractions"][0]
+	assert (outcome.log["sources"][item["src"]], outcome.log["sources"][item["of"]]) == (new, old)
+	assert not outcome.held
+
+
+def test_documents_with_the_same_source_compose_one_delta():
+	store = Store()
+	ops = HexaBindingOperator(EXCHANGE)
+	program = ops.compile(binding())
+	data = feed()
+	del data["instruments"][1]["name"]
+	data["instruments"][0]["name"] = "Changed"
+	items = [{"src": SRC, "document": feed(instruments=data["instruments"], issuers=[])},
+		{"src": SRC, "document": feed(instruments=[])}]
+
+	def rerun():
+		result = asyncio.run(run(store.env(), program.stages.BindingRun, items))
+		return ops.outcome(program, result)
+
+	_, first = runOnce(store, feed())
+	assert len(rerun().log["claims"]) == len(first.log["claims"]) - 1
+	store.apply(first)
+	outcome = rerun()
+	assert [(claim["s"], claim["p"]) for claim in outcome.log["claims"]] == [(EQUITY, "Name")]
+	assert retractions(outcome) == [(BOND, "Name")]
+
+
+def test_pages_of_one_snapshot_cannot_replace_different_sources():
+	store = Store()
+	ops = HexaBindingOperator(EXCHANGE)
+	program = ops.compile(binding())
+	items = [{"src": SRC, "replaces": prior, "document": feed()} for prior in ("feed:a", "feed:b")]
+	with pytest.raises(Failure) as failure:
+		asyncio.run(run(store.env(), program.stages.BindingRun, items))
+	assert str(failure.value.code) == "Binding.ReplacementConflicting" and not store.requests
+
+
 def test_named_bindings_claim_and_retract_under_their_own_by():
 	"""Bindings of one ontology over one `src` stay apart when named: `by=bind:<Namespace>/<name>`."""
 	text = TEXT.replace("@binding Exchange rev=2026-11-10", "@binding Exchange rev=2026-11-10 name=instruments-feed", 1)
@@ -255,9 +343,15 @@ def test_named_bindings_claim_and_retract_under_their_own_by():
 	store = Store()
 	_, first = runOnce(store, feed(), text=text)
 	assert {claim["by"] for claim in first.log["claims"]} == {"bind:Exchange/instruments-feed"}
-	store.apply(first)
-	runOnce(store, feed(), text=text)
+	store.apply(first, by="bind:Exchange/instruments-feed")
+	_, repeated = runOnce(store, feed(), text=text)
+	assert not repeated.log["claims"]
 	assert store.requests[-1] == {"by": "bind:Exchange/instruments-feed", "src": SRC}
+	other = text.replace("name=instruments-feed", "name=alternate-feed", 1)
+	_, independent = runOnce(store, feed(), text=other)
+	assert {claim["by"] for claim in independent.log["claims"]} == {"bind:Exchange/alternate-feed"}
+	assert not independent.log["retractions"]
+	assert store.requests[-1] == {"by": "bind:Exchange/alternate-feed", "src": SRC}
 	with pytest.raises(Exception):
 		binding(TEXT.replace("@binding Exchange rev=2026-11-10", "@binding Exchange rev=2026-11-10 name=\"a b\"", 1))
 

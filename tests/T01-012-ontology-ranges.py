@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from onto import FormatError, Source, loadObservations, loadOntology
+from onto import FormatError, Source, loadObservations, loadOntology, reconcileObservations
 from onto.meta import metaObservations
 from onto.ontology import Model, Operator, TypeExpr, ontologyFromJson, ontologyToJson
 
@@ -97,6 +97,15 @@ def testRangesAreCanonical(text: str, expected: str):
 
 def testRangesInACollection():
 	assert value("  Bands [1..5, 6..10]\n")["set"] == ["1..5", "6..10"]
+
+
+def testEquivalentNumericRangesDoNotConflictOrCountAsDistinctMembers():
+	log = observe("  Weight 1000..2000 {src=a}\n  Weight 1e3..2e3 {src=b}\n")
+	state = reconcileObservations(load(), log)
+	weights = [claim for claim in state.claims if claim.get("p") == "Weight"]
+	assert {claim["v"] for claim in weights} == {"1000..2000", "1e3..2e3"}
+	assert not any(claim.get("conflict") for claim in weights)
+	assert observeCodes("  Bands [1000..2000, 1e3..2e3]\n") == ["value"]
 
 
 @pytest.mark.parametrize("text, code", [

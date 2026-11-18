@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from ..observations.parser import _jsonObject, _jsonString, _jsonValue
+from ..observations.parser import jsonObject, jsonString, jsonValue
 from ..ontology.model import BUILTINS
 from ..text import Diagnostics, Loc, Source, isName, isPath, parseAnnotations, parseArguments, scanUnquoted, sourceLines, splitAnnotations, splitDoc
 from .model import FUNCTIONS_FORMAT, ExampleSource, Function, FunctionDeclaration, FunctionExample, FunctionLibrary, FunctionsDocument, SignatureType
@@ -17,7 +17,7 @@ from .model import FUNCTIONS_FORMAT, ExampleSource, Function, FunctionDeclaratio
 # -----------------------------------------------------------------------------
 
 
-def _splitValues(text: str, separator: str) -> list[str]:
+def splitValues(text: str, separator: str) -> list[str]:
 	parts = []
 	start = 0
 	depth = 0
@@ -40,11 +40,11 @@ def _splitValues(text: str, separator: str) -> list[str]:
 	return parts
 
 
-def _signature(text: str, namespace: str, uses: dict[str, str]) -> SignatureType:
+def parseSignature(text: str, namespace: str, uses: dict[str, str]) -> SignatureType:
 	collection = text.endswith("*")
 	name = text[:-1] if collection else text
 	if name.startswith("Range<") and name.endswith(">"):
-		element = _signature(name[6:-1], namespace, uses)
+		element = parseSignature(name[6:-1], namespace, uses)
 		if element.collection or element.range:
 			raise ValueError(f"Invalid signature type '{text}'")
 		return SignatureType(element.builtin, element.path, collection, True)
@@ -59,7 +59,7 @@ def _signature(text: str, namespace: str, uses: dict[str, str]) -> SignatureType
 	return SignatureType(path=path, collection=collection)
 
 
-def _functionAnnotations(text: str | None, loc: Loc, diag: Diagnostics) -> list[tuple[str, str | bool]]:
+def functionAnnotations(text: str | None, loc: Loc, diag: Diagnostics) -> list[tuple[str, str | bool]]:
 	pairs = parseAnnotations(text, loc, diag)
 	for key, value in pairs:
 		if key == "inverse" and isinstance(value, str) and isName(value):
@@ -70,44 +70,44 @@ def _functionAnnotations(text: str | None, loc: Loc, diag: Diagnostics) -> list[
 	return pairs
 
 
-def _signatureFromJson(data: Any) -> SignatureType:
-	value = _jsonObject(data, (), ("builtin", "path", "collection", "range"))
+def signatureFromJson(data: Any) -> SignatureType:
+	value = jsonObject(data, (), ("builtin", "path", "collection", "range"))
 	variants = set(value) & {"builtin", "path"}
 	if len(variants) != 1 or any(key in value and value[key] is not True for key in ("collection", "range")):
 		raise ValueError("Invalid signature type variant or collection flag")
 	if "builtin" in value and value["builtin"] not in BUILTINS:
 		raise ValueError("Unknown signature built-in")
 	if "path" in value:
-		_jsonString(value["path"], isPath)
+		jsonString(value["path"], isPath)
 	return SignatureType(**value)
 
 
-def _readFunctionsJson(data: Any) -> FunctionLibrary:
-	value = _jsonObject(data, ("format", "namespace", "functions"), ("header", "uses"))
+def readFunctionsJson(data: Any) -> FunctionLibrary:
+	value = jsonObject(data, ("format", "namespace", "functions"), ("header", "uses"))
 	if value["format"] != FUNCTIONS_FORMAT:
 		raise ValueError("Unknown function-library format")
-	namespace = _jsonString(value["namespace"], isPath)
-	header = _jsonObject(value.get("header", {}), (), ("rev",))
+	namespace = jsonString(value["namespace"], isPath)
+	header = jsonObject(value.get("header", {}), (), ("rev",))
 	for token in header.values():
-		_jsonString(token)
+		jsonString(token)
 	uses = value.get("uses", {})
 	if not isinstance(uses, dict) or any(not isinstance(key, str) or not isName(key) for key in uses):
 		raise ValueError("Invalid function-library aliases")
 	for path in uses.values():
-		_jsonString(path, isPath)
+		jsonString(path, isPath)
 	if not isinstance(value["functions"], list) or not value["functions"]:
 		raise ValueError("A function library needs declarations")
 	functions = []
 	for item in value["functions"]:
-		item = _jsonObject(item, ("name", "args", "result", "examples"), ("ann", "doc"))
-		name = _jsonString(item["name"], isName)
+		item = jsonObject(item, ("name", "args", "result", "examples"), ("ann", "doc"))
+		name = jsonString(item["name"], isName)
 		if not isinstance(item["args"], list) or not item["args"]:
 			raise ValueError("A function needs argument types")
-		args = [_signatureFromJson(arg) for arg in item["args"]]
-		result = _signatureFromJson(item["result"])
-		ann = _jsonObject(item.get("ann", {}), (), ("inverse", "nulls"))
+		args = [signatureFromJson(arg) for arg in item["args"]]
+		result = signatureFromJson(item["result"])
+		ann = jsonObject(item.get("ann", {}), (), ("inverse", "nulls"))
 		if "inverse" in ann:
-			_jsonString(ann["inverse"], isName)
+			jsonString(ann["inverse"], isName)
 		if "nulls" in ann and ann["nulls"] is not True:
 			raise ValueError("nulls must be true")
 		doc = item.get("doc")
@@ -117,10 +117,10 @@ def _readFunctionsJson(data: Any) -> FunctionLibrary:
 			raise ValueError("A function needs examples")
 		examples = []
 		for example in item["examples"]:
-			example = _jsonObject(example, ("args", "result"))
+			example = jsonObject(example, ("args", "result"))
 			if not isinstance(example["args"], list) or not example["args"]:
 				raise ValueError("An example needs arguments")
-			examples.append(FunctionExample([_jsonValue(arg) for arg in example["args"]], _jsonValue(example["result"])))
+			examples.append(FunctionExample([jsonValue(arg) for arg in example["args"]], jsonValue(example["result"])))
 		functions.append(Function(name, args, result, examples, list(ann.items()), doc))
 	return FunctionLibrary(namespace, dict(header), dict(uses), functions)
 
@@ -133,8 +133,8 @@ def parseFunctionDeclaration(text: str, namespace: str, uses: dict[str, str], lo
 	if not match:
 		raise ValueError("Invalid function declaration")
 	name, args, result = match.groups()
-	return FunctionDeclaration(name, [_signature(arg.strip(), namespace, uses) for arg in args.split(",")], _signature(result, namespace, uses),
-		ann=_functionAnnotations(annotations, loc, diag), doc=doc, loc=loc)
+	return FunctionDeclaration(name, [parseSignature(arg.strip(), namespace, uses) for arg in args.split(",")], parseSignature(result, namespace, uses),
+		ann=functionAnnotations(annotations, loc, diag), doc=doc, loc=loc)
 
 
 def parseFunctionExample(text: str, loc: Loc) -> ExampleSource:
@@ -142,10 +142,10 @@ def parseFunctionExample(text: str, loc: Loc) -> ExampleSource:
 	body, doc = splitDoc(text)
 	if doc is not None:
 		raise ValueError("Example values containing '--' must be quoted")
-	parts = _splitValues(body, "=>")
+	parts = splitValues(body, "=>")
 	if len(parts) != 2:
 		raise ValueError("An example needs exactly one '=>' separator")
-	return ExampleSource(_splitValues(parts[0], ","), parts[1], loc)
+	return ExampleSource(splitValues(parts[0], ","), parts[1], loc)
 
 
 # -----------------------------------------------------------------------------

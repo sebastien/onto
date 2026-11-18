@@ -9,7 +9,7 @@ import pytest
 
 from onto import FormatError, Source, FunctionsOperator, loadFunctions, loadOntology, FunctionEvaluator, FunctionResult
 import onto.functions as functionsApi
-from tests._helpers import _specExample
+from tests.helpers import specExample
 
 
 def value(name, *args):
@@ -139,7 +139,7 @@ def testRegisteredSignaturesNullHandlingExceptionsAndDetachedValues():
 
 def testSpecificationLibraryExamplesAndInverseRoundTripsExecute():
 	ontology = loadOntology([Source("d", "@ontology Dimensions\nInterestFrequency = Biannually|Monthly|Quarterly|Yearly\n")])
-	library = loadFunctions([ontology], [Source("markets.fn", _specExample("spec-04-mapping", 3))])
+	library = loadFunctions([ontology], [Source("markets.fn", specExample("spec-04-mapping", 3))])
 	forward = {"1": "Monthly", "3": "Quarterly", "6": "Biannually", "12": "Yearly"}
 	evaluator = FunctionEvaluator([ontology], [library], implementations={
 		"Markets/FrequencyFromInterval": forward.__getitem__,

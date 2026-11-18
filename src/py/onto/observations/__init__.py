@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-# NOTE: Keep historical exports; `_name` helpers shared by feature modules remain package-private.
 from .model import (
 	Claim,
 	Statement,

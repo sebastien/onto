@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from onto import FormatError, Source, loadObservations, loadOntology, ontologyFromJson, ontologyToJson
+from onto import FormatError, Source, loadObservations, loadOntology, observationsFromJson, observationsToJson, ontologyFromJson, ontologyToJson, reconcileObservations
 from onto.ontology import Operator
 
 # -----------------------------------------------------------------------------
@@ -98,11 +98,17 @@ def testFacetsAgreeingWithTheirConditionOrNotContradictedAreAccepted(text: str):
 	"s1:Section[GoalsSection]\n  Kind Household\n",
 	"s1:Section\n  Kind Household\n  GoalsSection.Notes Plan\n",
 	"s1:Section[SignedSection]\n  Signed false\n",
+	"@src same=one\ns1:Section[GoalsSection] {src=a}\n  Kind Household {src=same}\n",
 ])
 def testAFacetContradictingItsConditionFromOneSourceIsAnError(text: str):
 	assert observeCodes(text) == ["when"]
 
 
-def testLenientModeKeepsTheClaimsWithTheDiagnostic():
-	observations = observe("s1:Section[GoalsSection]\n  Kind Household\n", mode="lenient")
-	assert [item.code for item in observations.diagnostics] == ["when"]
+def testLenientModeHoldsContradictoryFacetStatementsButKeepsTheDiscriminator():
+	observations = observe("s1:Section[GoalsSection]\n  Kind Household\n  GoalsSection.Notes Plan\n  HouseholdSection.Size 5\n", mode="lenient")
+	assert [item.code for item in observations.diagnostics] == ["when", "when"]
+	assert [gap.n for gap in observations.gaps] == [1, 3]
+	state = reconcileObservations(load(), observations, "lenient")
+	assert [claim.get("p") for claim in state.claims] == ["Kind", "HouseholdSection.Size"]
+	data = observationsToJson(state)
+	assert observationsToJson(observationsFromJson(load(), data, mode="lenient")) == data

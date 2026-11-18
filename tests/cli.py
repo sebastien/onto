@@ -1,4 +1,4 @@
-"""Module: tests._cli — a spec-example workspace and an in-process runner for CLI tests (spec-07)."""
+"""Module: tests.cli — a spec-example workspace and an in-process runner for CLI tests (spec-07)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from onto.cli import run
-from tests._helpers import _specExample
+from tests.helpers import specExample
 
 # -----------------------------------------------------------------------------
 #
@@ -38,7 +38,7 @@ def makeWorkspace(root: Path) -> Path:
 	(root / ".git").mkdir(parents=True)
 	for path, (spec, index) in FILES.items():
 		(root / path).parent.mkdir(parents=True, exist_ok=True)
-		(root / path).write_text(_specExample(spec, index))
+		(root / path).write_text(specExample(spec, index))
 	return root
 
 

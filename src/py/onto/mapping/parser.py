@@ -8,10 +8,10 @@ from typing import Any
 from ..binding.parser import annotationParts, bindingHeader, condition, qualifyPath, readCondition, readDoc
 from ..expressions import expressionFromJson, parseExpression
 from ..functions.model import FUNCTIONS_FORMAT, FunctionDeclaration
-from ..functions.parser import _readFunctionsJson, parseFunctionDeclaration, parseFunctionExample
-from ..observations.parser import _jsonObject, _jsonString
+from ..functions.parser import readFunctionsJson, parseFunctionDeclaration, parseFunctionExample
+from ..observations.parser import jsonObject, jsonString
 from ..ontology.model import Decl, RE_ATTR_PATH, RE_ELEMENT_PATH, RE_MAP, RE_VIEW_ARROW
-from ..ontology.parser import _Context, _declFromJson, _parseMapLine
+from ..ontology.parser import OntologyParseContext, declFromJson, parseMapLine
 from ..text import Diagnostics, Loc, Source, isName, isPath, isToken, parseAnnotations, parseArguments, sourceLines, splitAnnotations, splitDoc
 from .model import HEADER_KEYS, MAPPING_FORMAT, QUALIFIER_KEYS, Mapping, MappingDocument, MappingExclusion, MappingLine, MappingScope
 
@@ -88,30 +88,30 @@ def elementPath(text: str, namespace: str, uses: dict[str, str]) -> str:
 
 
 def readMappingJson(data: Any) -> Mapping:
-	value = _jsonObject(data, ("format", "from", "to", "scopes"), ("header", "uses", "functions", "maps", "exclusions"))
+	value = jsonObject(data, ("format", "from", "to", "scopes"), ("header", "uses", "functions", "maps", "exclusions"))
 	if value["format"] != MAPPING_FORMAT:
 		raise ValueError("Unknown mapping JSON format")
-	fromNamespace, toNamespace = _jsonString(value["from"], isPath), _jsonString(value["to"], isPath)
-	header = _jsonObject(value.get("header", {}), (), HEADER_KEYS)
+	fromNamespace, toNamespace = jsonString(value["from"], isPath), jsonString(value["to"], isPath)
+	header = jsonObject(value.get("header", {}), (), HEADER_KEYS)
 	if "confirm" in header and type(header["confirm"]) is not int or "candidates" in header and type(header["candidates"]) is not bool:
 		raise ValueError("JSON confirm/candidates must be an integer/boolean")
 	uses = value.get("uses", {})
 	if not isinstance(uses, dict) or any(not isinstance(alias, str) or not isName(alias) for alias in uses):
 		raise ValueError("Invalid mapping aliases")
 	for namespace in uses.values():
-		_jsonString(namespace, isPath)
+		jsonString(namespace, isPath)
 	mapping = Mapping(fromNamespace, toNamespace, mappingHeader(header), dict(uses))
 	if "functions" in value:
 		if not isinstance(value["functions"], list):
 			raise ValueError("functions must be an array")
 		if value["functions"]:
-			mapping.functions = _readFunctionsJson({"format": FUNCTIONS_FORMAT, "namespace": fromNamespace, "uses": uses, "functions": value["functions"]}).functions
+			mapping.functions = readFunctionsJson({"format": FUNCTIONS_FORMAT, "namespace": fromNamespace, "uses": uses, "functions": value["functions"]}).functions
 	if not isinstance(value.get("maps", []), list):
 		raise ValueError("maps must be an array")
 	for item in value.get("maps", []):
 		if not isinstance(item, dict) or item.get("kind") != "map":
 			raise ValueError("Only vocabulary maps belong in maps")
-		decl = _declFromJson(item, "local map")
+		decl = declFromJson(item, "local map")
 		readDoc(item)
 		for line in item["lines"]:
 			readDoc(line)
@@ -119,12 +119,12 @@ def readMappingJson(data: Any) -> Mapping:
 	if not isinstance(value["scopes"], list):
 		raise ValueError("scopes must be an array")
 	for item in value["scopes"]:
-		item = _jsonObject(item, ("source", "target"), ("when", "ctx", "valid", "doc", "lines", "name", "present", "into"))
-		scope = MappingScope(_jsonString(item["source"], isPath), _jsonString(item["target"], isPath), doc=readDoc(item))
+		item = jsonObject(item, ("source", "target"), ("when", "ctx", "valid", "doc", "lines", "name", "present", "into"))
+		scope = MappingScope(jsonString(item["source"], isPath), jsonString(item["target"], isPath), doc=readDoc(item))
 		if "when" in item:
 			scope.when = readCondition(item["when"], binding=False)
 		if "name" in item:
-			scope.name = _jsonString(item["name"], isName)
+			scope.name = jsonString(item["name"], isName)
 		for key in ("ctx", "valid", "present", "into"):
 			if key in item:
 				setattr(scope, key, expressionFromJson(item[key]))
@@ -134,19 +134,19 @@ def readMappingJson(data: Any) -> Mapping:
 			if not isinstance(line, dict) or len(set(line) & {"target", "facet", "verb"}) != 1:
 				raise ValueError("A mapping line requires one target kind")
 			kind = next(key for key in ("target", "facet", "verb") if key in line)
-			line = _jsonObject(line, (kind,) if kind == "facet" else (kind, "expr"), ("when", "candidate", "doc") if kind == "facet" else ("when", "src", "as", "reverse", "candidate", "doc", "qualifiers"))
-			name = _jsonString(line[kind], isName if kind == "facet" else lambda text: bool(RE_ELEMENT_PATH.fullmatch(text)))
+			line = jsonObject(line, (kind,) if kind == "facet" else (kind, "expr"), ("when", "candidate", "doc") if kind == "facet" else ("when", "src", "as", "reverse", "candidate", "doc", "qualifiers"))
+			name = jsonString(line[kind], isName if kind == "facet" else lambda text: bool(RE_ELEMENT_PATH.fullmatch(text)))
 			entry = MappingLine(**{kind: name}, doc=readDoc(line))
 			if "expr" in line:
 				entry.expr = expressionFromJson(line["expr"])
 			if "qualifiers" in line:
-				entry.qualifiers = {key: expressionFromJson(expr) for key, expr in _jsonObject(line["qualifiers"], (), QUALIFIER_KEYS).items()}
+				entry.qualifiers = {key: expressionFromJson(expr) for key, expr in jsonObject(line["qualifiers"], (), QUALIFIER_KEYS).items()}
 			if "when" in line:
 				entry.when = readCondition(line["when"], binding=False)
 			if "src" in line:
-				entry.src = _jsonString(line["src"], lambda text: bool(RE_ATTR_PATH.fullmatch(text)))
+				entry.src = jsonString(line["src"], lambda text: bool(RE_ATTR_PATH.fullmatch(text)))
 			if "as" in line:
-				entry.asType = _jsonString(line["as"], isPath)
+				entry.asType = jsonString(line["as"], isPath)
 			for key in ("reverse", "candidate"):
 				if key in line:
 					if line[key] is not True:
@@ -157,10 +157,10 @@ def readMappingJson(data: Any) -> Mapping:
 	if not isinstance(value.get("exclusions", []), list):
 		raise ValueError("exclusions must be an array")
 	for item in value.get("exclusions", []):
-		item = _jsonObject(item, ("path", "reason"), ("doc",))
+		item = jsonObject(item, ("path", "reason"), ("doc",))
 		if item["reason"] not in ("ignore", "out-of-scope"):
 			raise ValueError("Invalid mapping exclusion reason")
-		mapping.exclusions.append(MappingExclusion(_jsonString(item["path"], lambda text: bool(text)), item["reason"], readDoc(item)))
+		mapping.exclusions.append(MappingExclusion(jsonString(item["path"], lambda text: bool(text)), item["reason"], readDoc(item)))
 	return mapping
 
 
@@ -195,7 +195,7 @@ def parseMapping(source: Source) -> MappingDocument:
 				current.examples.append(parseFunctionExample(line.text, line.loc))
 				continue
 			if line.indent and isinstance(current, Decl):
-				if value := _parseMapLine(line, _Context(diag)):
+				if value := parseMapLine(line, OntologyParseContext(diag)):
 					current.mapLines.append(value)
 				continue
 			body, docText = splitDoc(line.text)

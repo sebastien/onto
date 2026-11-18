@@ -85,7 +85,7 @@ class Statement:
 
 @dataclass(slots=True, frozen=True)
 class Gap:
-	"""An unapplied statement with its raw source, expanded text, defaults and diagnostics."""
+	"""An unapplied statement with source, defaults, diagnostics and optional conflict witnesses."""
 
 	n: int
 	raw: str
@@ -94,6 +94,7 @@ class Gap:
 	meta: dict[str, str | bool]
 	ctx: str | None
 	diagnostics: tuple[Diagnostic, ...]
+	witnesses: tuple[Claim, ...] = ()
 
 
 @dataclass(slots=True)
@@ -136,7 +137,7 @@ class Observations:
 # -----------------------------------------------------------------------------
 
 
-def _time(text: str) -> Fraction:
+def timestampValue(text: str) -> Fraction:
 	if not RE_TIME.fullmatch(text):
 		raise ValueError(f"Invalid date or date-time '{text}'")
 	value = datetime.fromisoformat(text) if "T" in text else datetime.combine(date.fromisoformat(text), datetime.min.time())
@@ -149,31 +150,42 @@ def _time(text: str) -> Fraction:
 	return seconds
 
 
-def _valueKey(value: Any) -> str:
+def valueKey(value: Any) -> str:
 	return json.dumps(value, sort_keys=True, ensure_ascii=False)
 
 
-def _valueIdentity(value: Any, numeric: bool) -> tuple:
+def valueIdentity(value: Any, numeric: bool, numericRange: bool = False) -> tuple:
 	# NOTE: Preserve the spec's exponent spelling in JSON, but compare exact numeric values.
 	if numeric and isinstance(value, str) and RE_DECIMAL.fullmatch(value):
 		return ("number", Decimal(value))
+	if numericRange and isinstance(value, str):
+		low, separator, high = value.partition("..")
+		if separator and all(not bound or RE_DECIMAL.fullmatch(bound) for bound in (low, high)):
+			return ("range", tuple(Decimal(bound) if bound else None for bound in (low, high)))
 	if isinstance(value, dict) and "set" in value:
-		return ("set", frozenset(_valueIdentity(item, numeric) for item in value["set"]), value.get("partial", False))
-	return ("value", _valueKey(value))
+		return ("set", frozenset(valueIdentity(item, numeric, numericRange) for item in value["set"]), value.get("partial", False))
+	return ("value", valueKey(value))
 
 
-def _useType(model: Model, attr: Attr, meta: dict[str, Any]) -> ResolvedType:
+def typedValueIdentity(value: Any, resolved: ResolvedType | None) -> tuple:
+	"""Compare observation values using their resolved numeric type, including range bounds."""
+	numbers = ("Integer", "Number", "Amount", "Percent", "Duration")
+	return valueIdentity(value, resolved is not None and resolved.builtin in numbers,
+		resolved is not None and resolved.kind == "range" and resolved.element is not None and resolved.element.builtin in numbers)
+
+
+def useType(model: Model, attr: Attr, meta: dict[str, Any]) -> ResolvedType:
 	qualifiers = [(key, meta[key]) for key in QUALIFIERS if key in meta]
 	# NOTE: Observed qualifiers are a nearer source than the attribute's, so that contradicting a fixed one is reported.
 	return model.resolveType(attr.type, attr.ann, qualifiers)
 
 
-def _slot(claim: Claim) -> tuple[str, str, str]:
+def claimSlot(claim: Claim) -> tuple[str, str, str]:
 	if "same" in claim or "distinct" in claim:
 		kind = "same" if "same" in claim else "distinct"
-		return kind, _valueKey(claim[kind]), ""
+		return kind, valueKey(claim[kind]), ""
 	if "rel" in claim:
-		subject = claim.get("s") or f"{claim['rel']}:{_valueKey(claim['roles'])}"
+		subject = claim.get("s") or f"{claim['rel']}:{valueKey(claim['roles'])}"
 		member = ""
 	else:
 		subject = claim["s"]
@@ -181,11 +193,20 @@ def _slot(claim: Claim) -> tuple[str, str, str]:
 	return subject, member, claim.get("ctx", "")
 
 
-def _order(claim: Claim) -> tuple[Fraction, int]:
-	return (_time(claim["at"]) if "at" in claim else Fraction(0), claim["n"])
+def claimOrder(claim: Claim) -> tuple[Fraction, int]:
+	return (timestampValue(claim["at"]) if "at" in claim else Fraction(0), claim["n"])
 
 
-def _markImplicit(instances: dict[str, dict[str, str | bool]], claims: list[Claim]) -> dict[str, dict[str, str | bool]]:
+def withNamedRelationRoles(claim: Claim, previous: list[Claim]) -> Claim:
+	"""A bare assertion can update a live same-source relation, not supply new endpoints."""
+	if claim.get("exists") and previous:
+		link = previous[-1]
+		if "rel" in link and "s" in link:
+			return {key: value for key, value in claim.items() if key != "exists"} | {"rel": link["rel"], "roles": link["roles"]}
+	return claim
+
+
+def markImplicit(instances: dict[str, dict[str, str | bool]], claims: list[Claim]) -> dict[str, dict[str, str | bool]]:
 	explicit = {claim["s"] for claim in claims if claim.get("exists") or "rel" in claim and "s" in claim}
 	referenced = set()
 	for claim in claims:
@@ -231,7 +252,7 @@ def parseInterval(text: str) -> tuple[Fraction | None, Fraction | None]:
 	parts = text.split("..") if ".." in text else [text, text]
 	if len(parts) != 2 or not any(parts):
 		raise ValueError(f"Invalid interval '{text}'")
-	start, end = (_time(part) if part else None for part in parts)
+	start, end = (timestampValue(part) if part else None for part in parts)
 	if start and end and start > end:
 		raise ValueError(f"Reversed interval '{text}'")
 	return start, end

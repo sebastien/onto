@@ -8,8 +8,8 @@ from typing import Any
 
 from ..expressions import Expression, expressionFromJson, parseExpression
 from ..functions.model import FUNCTIONS_FORMAT, FunctionDeclaration
-from ..functions.parser import _readFunctionsJson, _splitValues, parseFunctionDeclaration, parseFunctionExample
-from ..observations.parser import _jsonObject, _jsonString
+from ..functions.parser import readFunctionsJson, splitValues, parseFunctionDeclaration, parseFunctionExample
+from ..observations.parser import jsonObject, jsonString
 from ..ontology.model import RE_ELEMENT_PATH
 from ..text import Diagnostics, Loc, Source, isName, isPath, isToken, parseArguments, scanUnquoted, sourceLines, splitAnnotations, splitDoc
 from .model import BINDING_FORMAT, HEADER_KEYS, Binding, BindingDocument, BindingExclusion, BindingLine, BindingScope, Condition
@@ -122,17 +122,17 @@ def readDoc(value: dict[str, Any]) -> str | None:
 
 
 def readCondition(data: Any, *, binding: bool = True) -> Condition:
-	value = _jsonObject(data, ("path", "value"))
+	value = jsonObject(data, ("path", "value"))
 	path = expressionFromJson({"path": value["path"]}, binding=binding)
-	return {"path": path["path"], "value": _jsonString(value["value"])}
+	return {"path": path["path"], "value": jsonString(value["value"])}
 
 
 def readBindingJson(data: Any) -> Binding:
-	value = _jsonObject(data, ("format", "ontology", "scopes"), ("header", "uses", "at", "columns", "functions", "exclusions"))
+	value = jsonObject(data, ("format", "ontology", "scopes"), ("header", "uses", "at", "columns", "functions", "exclusions"))
 	if value["format"] != BINDING_FORMAT:
 		raise ValueError("Unknown binding JSON format")
-	namespace = _jsonString(value["ontology"], isPath)
-	header = _jsonObject(value.get("header", {}), (), HEADER_KEYS)
+	namespace = jsonString(value["ontology"], isPath)
+	header = jsonObject(value.get("header", {}), (), HEADER_KEYS)
 	if "confirm" in header and type(header["confirm"]) is not int:
 		raise ValueError("JSON confirm must be an integer")
 	header = bindingHeader(header)
@@ -140,7 +140,7 @@ def readBindingJson(data: Any) -> Binding:
 	if not isinstance(uses, dict) or any(not isinstance(alias, str) or not isName(alias) for alias in uses):
 		raise ValueError("Invalid binding aliases")
 	for path in uses.values():
-		_jsonString(path, isPath)
+		jsonString(path, isPath)
 	binding = Binding(namespace, header, dict(uses))
 	if "at" in value:
 		binding.at = expressionFromJson(value["at"], binding=True)
@@ -152,15 +152,15 @@ def readBindingJson(data: Any) -> Binding:
 		if not isinstance(value["functions"], list):
 			raise ValueError("functions must be an array")
 		if value["functions"]:
-			binding.functions = _readFunctionsJson({"format": FUNCTIONS_FORMAT, "namespace": namespace, "uses": uses, "functions": value["functions"]}).functions
+			binding.functions = readFunctionsJson({"format": FUNCTIONS_FORMAT, "namespace": namespace, "uses": uses, "functions": value["functions"]}).functions
 	if not isinstance(value["scopes"], list):
 		raise ValueError("scopes must be an array")
 	for item in value["scopes"]:
-		item = _jsonObject(item, ("type", "path", "id"), ("valid", "ctx", "deleted", "doc", "lines"))
+		item = jsonObject(item, ("type", "path", "id"), ("valid", "ctx", "deleted", "doc", "lines"))
 		path = expressionFromJson(item["path"], binding=True)
 		if "path" not in path:
 			raise ValueError("A scope requires a document path")
-		scope = BindingScope(_jsonString(item["type"], isPath), path, expressionFromJson(item["id"], binding=True, field=False), doc=readDoc(item))
+		scope = BindingScope(jsonString(item["type"], isPath), path, expressionFromJson(item["id"], binding=True, field=False), doc=readDoc(item))
 		for key in ("valid", "ctx"):
 			if key in item:
 				setattr(scope, key, expressionFromJson(item[key], binding=True, field=False))
@@ -172,8 +172,8 @@ def readBindingJson(data: Any) -> Binding:
 			if not isinstance(line, dict) or len(set(line) & {"target", "facet", "verb"}) != 1:
 				raise ValueError("A binding line needs exactly one target kind")
 			kind = next(key for key in ("target", "facet", "verb") if key in line)
-			line = _jsonObject(line, (kind,) if kind == "facet" else (kind, "expr"), ("when", "doc") if kind == "facet" else ("when", "null", "doc"))
-			name = _jsonString(line[kind], isName if kind == "facet" else lambda text: bool(RE_ELEMENT_PATH.fullmatch(text)))
+			line = jsonObject(line, (kind,) if kind == "facet" else (kind, "expr"), ("when", "doc") if kind == "facet" else ("when", "null", "doc"))
+			name = jsonString(line[kind], isName if kind == "facet" else lambda text: bool(RE_ELEMENT_PATH.fullmatch(text)))
 			entry = BindingLine(**{kind: name}, doc=readDoc(line))
 			if "expr" in line:
 				entry.expr = expressionFromJson(line["expr"], binding=True)
@@ -188,10 +188,10 @@ def readBindingJson(data: Any) -> Binding:
 	if not isinstance(value.get("exclusions", []), list):
 		raise ValueError("exclusions must be an array")
 	for item in value.get("exclusions", []):
-		item = _jsonObject(item, ("path", "reason"), ("doc",))
+		item = jsonObject(item, ("path", "reason"), ("doc",))
 		if item["reason"] not in ("ignore", "out-of-scope"):
 			raise ValueError("Invalid exclusion reason")
-		binding.exclusions.append(BindingExclusion(documentPath(_jsonString(item["path"], lambda text: bool(text))), item["reason"], readDoc(item)))
+		binding.exclusions.append(BindingExclusion(documentPath(jsonString(item["path"], lambda text: bool(text))), item["reason"], readDoc(item)))
 	return binding
 
 
@@ -259,7 +259,7 @@ def parseBinding(source: Source) -> BindingDocument:
 				if doc.columns is not None or annotations is not None or docText is not None:
 					raise ValueError("Invalid or duplicate @columns directive")
 				doc.columns = []
-				for name in _splitValues(match[1], ","):
+				for name in splitValues(match[1], ","):
 					column = json.loads(name) if name.startswith('"') else name
 					if not isinstance(column, str) or not column or not (name.startswith('"') or isName(name)) or column in doc.columns:
 						raise ValueError("Invalid or duplicate CSV column")

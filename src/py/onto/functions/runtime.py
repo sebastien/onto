@@ -12,14 +12,14 @@ import json
 import re
 from typing import Any
 
-from ..observations.formatter import _Printer
-from ..observations.model import Observations, ObservationsDocument, _time, _valueIdentity, _valueKey, canonicalNumber
-from ..observations.parser import _Resolver, _jsonValue
+from ..observations.formatter import ObservationPrinter
+from ..observations.model import Observations, ObservationsDocument, timestampValue, typedValueIdentity, valueIdentity, valueKey, canonicalNumber
+from ..observations.parser import ObservationResolver, jsonValue
 from ..ontology.model import Decl, Model, Ontology
 from ..text import Diagnostics, Loc, annotation
-from .formatter import _valueText
+from .formatter import valueText
 from .model import BUILTIN_ARITIES, Function, FunctionLibrary, FunctionResult, SignatureType
-from .operations import _resolveSignature
+from .operations import resolveSignature
 
 # -----------------------------------------------------------------------------
 #
@@ -28,7 +28,6 @@ from .operations import _resolveSignature
 # -----------------------------------------------------------------------------
 
 
-NUMERIC = ("Integer", "Number", "Amount", "Percent", "Duration")
 PATTERN_TOKENS = {"YYYY": r"\d{4}", "MM": r"\d{2}", "DD": r"\d{2}", "hh": r"\d{2}", "mm": r"\d{2}", "ss": r"\d{2}", "Z": r"Z|[+-]\d{2}:\d{2}"}
 RE_PATTERN = re.compile("|".join(PATTERN_TOKENS))
 EPOCH = date(1970, 1, 1)
@@ -106,12 +105,12 @@ def patternParse(value: str, pattern: str, withTime: bool) -> str:
 		iso += f"T{fields['hh']}:{fields['mm']}:{fields['ss']}" + fields.get("Z", "")
 	elif tokens & {"hh", "mm", "ss", "Z"}:
 		raise ValueError("A date pattern cannot contain time fields")
-	_time(iso)
+	timestampValue(iso)
 	return iso
 
 
 def patternFormat(value: str, pattern: str) -> str:
-	_time(value)
+	timestampValue(value)
 	parsed = datetime.fromisoformat(value) if "T" in value else date.fromisoformat(value)
 	fields = {"YYYY": f"{parsed.year:04}", "MM": f"{parsed.month:02}", "DD": f"{parsed.day:02}"}
 	if isinstance(parsed, datetime):
@@ -130,7 +129,7 @@ def builtin(name: str, args: list[Any]) -> Any:
 		return arithmetic(name, args)
 	if name == "text":
 		# Function-example spelling quotes extra delimiters; text() uses observations spelling instead.
-		return _Printer(Ontology(), Observations({}, {}, {}, [], [])).value(args[0], typed=False)
+		return ObservationPrinter(Ontology(), Observations({}, {}, {}, [], [])).value(args[0], typed=False)
 	if name in ("count", "join"):
 		if not isinstance(args[0], dict) or "set" not in args[0]:
 			raise ValueError(f"'{name}' requires a collection")
@@ -159,7 +158,7 @@ def builtin(name: str, args: list[Any]) -> Any:
 	if name in ("date", "datetime"):
 		return patternParse(*args, withTime=name == "datetime")
 	if name == "epoch":
-		_time(args[0])
+		timestampValue(args[0])
 		if "T" in args[0]:
 			raise ValueError("epoch requires a date, not a date-time")
 		return str((date.fromisoformat(args[0]) - EPOCH).days * 86400)
@@ -181,7 +180,8 @@ class FunctionEvaluator:
 	"""Apply resolved function names; return one outcome per Cartesian application, without claim assembly."""
 
 	def __init__(self, ontologies: list[Ontology] | None = None, libraries: list[FunctionLibrary] | None = None,
-		functions: list[Function] | None = None, maps: list[Decl] | None = None, implementations: dict[str, Callable[..., Any]] | None = None):
+		functions: list[Function] | None = None, maps: list[Decl] | None = None, implementations: dict[str, Callable[..., Any]] | None = None,
+		*, mapTargetModel: Model | None = None):
 		self.ontology = Ontology(decls=[decl for ontology in ontologies or [] for decl in ontology.decls])
 		self.model = Model(self.ontology)
 		self.functions: dict[str, Function] = {}
@@ -190,6 +190,7 @@ class FunctionEvaluator:
 			if decl.path in self.maps or decl.kind != "map":
 				raise ValueError(f"Invalid or duplicate map '{decl.path}'")
 			self.maps[decl.path] = decl
+		self.localMapTargets = {decl.path: mapTargetModel for decl in maps or []} if mapTargetModel is not None else {}
 		for namespace, items in [(library.namespace, library.functions) for library in libraries or []] + [("", functions or [])]:
 			for function in items:
 				name = f"{namespace}/{function.name}" if namespace else function.name
@@ -198,20 +199,25 @@ class FunctionEvaluator:
 				self.functions[name] = deepcopy(function)
 		self.implementations = dict(implementations or {})
 
-	def typedValue(self, value: Any, signature: SignatureType) -> Any:
+	def mapTargetModel(self, name: str) -> Model:
+		"""Local mapping tables can emit into a different revision; ontology tables cannot."""
+		return self.localMapTargets.get(name, self.model)
+
+	def typedValue(self, value: Any, signature: SignatureType, model: Model | None = None) -> Any:
 		"""Validate and detach an observations-encoded value against its concrete signature."""
-		_jsonValue(value)
+		jsonValue(value)
 		if value is None or value == {"unknown": True}:
 			return deepcopy(value)
-		resolved = _resolveSignature(self.model, signature)
+		model = model if model is not None else self.model
+		resolved = resolveSignature(model, signature)
 		if signature.collection:
 			if not isinstance(value, dict) or "set" not in value:
 				raise ValueError("Expected a collection")
 			scalar = SignatureType(signature.builtin, signature.path, range=signature.range)
-			members = [self.typedValue(member, scalar) for member in value["set"]]
-			if len({_valueIdentity(member, resolved.builtin in NUMERIC) for member in members}) != len(members):
+			members = [self.typedValue(member, scalar, model) for member in value["set"]]
+			if len({typedValueIdentity(member, resolved) for member in members}) != len(members):
 				raise ValueError("Duplicate collection members")
-			return {"set": sorted(members, key=_valueKey), **({"partial": True} if value.get("partial") else {})}
+			return {"set": sorted(members, key=valueKey), **({"partial": True} if value.get("partial") else {})}
 		if resolved.kind in ("entity", "relation"):
 			if not isinstance(value, dict) or set(value) != {"ref"}:
 				raise ValueError("Expected a reference")
@@ -220,8 +226,8 @@ class FunctionEvaluator:
 				raise ValueError("Expected a boolean")
 		elif not isinstance(value, str):
 			raise ValueError("Expected a string-encoded scalar")
-		raw = json.dumps(value, ensure_ascii=False) if resolved.builtin == "Text" else _valueText(value)
-		return _Resolver(self.ontology, ObservationsDocument()).scalar(raw, resolved, Loc("function", 0))
+		raw = json.dumps(value, ensure_ascii=False) if resolved.builtin == "Text" else valueText(value)
+		return ObservationResolver(model.ontology, ObservationsDocument()).scalar(raw, resolved, Loc("function", 0))
 
 	def evaluate(self, name: str, args: list[Any]) -> list[FunctionResult]:
 		"""Apply a resolved name with isolated inputs; configuration errors raise, domain failures return reasons."""
@@ -241,17 +247,16 @@ class FunctionEvaluator:
 			raise ValueError(f"Invalid argument count for '{name}'")
 		try:
 			for index, arg in enumerate(args):
-				_jsonValue(arg)
+				jsonValue(arg)
 				if isinstance(arg, dict) and "set" in arg:
-					isNumeric = name in ("sum", "multiply", "subtract", "divide") or name == "date" and len(args) == 1
-					if function is not None:
-						isNumeric = _resolveSignature(self.model, function.args[index]).builtin in NUMERIC
-					if len({_valueIdentity(member, isNumeric) for member in arg["set"]}) != len(arg["set"]):
+					resolved = resolveSignature(self.model, function.args[index]) if function is not None else None
+					isNumericBuiltin = name in ("sum", "multiply", "subtract", "divide") or name == "date" and len(args) == 1
+					if len({typedValueIdentity(member, resolved) if resolved is not None else valueIdentity(member, isNumericBuiltin) for member in arg["set"]}) != len(arg["set"]):
 						raise ValueError("Duplicate collection members")
 			collections = [signature.collection for signature in function.args] if function else [name in ("join", "count") and index == 0 for index in range(len(args))]
 			lifted = [isinstance(arg, dict) and "set" in arg and not whole for arg, whole in zip(args, collections)]
 			partial = any(lift and arg.get("partial", False) for arg, lift in zip(args, lifted))
-			combinations = [sorted(arg["set"], key=_valueKey) if lift else [arg] for arg, lift in zip(args, lifted)]
+			combinations = [sorted(arg["set"], key=valueKey) if lift else [arg] for arg, lift in zip(args, lifted)]
 		except (ValueError, TypeError, DecimalException) as error:
 			return [FunctionResult(reason=str(error))]
 		return [self.apply(name, list(items), function, mapping, partial) for items in product(*combinations)]
@@ -273,7 +278,7 @@ class FunctionEvaluator:
 				matches = {line.toValue for line in mapping.mapLines if line.fromValue == arg}
 				if len(matches) != 1:
 					raise ValueError("Missing or ambiguous value map entry")
-				result = self.typedValue(matches.pop(), SignatureType(path=mapping.mapTo))
+				result = self.typedValue(matches.pop(), SignatureType(path=mapping.mapTo), self.mapTargetModel(name))
 			else:
 				result = builtin(name, args)
 			return FunctionResult(deepcopy(result), partial=partial)
@@ -283,8 +288,8 @@ class FunctionEvaluator:
 
 	def identity(self, value: Any, signature: SignatureType) -> Any:
 		"""Compare sets without order and numeric values without decimal spelling differences."""
-		resolved = _resolveSignature(self.model, signature)
-		return _valueIdentity(value, resolved.builtin in NUMERIC)
+		resolved = resolveSignature(self.model, signature)
+		return typedValueIdentity(value, resolved)
 
 	def conformance(self, declarations: FunctionLibrary | list[Function]) -> int:
 		"""Execute every example and f(inverse(result)); raise located diagnostics on any failure."""

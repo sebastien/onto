@@ -10,7 +10,7 @@ import pytest
 
 from onto import FormatError, Ontology, Source, loadOntology
 from onto.observations import Observations
-from tests._helpers import _semanticClaims, _specExample
+from tests.helpers import semanticClaims, specExample
 from onto.observations import canonicalNumber, formatObservations, loadObservations, observationsFromJson, observationsToJson, parseInterval, parseObservations, printObservationsLog, printObservationsState, reconcileObservations
 
 # -----------------------------------------------------------------------------
@@ -19,8 +19,8 @@ from onto.observations import canonicalNumber, formatObservations, loadObservati
 #
 # -----------------------------------------------------------------------------
 
-EXAMPLE = _specExample("spec-02-observations")
-ONTOLOGY_EXAMPLE = _specExample("spec-01-ontology")
+EXAMPLE = specExample("spec-02-observations")
+ONTOLOGY_EXAMPLE = specExample("spec-01-ontology")
 ONTOLOGY = loadOntology([Source("finance.onto", ONTOLOGY_EXAMPLE)])
 MODEL = loadOntology([Source("model.onto", """@ontology A
 Money = Amount {cur=USD}
@@ -101,7 +101,7 @@ def testCompleteSpecExample():
 
 def testSpecJsonExcerptMatchesTheCompleteLog():
 	data = observationsToJson(load(EXAMPLE, ONTOLOGY))
-	excerpt = json.loads(_specExample("spec-02-observations", kind="json"))
+	excerpt = json.loads(specExample("spec-02-observations", kind="json"))
 	for key in ("format", "obs", "sources"):
 		assert data[key] == excerpt[key]
 	for handle, instance in excerpt["instances"].items():
@@ -330,7 +330,7 @@ def testLogRoundTripPreservesClaimsAndRetractions():
 	before = load(EXAMPLE, ONTOLOGY)
 	text = printObservationsLog(ONTOLOGY, before)
 	after = load(text, ONTOLOGY)
-	assert _semanticClaims(before) == _semanticClaims(after)
+	assert semanticClaims(before) == semanticClaims(after)
 	assert [{key: value for key, value in claim.items() if key != "n"} for claim in before.retractions] == [{key: value for key, value in claim.items() if key != "n"} for claim in after.retractions]
 	assert before.instances == after.instances
 
@@ -374,7 +374,7 @@ def testAnnotationLikeTextPreservesValuesAndMetadata(form: str, value: str) -> N
 	before = load("@obs A\np:Person\np.Name " + json.dumps(value) + "\n")
 	printed = formatObservations(MODEL, Source("t", "@obs A\np:Person\np.Name " + json.dumps(value) + "\n"), form)
 	after = load(printed)
-	assert _semanticClaims(after) == _semanticClaims(before)
+	assert semanticClaims(after) == semanticClaims(before)
 	assert observationsFromJson(MODEL, observationsToJson(before)) == before
 
 
@@ -382,14 +382,14 @@ def testStateOnlyEmitsRealExistenceClaims():
 	log = state("@obs A\np:Person\n- p\np.Name Back\n")
 	text = printObservationsState(MODEL, log)
 	assert "p:Person.Name Back" in text
-	assert _semanticClaims(load(text)) == _semanticClaims(log)
+	assert semanticClaims(load(text)) == semanticClaims(log)
 
 
 def testStatePreservesMultipleSourcesAndConflicts():
 	log = state("@obs A\np:Person {src=a}\np {src=b}\np.Name A {src=a}\np.Name B {src=b}\n")
 	text = printObservationsState(MODEL, log)
 	assert text.count("{conflict") + text.count(", conflict}") == 2
-	assert _semanticClaims(reconcileObservations(MODEL, load(text))) == _semanticClaims(log)
+	assert semanticClaims(reconcileObservations(MODEL, load(text))) == semanticClaims(log)
 	assert formatObservations(MODEL, Source("t", text)) == text
 
 
@@ -454,6 +454,18 @@ def testSharedBinaryVerbsAndUnknownParticipantsPrintUnambiguously():
 		load("@obs A\np:Person\np owns ?\n", ontology)
 	unknown = "@obs A\np:Person\np knows ?\n"
 	assert "p knows ?" in formatObservations(MODEL, Source("t", unknown))
+
+
+@pytest.mark.parametrize("prefix", ["", "r: "])
+def testInverseLinkWithAnUnknownObjectRoundTrips(prefix: str):
+	log = load(f"@obs A\n{prefix}p:Person memberOf ?\n")
+	assert log.claims[0]["roles"] == {"Household": "?", "Person": "p"}
+	for observations, printer in [(log, printObservationsLog), (reconcileObservations(MODEL, log), printObservationsState)]:
+		text = printer(MODEL, observations)
+		assert f"{prefix}p:Person memberOf ?" in text
+		assert load(text).claims == observations.claims
+		data = observationsToJson(observations)
+		assert observationsFromJson(MODEL, data).claims == observations.claims
 
 
 def testJsonRejectsWrongBinaryRolesAndIncompatibleNamedType():

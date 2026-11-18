@@ -17,7 +17,7 @@ from onto import (  # noqa: E402
 )
 from onto.integrations.hexa.operations import HexaBindingOperator, HexaMappingOperator  # noqa: E402
 from onto.referential import loadReferential  # noqa: E402
-from tests._helpers import _specExample  # noqa: E402
+from tests.helpers import specExample  # noqa: E402
 
 # -----------------------------------------------------------------------------
 #
@@ -26,16 +26,16 @@ from tests._helpers import _specExample  # noqa: E402
 # -----------------------------------------------------------------------------
 
 
-EXCHANGE = loadOntology([Source("exchange.onto", _specExample("spec-04-mapping", 1))])
-FINANCE = loadOntology([Source("finance.onto", _specExample("spec-01-ontology"))])
-SHEET = loadOntology([Source("sheet.onto", _specExample("spec-04-mapping", 7))])
-REFERENTIAL = loadReferential([FINANCE, EXCHANGE], [Source("market-ids.ref", _specExample("spec-04-mapping", 4))])
-TEXT = _specExample("spec-04-mapping", 2)
+EXCHANGE = loadOntology([Source("exchange.onto", specExample("spec-04-mapping", 1))])
+FINANCE = loadOntology([Source("finance.onto", specExample("spec-01-ontology"))])
+SHEET = loadOntology([Source("sheet.onto", specExample("spec-04-mapping", 7))])
+REFERENTIAL = loadReferential([FINANCE, EXCHANGE], [Source("market-ids.ref", specExample("spec-04-mapping", 4))])
+TEXT = specExample("spec-04-mapping", 2)
 BINDING = loadBinding(EXCHANGE, Source("exchange.bind", TEXT))
-SHEET_BINDING = loadBinding(SHEET, Source("sheet.bind", _specExample("spec-04-mapping", 9)))
-SHEET_MAPPING = loadMapping(FINANCE, SHEET, Source("finance-sheet.map", _specExample("spec-04-mapping", 8)))
-FEED = json.loads(_specExample("spec-04-mapping", 0, "json"))
-WRITTEN_BOND = json.loads(_specExample("spec-06-hexa", 3, "json"))
+SHEET_BINDING = loadBinding(SHEET, Source("sheet.bind", specExample("spec-04-mapping", 9)))
+SHEET_MAPPING = loadMapping(FINANCE, SHEET, Source("finance-sheet.map", specExample("spec-04-mapping", 8)))
+FEED = json.loads(specExample("spec-04-mapping", 0, "json"))
+WRITTEN_BOND = json.loads(specExample("spec-06-hexa", 3, "json"))
 INVENTORY = inventoryFromDocuments([FEED])
 CLOCK = {"ClockRead": lambda context: "2026-11-12"}
 
@@ -79,6 +79,34 @@ def test_nested_records_are_placed_under_their_parent_in_handle_order():
 	assert document["instruments"][0]["dividends"] == [{"amount": 0.42, "currency": "USD", "payableDate": "20260915", "taxCredit": 0.05}]
 	assert "dividends" not in document["instruments"][1]
 	assert document["issuers"] == [{"code": "ACME", "id": "C-17", "registeredName": "Acme Corporation Ltd"}]
+
+
+@pytest.mark.parametrize("parentPath", ["row", "rows[0]", "rows[*]"])
+def test_nested_fixed_object_is_written_after_its_parent(parentPath):
+	ontology = loadOntology([Source("rows.onto", "@ontology Rows\nParent\n  Id Text {key}\nChild\n  Id Text {key}\n  Parent Parent\n")])
+	binding = loadBinding(ontology, Source("rows.bind", f"@binding Rows\nParent <- {parentPath} {{id=id}}\n"
+		f"  Id <- id\nChild <- {parentPath}.child {{id=id}}\n  Id <- id\n  Parent <- ^\n"))
+	row = {"id": "p", "child": {"id": "c"}}
+	previous = {"row": row} if parentPath == "row" else {"rows": [row]}
+	document, report, _ = write(ontology, binding, readState(ontology, binding, previous))
+	assert document == previous
+	assert not report.parentless and not report.gaps
+
+
+@pytest.mark.parametrize(("path", "previous"), [
+	("$", {"id": "1", "name": " a "}),
+	("$[*]", [{"id": "1", "name": " a "}]),
+	("row", {"row": {"id": "1", "name": " a "}}),
+	("row[1]", {"row": [None, {"id": "1", "name": " a "}]}),
+	("rows[*][1]", {"rows": [[None, {"id": "1", "name": " a "}]]}),
+])
+def test_json_writer_keeps_the_scope_shape_and_original_spelling(path, previous):
+	ontology = loadOntology([Source("rows.onto", "@ontology Rows\nRow\n  Id Text {key}\n  Name Text\n")])
+	binding = loadBinding(ontology, Source("rows.bind", f"@binding Rows\nRow <- {path} {{id=id}}\n  Id <- id\n  Name <- trim(name)\n"))
+	state = readState(ontology, binding, previous)
+	document, report, _ = write(ontology, binding, state, previous=previous)
+	assert document == previous
+	assert not report.gaps and sum(report.originals.values()) == 2
 
 
 def test_without_originals_values_take_their_formats():
@@ -145,7 +173,7 @@ def test_null_policies_write_json_null():
 
 
 def test_projection_to_csv_and_reading_back_through_the_reverse_mapping():
-	finance = observationsToJson(reconcileObservations(FINANCE, loadObservations(FINANCE, Source("x.obs", _specExample("spec-02-observations")))))
+	finance = observationsToJson(reconcileObservations(FINANCE, loadObservations(FINANCE, Source("x.obs", specExample("spec-02-observations")))))
 	forward = HexaMappingOperator(FINANCE, SHEET)
 	program = forward.compile(SHEET_MAPPING)
 	sheet, _ = forward.result(program, asyncio.run(run(CLOCK, program.stages.MappingRead, finance)))
@@ -164,7 +192,7 @@ def test_projection_to_csv_and_reading_back_through_the_reverse_mapping():
 
 
 def test_reverse_annotations_claim_on_the_referenced_instance():
-	text = _specExample("spec-04-mapping", 8).replace("  Name <- Instrument.Name\n", "  Name <- Instrument.Name {reverse}\n")
+	text = specExample("spec-04-mapping", 8).replace("  Name <- Instrument.Name\n", "  Name <- Instrument.Name {reverse}\n")
 	mapping = loadMapping(FINANCE, SHEET, Source("m", text))
 	reverse, lossy = mappingReverse(mapping, FINANCE, SHEET, referential="MarketIds")
 	assert "Name" not in [item.line for item in lossy]

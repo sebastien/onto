@@ -25,7 +25,7 @@ from ..text import (
 	annotation,
 )
 from .formatter import (
-	_printObservationsLog,
+	renderObservationsLog,
 	observationsToJson,
 	printObservationsLog,
 	printObservationsState,
@@ -35,18 +35,20 @@ from .model import (
 	Gap,
 	Observations,
 	ObservationsDocument,
-	_markImplicit,
-	_order,
-	_slot,
-	_useType,
-	_valueIdentity,
-	_valueKey,
+	markImplicit,
+	claimOrder,
+	claimSlot,
+	useType,
+	typedValueIdentity,
+	valueKey,
 	parseInterval,
+	withNamedRelationRoles,
 )
 from .parser import (
-	_Resolver,
-	_readObservationsJson,
+	ObservationResolver,
+	readObservationsJson,
 	parseObservations,
+	validateStatements,
 )
 
 # -----------------------------------------------------------------------------
@@ -56,16 +58,16 @@ from .parser import (
 # -----------------------------------------------------------------------------
 
 
-def _overlaps(left: Claim, right: Claim) -> bool:
+def overlaps(left: Claim, right: Claim) -> bool:
 	a, b = parseInterval(left["valid"]) if "valid" in left else (None, None)
 	c, d = parseInterval(right["valid"]) if "valid" in right else (None, None)
 	return (a is None or d is None or a <= d) and (c is None or b is None or c <= b)
 
 
-def _retracts(retraction: Claim, claim: Claim, sources: dict[str, str]) -> bool:
+def retracts(retraction: Claim, claim: Claim, sources: dict[str, str]) -> bool:
 	withdrawn = retraction.get("of", retraction.get("src"))
 	claimed = claim.get("src")
-	if sources.get(withdrawn, withdrawn) != sources.get(claimed, claimed) or _order(claim) > _order(retraction):
+	if sources.get(withdrawn, withdrawn) != sources.get(claimed, claimed) or claimOrder(claim) > claimOrder(retraction):
 		return False
 	if "by" in retraction and retraction["by"] != claim.get("by"):
 		return False
@@ -77,7 +79,7 @@ def _retracts(retraction: Claim, claim: Claim, sources: dict[str, str]) -> bool:
 		if kind in claim:
 			return "p" not in retraction and "facet" not in retraction and retraction.get("s") in claim[kind]
 	if "rel" in retraction:
-		return _slot(retraction) == _slot(claim) or bool(retraction.get("s") and retraction["s"] == claim.get("s"))
+		return claimSlot(retraction) == claimSlot(claim) or bool(retraction.get("s") and retraction["s"] == claim.get("s"))
 	if "s" not in claim or retraction["s"] != claim["s"]:
 		return "p" not in retraction and "facet" not in retraction and (
 			claim.get("ctx") == retraction["s"] or "rel" in claim and "s" not in claim and retraction["s"] in claim["roles"].values()
@@ -90,7 +92,7 @@ def _retracts(retraction: Claim, claim: Claim, sources: dict[str, str]) -> bool:
 	return True
 
 
-def _canonicalise(model: Model, claims: list[Claim], instances: dict[str, dict[str, str | bool]], diag: Diagnostics, mode: str) -> tuple[list[Claim], dict[str, dict[str, str | bool]]]:
+def canonicalise(model: Model, claims: list[Claim], instances: dict[str, dict[str, str | bool]], diag: Diagnostics, mode: str) -> tuple[list[Claim], dict[str, dict[str, str | bool]]]:
 	"""Apply surviving identity links before slot reconciliation; keep links in their original handles."""
 	parents = {handle: handle for handle in instances}
 	types = {handle: instance["type"] for handle, instance in instances.items()}
@@ -113,7 +115,7 @@ def _canonicalise(model: Model, claims: list[Claim], instances: dict[str, dict[s
 			diag.warn("identity", message)
 
 	distinct = [claim["distinct"] for claim in claims if "distinct" in claim]
-	for claim in sorted((claim for claim in claims if "same" in claim), key=_order):
+	for claim in sorted((claim for claim in claims if "same" in claim), key=claimOrder):
 		left, right = claim["same"]
 		a, b = root(left), root(right)
 		if a == b:
@@ -138,7 +140,7 @@ def _canonicalise(model: Model, claims: list[Claim], instances: dict[str, dict[s
 			return {"ref": root(item["ref"])}
 		if isinstance(item, dict) and "set" in item:
 			# Aliases can collapse several previously distinct set members.
-			members = {_valueKey(value(member)): value(member) for member in item["set"]}
+			members = {valueKey(value(member)): value(member) for member in item["set"]}
 			return item | {"set": [members[key] for key in sorted(members)]}
 		return item
 
@@ -167,19 +169,21 @@ def _canonicalise(model: Model, claims: list[Claim], instances: dict[str, dict[s
 	return result, registry
 
 
-def _gapContent(gaps: list[Gap]) -> list[str]:
-	return sorted(_valueKey({"text": gap.text, "meta": gap.meta, "ctx": gap.ctx,
+def gapContent(gaps: list[Gap]) -> list[str]:
+	return sorted(valueKey({"text": gap.text, "meta": gap.meta, "ctx": gap.ctx,
 		"diagnostics": sorted({(item.code, item.message) for item in gap.diagnostics})}) for gap in gaps)
 
 
-def _claimContent(claims: list[Claim]) -> list[str]:
+def claimContent(claims: list[Claim]) -> list[str]:
 	# NOTE: Ordinals are source-document locations; printing may regroup headers and renumber them.
 	def content(claim: Claim) -> Claim:
 		result = {key: value for key, value in claim.items() if key not in ("n", "conflict")}
+		if "conf" in result:
+			result["conf"] = float(result["conf"])
 		if isinstance(result.get("v"), dict) and "set" in result["v"]:
-			result["v"] = result["v"] | {"set": sorted(result["v"]["set"], key=_valueKey)}
+			result["v"] = result["v"] | {"set": sorted(result["v"]["set"], key=valueKey)}
 		return result
-	return sorted(_valueKey(content(claim)) for claim in claims)
+	return sorted(valueKey(content(claim)) for claim in claims)
 
 
 # -----------------------------------------------------------------------------
@@ -238,8 +242,14 @@ class Operator:
 # -----------------------------------------------------------------------------
 
 
+def sourceToken(observations: Observations, claim: Claim) -> str | None:
+	"""Resolve a claim's provenance alias, keeping bare tokens and absent sources."""
+	name = claim.get("src")
+	return observations.sources.get(name, name)
+
+
 def reconcileObservations(ontology: Ontology, observations: Observations, mode: str = "strict") -> Observations:
-	"""Apply withdrawals, identity links and supersession; `mode` controls identity conflicts."""
+	"""Apply withdrawals, identity links and supersession; `mode` controls conflicting joins."""
 	if mode not in ("strict", "lenient"):
 		raise ValueError("mode must be strict or lenient")
 	if mode == "strict" and observations.gaps:
@@ -249,52 +259,46 @@ def reconcileObservations(ontology: Ontology, observations: Observations, mode: 
 	instances = observations.instances
 	active: dict[tuple[tuple[str, str, str], str | None], list[Claim]] = {}
 
-	def source(claim: Claim) -> str | None:
-		name = claim.get("src")
-		return observations.sources.get(name, name)
-
-	def multi(claim: Claim) -> bool:
+	def multi(claim: Claim, registry: dict[str, dict[str, str | bool]]) -> bool:
 		if "p" not in claim:
 			return False
-		attr = model.lookup(instances[claim["s"]]["type"], claim["p"])
+		attr = model.lookup(registry[claim["s"]]["type"], claim["p"])
 		return (attr.card or model.defaultCard) in ("+", "*")
 
-	def meaning(claim: Claim) -> tuple:
-		numeric = False
-		qualifiers = {}
+	def meaning(claim: Claim, registry: dict[str, dict[str, str | bool]]) -> tuple:
+		resolved = None
 		if "p" in claim:
-			attr = model.lookup(instances[claim["s"]]["type"], claim["p"])
-			resolved = _useType(model, attr, claim)
-			numeric = resolved.builtin in ("Integer", "Number", "Amount", "Percent", "Duration")
-			qualifiers = resolved.qualifiers
-		value = _valueIdentity(claim["v"], numeric) if "v" in claim else ("missing",)
-		return value, _valueKey(claim.get("roles")), _valueKey(qualifiers)
+			attr = model.lookup(registry[claim["s"]]["type"], claim["p"])
+			resolved = useType(model, attr, claim)
+		value = typedValueIdentity(claim["v"], resolved) if "v" in claim else ("missing",)
+		return value, valueKey(claim.get("roles")), valueKey(resolved.qualifiers if resolved is not None else {})
 
-	for item, retract in sorted([(claim, False) for claim in observations.claims] + [(claim, True) for claim in observations.retractions], key=lambda pair: _order(pair[0])):
+	for item, retract in sorted([(claim, False) for claim in observations.claims] + [(claim, True) for claim in observations.retractions], key=lambda pair: claimOrder(pair[0])):
 		item = {key: value for key, value in item.items() if key != "conflict"}
 		if not retract:
 			# Keep history until withdrawals are applied: a by-scoped retraction must not erase
 			# another producer merely because its claim had been superseded in the same source.
-			active.setdefault((_slot(item), source(item)), []).append(item)
+			history = active.setdefault((claimSlot(item), sourceToken(observations, item)), [])
+			history.append(withNamedRelationRoles(item, history))
 			continue
 		removed = False
 		for key, claims in list(active.items()):
 			kept = []
 			for claim in claims:
-				if not _retracts(item, claim, observations.sources):
+				if not retracts(item, claim, observations.sources):
 					kept.append(claim)
 					continue
 				if "v" not in item:
 					removed = True
 					continue
-				if _slot(item) != _slot(claim):
+				if claimSlot(item) != claimSlot(claim):
 					kept.append(claim)
 					continue
-				if meaning(item) == meaning(claim):
+				if meaning(item, instances) == meaning(claim, instances):
 					removed = True
 					continue
 				if isinstance(claim.get("v"), dict) and "set" in claim["v"]:
-					members = [member for member in claim["v"]["set"] if meaning(claim | {"v": member}) != meaning(item)]
+					members = [member for member in claim["v"]["set"] if meaning(claim | {"v": member}, instances) != meaning(item, instances)]
 					if len(members) != len(claim["v"]["set"]):
 						removed = True
 						if not members:
@@ -304,71 +308,105 @@ def reconcileObservations(ontology: Ontology, observations: Observations, mode: 
 				kept.append(claim)
 			active[key] = kept
 		if not removed:
-			diag.warn("retraction", f"Retraction of '{_slot(item)}' matched no claim")
-	claims, instances = _canonicalise(model, [claim for group in active.values() for claim in group], observations.instances, diag, mode)
-	active = {}
-	for claim in sorted(claims, key=_order):
-		key = (_slot(claim), source(claim))
-		if "same" in claim or "distinct" in claim:
-			# Links accumulate: dropping an earlier repeated join can change canonical handles on replay.
-			active.setdefault(key, []).append(claim)
-			continue
-		complete = isinstance(claim.get("v"), dict) and "set" in claim["v"] and not claim["v"].get("partial")
-		if not multi(claim) or complete:
-			active[key] = [claim]
-		elif not any(meaning(old) == meaning(claim) for old in active.get(key, [])):
-			active.setdefault(key, []).append(claim)
-	claims = [claim for group in active.values() for claim in group]
+			diag.warn("retraction", f"Retraction of '{claimSlot(item)}' matched no claim")
+	def surviving(items: list[Claim], diagnostics: Diagnostics) -> Observations:
+		rewritten, registry = canonicalise(model, items, instances, diagnostics, mode)
+		slots: dict[tuple[tuple[str, str, str], str | None], list[Claim]] = {}
+		for claim in sorted(rewritten, key=claimOrder):
+			key = (claimSlot(claim), sourceToken(observations, claim))
+			claim = withNamedRelationRoles(claim, slots.get(key, []))
+			if "same" in claim or "distinct" in claim:
+				# Links accumulate: dropping an earlier repeated join can change canonical handles on replay.
+				slots.setdefault(key, []).append(claim)
+				continue
+			complete = isinstance(claim.get("v"), dict) and "set" in claim["v"] and not claim["v"].get("partial")
+			if not multi(claim, registry) or complete:
+				slots[key] = [claim]
+			elif not any(meaning(old, registry) == meaning(claim, registry) for old in slots.get(key, [])):
+				slots.setdefault(key, []).append(claim)
+		return replace(observations, claims=[claim for group in slots.values() for claim in group], instances=registry)
+
+	def stateErrors(state: Observations) -> list[Diagnostic]:
+		return checkExclusive(ontology, state) + checkFacetConditions(ontology, state)
+
+	live = [claim for group in active.values() for claim in group]
+	identityDiagnostics = Diagnostics()
+	state = surviving(live, identityDiagnostics)
+	errors = stateErrors(state)
+	if errors and mode == "lenient" and any("same" in claim for claim in live):
+		# ponytail: replay joins only on failure; index affected groups if conflict-heavy logs get large.
+		accepted = [claim for claim in live if "same" not in claim]
+		for link in sorted((claim for claim in live if "same" in claim), key=claimOrder):
+			trial = stateErrors(surviving([*accepted, link], Diagnostics()))
+			if trial:
+				left, right = link["same"]
+				for error in trial:
+					diag.warn("identity", f"Identity link '{left} = {right}' was not applied: {error.message}")
+			else:
+				accepted.append(link)
+		identityDiagnostics = Diagnostics()
+		state = surviving(accepted, identityDiagnostics)
+		errors = stateErrors(state)
+	diag.items.extend(identityDiagnostics.items + errors)
+	diag.check()
+	claims, instances = state.claims, state.instances
 	conflicted: set[int] = set()
 	# ponytail: pairwise conflict check; group by slot if large observation logs make this measurable.
 	for index, left in enumerate(claims):
-		if multi(left):
+		if multi(left, instances):
 			continue
 		for other, right in enumerate(claims[index + 1:], index + 1):
-			if _slot(left) == _slot(right) and source(left) != source(right) and meaning(left) != meaning(right) and _overlaps(left, right):
+			# An existence-only assertion does not disagree with a source that states endpoints.
+			if ("rel" in left) != ("rel" in right) or claimSlot(left) != claimSlot(right):
+				continue
+			if sourceToken(observations, left) != sourceToken(observations, right) and meaning(left, instances) != meaning(right, instances) and overlaps(left, right):
 				conflicted.update((index, other))
 	claims = [claim | ({"conflict": True} if index in conflicted else {}) for index, claim in enumerate(claims)]
-	return Observations(deepcopy(observations.obs), dict(observations.sources), _markImplicit(instances, claims),
+	return Observations(deepcopy(observations.obs), dict(observations.sources), markImplicit(instances, claims),
 		sorted(deepcopy(claims), key=lambda claim: claim["n"]), [], diag.items, deepcopy(observations.gaps))
 
 
-def _checkExclusive(ontology: Ontology, observations: Observations, doc: ObservationsDocument) -> list[Diagnostic]:
+def checkExclusive(ontology: Ontology, observations: Observations, doc: ObservationsDocument | None = None, witnesses: dict[int, dict[int, Claim]] | None = None) -> list[Diagnostic]:
 	"""Errors for two attributes of one `{one=G}` group stated with values by one source over overlapping periods."""
 	model = Model(ontology)
 	diag = Diagnostics()
-	locations = {statement.n: statement.loc for statement in doc.statements}
+	locations = {statement.n: statement.loc for statement in doc.statements} if doc else {}
 	stated: dict[tuple, list[Claim]] = {}
-	for claim in observations.claims:
+	for claim in sorted(observations.claims, key=claimOrder):
 		value, path, owner = claim.get("v"), claim.get("p"), observations.instances.get(claim.get("s", ""), {}).get("type")
 		if value is None or (isinstance(value, dict) and value.get("unknown")) or not isinstance(path, str) or not isinstance(owner, str):
+			continue
+		if isinstance(value, dict) and "set" in value and not value["set"]:
 			continue
 		attr = model.lookup(owner, path)
 		group = annotation(attr.ann, "one") if attr else None
 		if isinstance(group, str):
 			prefix = path.rpartition(".")[0]
-			stated.setdefault((claim["s"], claim.get("ctx"), prefix, group, claim.get("src")), []).append(claim)
-	for (subject, _, prefix, group, _), claims in stated.items():
-		for index, left in enumerate(claims):
-			clash = next((right for right in claims[index + 1:] if right["p"] != left["p"] and _overlaps(left, right)), None)
+			accepted = stated.setdefault((claim["s"], claim.get("ctx"), prefix, group, sourceToken(observations, claim)), [])
+			clash = next((other for other in accepted if other["p"] != path and overlaps(claim, other)), None)
 			if clash:
+				subject = claim["s"]
 				where = f"{subject}.{prefix}" if prefix else subject
-				diag.error("one", f"'{where}' states both '{left['p']}' and '{clash['p']}' of exclusive group '{group}'", locations.get(clash["n"]))
-				break
+				diag.error("one", f"'{where}' states both '{clash['p']}' and '{path}' of exclusive group '{group}'", locations.get(claim["n"]))
+				if witnesses is not None:
+					witnesses.setdefault(claim["n"], {})[clash["n"]] = clash
+			else:
+				accepted.append(claim)
 	return diag.items
 
 
-def _conditionText(value: object) -> str | None:
+def conditionText(value: object) -> str | None:
 	"""A stated value as a facet condition spells it; None for `null` and `?`."""
 	if value is None or isinstance(value, dict):
 		return None
 	return ("true" if value else "false") if isinstance(value, bool) else str(value)
 
 
-def _checkFacetConditions(ontology: Ontology, observations: Observations, doc: ObservationsDocument) -> list[Diagnostic]:
+def checkFacetConditions(ontology: Ontology, observations: Observations, doc: ObservationsDocument | None = None, witnesses: dict[int, dict[int, Claim]] | None = None) -> list[Diagnostic]:
 	"""Errors for a facet `{when=Attr:Value}` claimed by a source that states another value of `Attr` for the same subject."""
 	model = Model(ontology)
 	diag = Diagnostics()
-	locations = {statement.n: statement.loc for statement in doc.statements}
+	locations = {statement.n: statement.loc for statement in doc.statements} if doc else {}
 	stated: dict[tuple, list[Claim]] = {}
 	facetClaims: list[tuple[Claim, str, str, str]] = []
 	for claim in observations.claims:
@@ -380,18 +418,20 @@ def _checkFacetConditions(ontology: Ontology, observations: Observations, doc: O
 		facet = model.facets(owner).get(name) if name else None
 		if facet is None:
 			if isinstance(path, str):
-				stated.setdefault((claim["s"], claim.get("src"), path), []).append(claim)
+				stated.setdefault((claim["s"], sourceToken(observations, claim), path), []).append(claim)
 			continue
 		condition = annotation(facet.ann, "when")
 		if isinstance(condition, str) and ":" in condition:
 			attr, _, value = condition.partition(":")
 			facetClaims.append((claim, name, attr, value))
 	for claim, name, attr, value in facetClaims:
-		clash = next((other for other in stated.get((claim["s"], claim.get("src"), attr), [])
-			if (text := _conditionText(other.get("v"))) is not None and text != value and _overlaps(claim, other)), None)
+		clash = next((other for other in stated.get((claim["s"], sourceToken(observations, claim), attr), [])
+			if (text := conditionText(other.get("v"))) is not None and text != value and overlaps(claim, other)), None)
 		if clash:
-			diag.error("when", f"'{claim['s']}' has facet '{name}', which applies when {attr} is {value}, but states {attr} {_conditionText(clash['v'])}",
+			diag.error("when", f"'{claim['s']}' has facet '{name}', which applies when {attr} is {value}, but states {attr} {conditionText(clash['v'])}",
 				locations.get(claim["n"]))
+			if witnesses is not None:
+				witnesses.setdefault(claim["n"], {})[clash["n"]] = clash
 	return diag.items
 
 
@@ -399,16 +439,23 @@ def resolveObservations(ontology: Ontology, doc: ObservationsDocument, mode: str
 	"""Type parsed `doc`; lenient mode holds semantically invalid statements as gaps."""
 	if mode not in ("strict", "lenient"):
 		raise ValueError("mode must be strict or lenient")
-	observations = _Resolver(ontology, doc).resolve(mode)
+	observations = ObservationResolver(ontology, doc).resolve(mode)
 	# NOTE: Imported here: `meta` builds on the observations formatter.
-	from ..meta import checkMetaReferences
+	from ..meta import metaReferenceErrors
 
-	diagnostics = checkMetaReferences(ontology, observations, doc) + _checkExclusive(ontology, observations, doc) + _checkFacetConditions(ontology, observations, doc)
-	if not diagnostics:
-		return observations
+	diagnostics, unresolved = metaReferenceErrors(ontology, observations, doc)
 	if mode == "strict":
-		raise FormatError(list(observations.diagnostics) + diagnostics)
-	return replace(observations, diagnostics=list(observations.diagnostics) + diagnostics)
+		return validateStatements(doc, observations,
+			diagnostics + checkExclusive(ontology, observations, doc) + checkFacetConditions(ontology, observations, doc), mode)
+	observations = validateStatements(doc, observations, diagnostics, mode)
+	if unresolved:
+		observations.instances = {handle: item for handle, item in observations.instances.items() if handle not in unresolved}
+	witnesses: dict[int, dict[int, Claim]] = {}
+	observations = validateStatements(doc, observations, checkExclusive(ontology, observations, doc, witnesses), mode)
+	observations = validateStatements(doc, observations, checkFacetConditions(ontology, observations, doc, witnesses), mode)
+	observations.gaps = [replace(gap, witnesses=tuple(deepcopy(claim) for claim in witnesses[gap.n].values()))
+		if gap.n in witnesses else gap for gap in observations.gaps]
+	return observations
 
 
 def loadObservations(ontology: Ontology, source: Source, mode: str = "strict") -> Observations:
@@ -426,18 +473,36 @@ def formatObservations(ontology: Ontology, source: Source, form: str = "state", 
 	raise ValueError("form must be state or log")
 
 
+def gapWitnessesMatch(ontology: Ontology, observations: Observations, gap: Gap, name: str) -> bool:
+	# Isolate historical evidence: it can validate this gap, but must never affect live claims or other gaps.
+	replay = replace(observations, claims=list(gap.witnesses), retractions=[], gaps=[gap])
+	loaded = loadObservations(ontology, Source(name, renderObservationsLog(ontology, replay)), "lenient")
+	return (observations.instances == loaded.instances and not loaded.retractions
+		and claimContent(replay.claims) == claimContent(loaded.claims) and gapContent(replay.gaps) == gapContent(loaded.gaps)
+		and claimContent(replay.claims) == claimContent(list(loaded.gaps[0].witnesses)))
+
+
 def observationsFromJson(ontology: Ontology, data: Any, name: str = "observations.json", mode: str = "strict") -> Observations:
 	"""Validate JSON through text; explicit gaps require lenient mode and remain unapplied."""
 	try:
-		read = _readObservationsJson(ontology, data)
+		read = readObservationsJson(ontology, data)
 		if read.gaps and mode != "lenient":
 			raise ValueError("Gap-bearing JSON requires lenient mode")
-		text = _printObservationsLog(ontology, read)
+		witnessed = [gap for gap in read.gaps if gap.witnesses]
+		replay = replace(read, gaps=[gap for gap in read.gaps if not gap.witnesses])
+		ordinals: list[int] = []
+		text = renderObservationsLog(ontology, replay, ordinals)
 		loaded = loadObservations(ontology, Source(name, text), mode)
 		if read.obs != loaded.obs or read.sources != loaded.sources or read.instances != loaded.instances or any(
-			_claimContent(getattr(read, key)) != _claimContent(getattr(loaded, key)) for key in ("claims", "retractions")
-		) or _gapContent(read.gaps) != _gapContent(loaded.gaps):
+			claimContent(getattr(read, key)) != claimContent(getattr(loaded, key)) for key in ("claims", "retractions")
+		) or gapContent(replay.gaps) != gapContent(loaded.gaps) or any(
+			not gapWitnessesMatch(ontology, read, gap, name) for gap in witnessed
+		):
 			raise ValueError("Observations JSON does not survive its text round trip (including the instance registry)")
+		# Keep the rederived live witnesses for a future reconciliation, using original statement numbers.
+		liveWitnesses = {ordinals[gap.n - 1]: tuple(claim | {"n": ordinals[claim["n"] - 1]} for claim in gap.witnesses)
+			for gap in loaded.gaps if gap.witnesses}
+		read.gaps = [replace(gap, witnesses=liveWitnesses[gap.n]) if gap.n in liveWitnesses else gap for gap in read.gaps]
 	except (ValueError, KeyError) as error:
 		diag = Diagnostics()
 		diag.error("json", str(error), Loc(name, 0))

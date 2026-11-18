@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import re
 
-from ..inventory.parser import canonicalPath
+from ..expressions import parseExpression, printExpression
 from ..text import Diagnostics, Loc, Source
 from .model import HEADER, Formats, FormatsEntry
 
@@ -15,7 +16,8 @@ from .model import HEADER, Formats, FormatsEntry
 # -----------------------------------------------------------------------------
 
 
-RE_FORMAT = re.compile(r"decimals:[0-9]+|case:(?:upper|lower)|trim|padded|sep:.+")
+RE_FORMAT = re.compile(r"decimals:[0-9]+|case:(?:upper|lower)|trim|padded|sep:.+", re.DOTALL)
+DECODER = json.JSONDecoder()
 
 
 # -----------------------------------------------------------------------------
@@ -33,11 +35,20 @@ def isFormat(name: str) -> bool:
 def parseSeen(text: str) -> dict[str, int]:
 	"""`YYYYMMDD 412; YYYY-MM-DD 3` → counts by format."""
 	result: dict[str, int] = {}
-	for item in text.split("; ") if text else []:
-		name, _, count = item.rpartition(" ")
-		if not name or not count.isdigit() or not isFormat(name) or name in result:
+	while text:
+		if text.startswith('"'):
+			name, end = DECODER.raw_decode(text)
+			if text[end:end + 1] != " ":
+				raise ValueError(f"Invalid seen formats '{text}'")
+			count, separator, rest = text[end + 1:].partition("; ")
+			item = text[:end] + " " + count
+		else:
+			item, separator, rest = text.partition("; ")
+			name, _, count = item.rpartition(" ")
+		if not count.isascii() or not count.isdigit() or not isFormat(name) or name in result or separator and not rest:
 			raise ValueError(f"Invalid seen formats '{item}'")
 		result[name] = int(count)
+		text = rest
 	return result
 
 
@@ -64,12 +75,16 @@ def parseFormats(source: Source) -> Formats:
 		try:
 			if len(parts) not in (3, 4) or len(parts) == 4 and parts[3] not in ("pin", ""):
 				raise ValueError("Expected 'path<TAB>format<TAB>seen[<TAB>pin]'")
-			path = canonicalPath(parts[0])
-			if not isFormat(parts[1]):
-				raise ValueError(f"Unknown format '{parts[1]}'")
+			expr = parseExpression(parts[0], binding=True)
+			if "path" not in expr or any(isinstance(step, dict) and "up" in step for step in expr["path"]):
+				raise ValueError(f"Invalid formats path '{parts[0]}'")
+			path = printExpression(expr, binding=True)
+			name = json.loads(parts[1]) if parts[1].startswith('"') else parts[1]
+			if not isFormat(name):
+				raise ValueError(f"Unknown format '{name}'")
 			if path in entries:
 				raise ValueError(f"Duplicate field '{path}'")
-			entries[path] = FormatsEntry(path, parts[1], parseSeen(parts[2]), len(parts) == 4 and parts[3] == "pin", loc)
+			entries[path] = FormatsEntry(path, name, parseSeen(parts[2]), len(parts) == 4 and parts[3] == "pin", loc)
 		except ValueError as error:
 			diag.error("formats", str(error), loc)
 	return Formats(dict(sorted(entries.items())), diag.check())

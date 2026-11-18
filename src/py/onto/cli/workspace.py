@@ -185,7 +185,7 @@ class Indexer:
 		"""Read `path` (or standard input) as `name`, caching its text; None when unreadable."""
 		if name not in self.texts:
 			try:
-				self.texts[name] = sys.stdin.read() if path == STDIN else Path(path).read_text(encoding="utf-8")
+				self.texts[name] = sys.stdin.read() if path == STDIN else Path(path).read_text(encoding="utf-8", newline="")
 			except (OSError, UnicodeError) as error:
 				self.error("cli.read", f"cannot read file: {error.strerror if isinstance(error, OSError) else error}", name)
 				return None
@@ -217,6 +217,9 @@ class Indexer:
 			return entry
 		words, entry.header = headerTokens(lines[0].text)
 		entry.line = lines[0].loc.line
+		if not words:
+			self.error("cli.kind", f"expected @{self.Directive(kind)} header", name, entry.line)
+			return entry
 		if DIRECTIVES.get(words[0]) != kind:
 			self.error("cli.kind", f"a {EXTENSION_OF[kind]} file must start with @{self.Directive(kind)}, not {words[0]}", name, entry.line)
 		args = words[1:]
@@ -229,8 +232,10 @@ class Indexer:
 			if kind in ("observations", "binding"):
 				entry.needs = [args[0]]
 		for line in lines[1:]:
-			if line.indent == 0 and line.text.startswith("@use "):
-				entry.uses.append(line.text.split()[1])
+			if line.indent == 0:
+				directive = line.text.split(maxsplit=2)
+				if len(directive) >= 2 and directive[0] == "@use":
+					entry.uses.append(directive[1])
 			if kind == "referential":
 				entry.uses.extend(RE_FROM.findall(line.text))
 		return entry
@@ -295,7 +300,7 @@ class Workspace:
 		self.reported: dict[tuple, Diagnostic] = {}
 		self.readPaths: set[str] = set()
 		self.named: set[str] = set()
-		# NOTE: Index diagnostics are reported for the files a command touches, or all of them (`ls`).
+		# NOTE: Index diagnostics are reported for the files a command touches, or all of them for a full scan.
 		self.reportAll = False
 
 	# -- Indexing --------------------------------------------------------------
@@ -433,7 +438,8 @@ class Workspace:
 	def source(self, entry: Entry) -> Source:
 		"""The source text of a text entry."""
 		self.readPaths.add(entry.path)
-		return Source(entry.path, self.indexer.texts[entry.path])
+		text = self.indexer.texts[entry.path].replace("\r\n", "\n").replace("\r", "\n")
+		return Source(entry.path, text)
 
 	def located(self, entry: Entry, code: str, message: str) -> FormatError:
 		"""An error at `entry`'s header."""
@@ -471,14 +477,18 @@ class Workspace:
 		if gid in self.contexts:
 			return self.contexts[gid]
 		context = Context()
-		uses = list(dict.fromkeys(name for item in self.group(entry) for name in item.uses))
+		group = self.group(entry)
+		uses = list(dict.fromkeys(name for item in group for name in item.uses))
 		if entry.kind in ("observations", "binding") and entry.needs:
 			context.ontology = self.required("ontology", entry.needs[0], entry)
 		elif entry.kind == "mapping" and entry.needs:
 			context.ontology = self.required("ontology", entry.needs[0], entry)
 			context.toOntology = self.required("ontology", entry.needs[1], entry)
-			if name := entry.header.get("referential"):
-				context.referentials = [self.required("referential", name, entry)]
+			referentials = {name: item for item in group if (name := textOf(item.header.get("referential")))}
+			# NOTE: The mapping parser diagnoses conflicting headers; only resolve an agreed dependency.
+			if len(referentials) == 1:
+				name, owner = next(iter(referentials.items()))
+				context.referentials = [self.required("referential", name, owner)]
 		if entry.kind in CONTEXT_KINDS:
 			context.ontologies, context.libraries = self.optional(uses, entry, CONTEXT_KINDS[entry.kind], set(entry.needs))
 		self.contexts[gid] = context

@@ -104,6 +104,20 @@ def test_scope_index_steps_select_the_list_and_read_the_position_by_a_tuple():
 	assert client["$tuple"][0] == "$Any"
 
 
+@pytest.mark.parametrize("parent", ["$", "$.group", "group"])
+def test_ancestor_reads_use_explicit_root_or_object_scopes(parent):
+	path = "members[*]" if parent == "$" else "group.members[*]"
+	document = {"id": 1, "members": [{"id": 2}]}
+	text = f"""@binding Crm
+Group <- {parent} {{id=id}}
+Member <- {path} {{id=concat(^.id, "/", id)}}
+  Group <- ^
+"""
+	_, log, report = read(text, document if parent == "$" else {"group": document})
+	assert not report.gaps
+	assert any(claim.get("s") == "Member_1_2F2" and claim.get("v") == {"ref": "Group_1"} for claim in log.claims)
+
+
 # Groups of a CRM export, each a list of [member, client] pairs: `pairs[0][*]` is the first group's pairs
 PAIRS = {"pairs": [
 	[[{"id": 11}, {"id": 9}], [{"id": 12}, {"id": 10}]],

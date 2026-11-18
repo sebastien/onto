@@ -19,6 +19,7 @@ from ..text import (
 from .model import (
 	ANNOTATION_KEYS,
 	Attr,
+	BUILTINS,
 	Decl,
 	Dep,
 	HEADER_KEYS,
@@ -40,19 +41,19 @@ from .model import (
 # -----------------------------------------------------------------------------
 
 
-def _annotationRank(key: str) -> tuple[int, str]:
+def annotationRank(key: str) -> tuple[int, str]:
 	return (ANNOTATION_KEYS.index(key) if key in ANNOTATION_KEYS else len(ANNOTATION_KEYS), key)
 
 
-def _sortAnnotations(ann: Annotations) -> Annotations:
+def sortAnnotations(ann: Annotations) -> Annotations:
 	pairs = [
 		(key, "+".join(sorted(value.split("+"))) if key == "privacy" and isinstance(value, str) else value)
 		for key, value in ann
 	]
-	return sorted(pairs, key=lambda pair: _annotationRank(pair[0]))
+	return sorted(pairs, key=lambda pair: annotationRank(pair[0]))
 
 
-def _depKey(dep: Dep) -> tuple[int, int, str]:
+def depKey(dep: Dep) -> tuple[int, int, str]:
 	# NOTE: `$inputs` first, then names and paths, `...` last.
 	if dep.ellipsis:
 		return (2, 0, "...")
@@ -61,7 +62,7 @@ def _depKey(dep: Dep) -> tuple[int, int, str]:
 	return (1, 0, dep.local or f"{dep.path}.{dep.attr}")
 
 
-def _normaliseType(type: TypeExpr | None, ordered: bool, hierarchical: bool = False) -> TypeExpr | None:
+def normaliseType(type: TypeExpr | None, ordered: bool, hierarchical: bool = False) -> TypeExpr | None:
 	if type and type.values is not None:
 		values = vocabularyValues(type.values, ordered) if hierarchical else list(type.values) if ordered else sorted(type.values)
 		return replace(type, values=values)
@@ -88,28 +89,38 @@ class Namer:
 		if path.startswith(prefix):
 			relative = path[len(prefix) :]
 			head, slash, _ = relative.partition("/")
-			if not slash or head not in self.aliases:
+			if not slash or self.aliases.get(head, prefix + head) == prefix + head:
 				return relative
+		if name := self.aliasName(path):
+			return name
+		raise ValueError(f"No short form for '{path}': add a @use alias")
+
+	def aliasName(self, path: str) -> str | None:
+		"""Write `path` through the most specific alias, if any."""
 		best: tuple[str, str] | None = None
 		for alias, target in self.uses:
 			if path.startswith(f"{target}/") and (not best or len(target) > len(best[1])):
 				best = (alias, target)
-		if best:
-			return f"{best[0]}{path[len(best[1]) :]}"
-		raise ValueError(f"No short form for '{path}': add a @use alias")
+		return f"{best[0]}{path[len(best[1]) :]}" if best else None
 
 
 class Printer:
 	"""Renders the lines of one ontology: shortest names, annotations and docs."""
 
 	def __init__(self, ontology: Ontology):
-		self.short = Namer(ontology.namespace, ontology.uses)
+		self.namer = Namer(ontology.namespace, ontology.uses)
+		self.short = self.namer
 
-	def _tail(self, ann: Annotations) -> list[str]:
-		pairs = [(key, self._value(key, value)) for key, value in ann]
+	def typeName(self, path: str) -> str:
+		"""Use an alias when `path` would otherwise look like a built-in type."""
+		short = self.short(path)
+		return (self.namer.aliasName(path) or short) if short in BUILTINS else short
+
+	def tail(self, ann: Annotations) -> list[str]:
+		pairs = [(key, self.annotationValue(key, value)) for key, value in ann]
 		return [part for part in (printAnnotations(pairs, ANNOTATION_KEYS),) if part]
 
-	def _value(self, key: str, value: str | bool) -> str | bool:
+	def annotationValue(self, key: str, value: str | bool) -> str | bool:
 		"""Annotation `value` with its paths in shortest form: path keys, and the vocabulary of a `?:V` qualifier."""
 		if not isinstance(value, str):
 			return value
@@ -120,7 +131,7 @@ class Printer:
 		return value
 
 	@staticmethod
-	def _Join(parts: list[str]) -> str:
+	def AnnotationJoin(parts: list[str]) -> str:
 		return " ".join(part for part in parts if part)
 
 	def typeText(self, type: TypeExpr | None) -> str:
@@ -136,7 +147,7 @@ class Printer:
 		if type.values is not None:
 			prefix = "|" if len(type.values) == 1 and not type.open else ""
 			return prefix + "|".join(type.values) + ("|..." if type.open else "")
-		return f"{self.short(type.path)}.{type.attr}" if type.attr else self.short(type.path)
+		return f"{self.short(type.path)}.{type.attr}" if type.attr else self.typeName(type.path)
 
 	def depText(self, dep: Dep) -> str:
 		"""Render dependency `dep` as a local name, input or attribute path."""
@@ -149,7 +160,7 @@ class Printer:
 	def attr(self, item: Attr, doc: bool = True, indent: str = "") -> str:
 		"""An attribute line after `indent`, with its doc aligned."""
 		deps = f"<- {', '.join(self.depText(dep) for dep in item.deps)}" if item.deps else ""
-		code = self._Join([item.card or "", "~" if item.derived else "", item.name, self.typeText(item.type), deps] + self._tail(item.ann))
+		code = self.AnnotationJoin([item.card or "", "~" if item.derived else "", item.name, self.typeText(item.type), deps] + self.tail(item.ann))
 		return withDoc(indent + code, item.doc if doc else None)
 
 	def head(self, decl: Decl, doc: bool = True) -> str:
@@ -161,28 +172,28 @@ class Printer:
 		short = self.short
 		if decl.kind == "type":
 			tree = decl.definition and decl.definition.values is not None and annotation(decl.ann, "hierarchical") is True
-			return self._Join([f"{short(decl.path)} =", "" if tree else self.typeText(decl.definition)] + self._tail(decl.ann))
+			return self.AnnotationJoin([f"{self.typeName(decl.path)} =", "" if tree else self.typeText(decl.definition)] + self.tail(decl.ann))
 		if decl.kind == "entity":
-			return self._Join([short(decl.path), f"< {short(decl.base)}" if decl.base else ""] + self._tail(decl.ann))
+			return self.AnnotationJoin([self.typeName(decl.path), f"< {short(decl.base)}" if decl.base else ""] + self.tail(decl.ann))
 		if decl.kind == "facet":
-			return self._Join([f"{short(decl.path)} of {short(decl.subject)}"] + self._tail(decl.ann))
+			return self.AnnotationJoin([f"{self.typeName(decl.path)} of {short(decl.subject)}"] + self.tail(decl.ann))
 		if decl.kind == "view":
-			return self._Join([f"@view {short(decl.path)}"] + [])
+			return self.AnnotationJoin([f"@view {short(decl.path)}"] + [])
 		if decl.kind == "domain":
-			return self._Join([f"@domain {short(decl.path)}"] + [])
+			return self.AnnotationJoin([f"@domain {short(decl.path)}"] + [])
 		if decl.kind == "map":
-			return self._Join([f"@map {short(decl.path)} {short(decl.mapFrom)} -> {short(decl.mapTo)}"] + self._tail(decl.ann))
+			return self.AnnotationJoin([f"@map {short(decl.path)} {short(decl.mapFrom)} -> {short(decl.mapTo)}"] + self.tail(decl.ann))
 		if decl.arrow:
 			subject, obj = decl.participants
 			verbs = decl.arrow.verb + (f"/{decl.arrow.inverse}" if decl.arrow.inverse else "")
-			return self._Join(
-				[short(subject.type), f"-{verbs}->", short(obj.type), decl.arrow.counts or ""] + self._tail(decl.ann)
+			return self.AnnotationJoin(
+				[short(subject.type), f"-{verbs}->", short(obj.type), decl.arrow.counts or ""] + self.tail(decl.ann)
 			)
 		parts = [
 			("" if item.role == lastSegment(item.type) else f"{item.role}: ") + (f"{item.card} " if item.card else "") + short(item.type)
 			for item in decl.participants
 		]
-		return self._Join([f"{short(decl.path)}({', '.join(parts)})"] + self._tail(decl.ann))
+		return self.AnnotationJoin([f"{self.typeName(decl.path)}({', '.join(parts)})"] + self.tail(decl.ann))
 
 	def viewLine(self, line: ViewLine) -> str:
 		"""Render the selected path, facets and member of `line`."""
@@ -196,7 +207,7 @@ class Printer:
 
 	def mapLine(self, line: MapLine, doc: bool = True, indent: str = "") -> str:
 		"""Render vocabulary map `line` after `indent`, optionally with its doc aligned."""
-		return withDoc(indent + self._Join([line.fromValue, line.match, line.toValue]), line.doc if doc else None)
+		return withDoc(indent + self.AnnotationJoin([line.fromValue, line.match, line.toValue]), line.doc if doc else None)
 
 	def block(self, decl: Decl) -> list[str]:
 		"""A declaration and its body lines."""
@@ -219,19 +230,19 @@ class Printer:
 # -----------------------------------------------------------------------------
 
 
-def _typeToJson(type: TypeExpr) -> dict[str, Any]:
+def typeToJson(type: TypeExpr) -> dict[str, Any]:
 	if type.builtin:
 		return {"builtin": type.builtin}
 	if type.unknown:
 		return {"unknown": True}
 	if type.range:
-		return {"range": _typeToJson(type.range)}
+		return {"range": typeToJson(type.range)}
 	if type.values is not None:
 		return {"values": list(type.values), "open": type.open}
 	return {"path": type.path, "attr": type.attr} if type.attr else {"path": type.path}
 
 
-def _depToJson(dep: Dep) -> dict[str, Any]:
+def depToJson(dep: Dep) -> dict[str, Any]:
 	if dep.ellipsis:
 		return {"ellipsis": True}
 	if dep.input:
@@ -241,27 +252,27 @@ def _depToJson(dep: Dep) -> dict[str, Any]:
 	return {"path": dep.path, "attr": dep.attr}
 
 
-def _compact(data: dict[str, Any]) -> dict[str, Any]:
+def compact(data: dict[str, Any]) -> dict[str, Any]:
 	return {key: value for key, value in data.items() if value is not None}
 
 
-def _annToJson(ann: Annotations) -> dict[str, Any] | None:
+def annToJson(ann: Annotations) -> dict[str, Any] | None:
 	return dict(ann) if ann else None
 
 
-def _toJson(ontology: Ontology, ids: dict[str, str] | None) -> dict[str, Any]:
+def encodeOntology(ontology: Ontology, ids: dict[str, str] | None) -> dict[str, Any]:
 	header = dict(ontology.header)
 	defaultCard = header.get("card", "?")
 	defaultCounts = header.get("rel", "*:*")
 
 	def attr(item: Attr) -> dict[str, Any]:
-		return _compact({
+		return compact({
 			"name": item.name,
 			"card": item.card or defaultCard,
 			"derived": True if item.derived else None,
-			"type": _typeToJson(item.type) if item.type else None,
-			"deps": [_depToJson(dep) for dep in item.deps] if item.deps else None,
-			"ann": _annToJson(item.ann),
+			"type": typeToJson(item.type) if item.type else None,
+			"deps": [depToJson(dep) for dep in item.deps] if item.deps else None,
+			"ann": annToJson(item.ann),
 			"doc": item.doc,
 		})
 
@@ -270,33 +281,33 @@ def _toJson(ontology: Ontology, ids: dict[str, str] | None) -> dict[str, Any]:
 
 	def decl(item: Decl) -> dict[str, Any]:
 		common = {"kind": item.kind, "path": item.path}
-		tail = {"ann": _annToJson(item.ann), "doc": item.doc}
+		tail = {"ann": annToJson(item.ann), "doc": item.doc}
 		if item.kind == "type":
-			return _compact({
+			return compact({
 				**common,
-				"def": _typeToJson(item.definition) if item.definition else None,
+				"def": typeToJson(item.definition) if item.definition else None,
 				"fields": [attr(field) for field in item.fields] if item.fields is not None else None,
 				**tail,
 			})
 		if item.kind == "entity":
-			return _compact({**common, "base": item.base, "attrs": attrs(item.attrs), **tail})
+			return compact({**common, "base": item.base, "attrs": attrs(item.attrs), **tail})
 		if item.kind == "facet":
-			return _compact({**common, "subject": item.subject, "attrs": attrs(item.attrs), **tail})
+			return compact({**common, "subject": item.subject, "attrs": attrs(item.attrs), **tail})
 		if item.kind == "view":
-			lines = [_compact({"path": line.path, "facets": line.facets, "member": line.member}) for line in item.viewLines]
-			return _compact({**common, "lines": lines, "doc": item.doc})
+			lines = [compact({"path": line.path, "facets": line.facets, "member": line.member}) for line in item.viewLines]
+			return compact({**common, "lines": lines, "doc": item.doc})
 		if item.kind == "domain":
-			return _compact({**common, "doc": item.doc})
+			return compact({**common, "doc": item.doc})
 		if item.kind == "map":
 			lines = [
-				_compact({"from": line.fromValue, "match": line.match, "to": line.toValue, "doc": line.doc})
+				compact({"from": line.fromValue, "match": line.match, "to": line.toValue, "doc": line.doc})
 				for line in item.mapLines
 			]
-			return _compact({**common, "from": item.mapFrom, "to": item.mapTo, "lines": lines, **tail})
+			return compact({**common, "from": item.mapFrom, "to": item.mapTo, "lines": lines, **tail})
 		arrow = None
 		if item.arrow:
-			arrow = _compact({"verb": item.arrow.verb, "inverse": item.arrow.inverse, "counts": item.arrow.counts or defaultCounts})
-		return _compact({
+			arrow = compact({"verb": item.arrow.verb, "inverse": item.arrow.inverse, "counts": item.arrow.counts or defaultCounts})
+		return compact({
 			**common,
 			"participants": [{"role": p.role, "card": p.card or "1", "type": p.type} for p in item.participants],
 			"arrow": arrow,
@@ -304,7 +315,7 @@ def _toJson(ontology: Ontology, ids: dict[str, str] | None) -> dict[str, Any]:
 			**tail,
 		})
 
-	return _compact({
+	return compact({
 		"format": ONTOLOGY_FORMAT,
 		"namespace": ontology.namespace,
 		"header": header or None,
@@ -321,6 +332,35 @@ def _toJson(ontology: Ontology, ids: dict[str, str] | None) -> dict[str, Any]:
 # -----------------------------------------------------------------------------
 
 
+def normaliseUses(ontology: Ontology) -> list[tuple[str, str]]:
+	"""Keep aliases, adding a self-alias if the combined scope shadows a local path."""
+	uses = sorted(ontology.uses)
+	namespace = ontology.namespace
+	if not uses or namespace is None:
+		return uses
+	namer = Namer(namespace, uses)
+	prefix = f"{namespace}/"
+	# NOTE: Authored references may also name a generated history concept.
+	localPaths = [decl.path[len(prefix):] for decl in ontology.decls if not decl.arrow and decl.path.startswith(prefix)]
+	shadowed = {alias for alias, target in uses if target != prefix + alias}
+	if any(
+		"/" in path and path.split("/", 1)[0] in shadowed and not namer.aliasName(prefix + path)
+		for path in localPaths
+	):
+		# NOTE: Do not let the added alias change the meaning of another relative path or rule.
+		reserved = set(namer.aliases) | {path.split("/", 1)[0] for path in localPaths}
+		for decl in ontology.decls:
+			for ann in [decl.ann, *(attr.ann for attr in decl.fields or decl.attrs)]:
+				if isinstance(rule := annotation(ann, "rule"), str):
+					reserved.add(rule.split("/", 1)[0])
+		alias, suffix = "Local", 2
+		while alias in reserved:
+			alias = f"Local{suffix}"
+			suffix += 1
+		uses = sorted([*uses, (alias, namespace)])
+	return uses
+
+
 def normaliseOntology(ontology: Ontology) -> Ontology:
 	"""Return canonical `ontology`: sorted declarations, omitted defaults and ordered annotations."""
 	header = dict(ontology.header)
@@ -331,20 +371,20 @@ def normaliseOntology(ontology: Ontology) -> Ontology:
 		return replace(
 			attr,
 			card=None if attr.card == defaultCard else attr.card,
-			ann=_sortAnnotations(attr.ann),
-			type=_normaliseType(attr.type, annotation(attr.ann, "ordered") is True, annotation(attr.ann, "hierarchical") is True),
-			deps=sorted(attr.deps, key=_depKey) if attr.deps else attr.deps,
+			ann=sortAnnotations(attr.ann),
+			type=normaliseType(attr.type, annotation(attr.ann, "ordered") is True, annotation(attr.ann, "hierarchical") is True),
+			deps=sorted(attr.deps, key=depKey) if attr.deps else attr.deps,
 		)
 
 	def normaliseAttrs(attrs: list[Attr]) -> list[Attr]:
 		return sorted((normaliseAttr(attr) for attr in attrs), key=lambda attr: attr.name)
 
 	def normaliseDecl(decl: Decl) -> Decl:
-		base = replace(decl, ann=_sortAnnotations(decl.ann))
+		base = replace(decl, ann=sortAnnotations(decl.ann))
 		if decl.kind == "type":
 			return replace(
 				base,
-				definition=_normaliseType(decl.definition, annotation(decl.ann, "ordered") is True, annotation(decl.ann, "hierarchical") is True),
+				definition=normaliseType(decl.definition, annotation(decl.ann, "ordered") is True, annotation(decl.ann, "hierarchical") is True),
 				fields=normaliseAttrs(decl.fields) if decl.fields is not None else None,
 			)
 		if decl.kind == "view":
@@ -352,7 +392,10 @@ def normaliseOntology(ontology: Ontology) -> Ontology:
 				replace(line, facets=sorted(line.facets) if isinstance(line.facets, list) else line.facets)
 				for line in decl.viewLines
 			]
-			return replace(base, viewLines=sorted(lines, key=lambda line: line.path + (f".{line.member}" if line.member else "")))
+			return replace(base, viewLines=sorted(lines, key=lambda line: (
+				line.path + (f".{line.member}" if line.member else ""),
+				",".join(line.facets) if isinstance(line.facets, list) else line.facets or "",
+			)))
 		if decl.kind == "map":
 			return replace(base, mapLines=sorted(decl.mapLines, key=lambda line: (line.fromValue, line.toValue, line.match)))
 		if decl.kind == "domain":
@@ -394,7 +437,7 @@ def normaliseOntology(ontology: Ontology) -> Ontology:
 	return replace(
 		ontology,
 		header=sorted(ontology.header, key=lambda pair: HEADER_KEYS.index(pair[0]) if pair[0] in HEADER_KEYS else len(HEADER_KEYS)),
-		uses=sorted(ontology.uses),
+		uses=normaliseUses(ontology),
 		decls=ordered,
 	)
 

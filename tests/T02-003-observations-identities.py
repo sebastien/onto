@@ -22,6 +22,9 @@ Person < Party
   Name Text
   Owner Party
   Context Scenario
+  HomePhone Text {one=Phone}
+  WorkPhone Text {one=Phone}
+  Status Active|Inactive
   * Friends Party
 Employee < Person
 Customer < Person
@@ -29,6 +32,8 @@ Organisation < Party
 Scenario
 Review of Person {ctx=Scenario}
   Included Boolean
+ActiveProfile of Person {when=Status:Active}
+  Note Text
 Person -knows/knownBy-> Person
 Person -partner/partner-> Person
 Household
@@ -46,7 +51,7 @@ def state(text: str, mode: str = "strict") -> Observations:
 	return reconcileObservations(ONTOLOGY, load(text), mode)
 
 
-def _subjectValues(log: Observations, path: str) -> list[tuple[str, Any]]:
+def subjectValues(log: Observations, path: str) -> list[tuple[str, Any]]:
 	return [(claim["s"], claim["v"]) for claim in log.claims if claim.get("p") == path]
 
 
@@ -59,20 +64,20 @@ def _subjectValues(log: Observations, path: str) -> list[tuple[str, Any]]:
 
 def testRetractionByFiltersProducerEvenWithSameSource():
 	log = state("p:Person\np.Name First {src=feed, by=one}\np.Name Second {src=feed, by=two}\n- p.Name {src=feed, by=one}\n")
-	assert _subjectValues(log, "Name") == [("p", "Second")]
+	assert subjectValues(log, "Name") == [("p", "Second")]
 	log = state("p:Person\np.Name First {src=feed, by=one}\np.Name Second {src=feed, by=two}\n- p.Name {src=feed, by=two}\n")
-	assert _subjectValues(log, "Name") == [("p", "First")]
+	assert subjectValues(log, "Name") == [("p", "First")]
 
 
 def testUnqualifiedRetractionWithdrawsEveryProducerOfTheSource():
 	log = state("p:Person\np.Name First {src=feed, by=one}\np.Name Second {src=feed, by=two}\n- p.Name {src=feed}\n")
-	assert _subjectValues(log, "Name") == []
+	assert subjectValues(log, "Name") == []
 
 
 def testOfAndByAreBothAppliedAndApprovalSurvivesRoundTrip():
 	text = "p:Person\np.Name First {src=feed, by=one}\np.Name Second {src=feed, by=two}\n- p.Name {src=curator, of=feed, by=two, approved=confirm:2}\n"
 	log = load(text)
-	assert _subjectValues(reconcileObservations(ONTOLOGY, log), "Name") == [("p", "First")]
+	assert subjectValues(reconcileObservations(ONTOLOGY, log), "Name") == [("p", "First")]
 	assert log.retractions[0]["approved"] == "confirm:2"
 	assert "by=two, of=feed, approved=confirm:2" in printObservationsLog(ONTOLOGY, log)
 	assert observationsToJson(observationsFromJson(ONTOLOGY, observationsToJson(log))) == observationsToJson(log)
@@ -80,7 +85,7 @@ def testOfAndByAreBothAppliedAndApprovalSurvivesRoundTrip():
 
 def testProducerQualifiedRetractionDoesNotMatchUnqualifiedClaim():
 	log = state("p:Person\np.Name First {src=feed}\n- p.Name {src=feed, by=one}\n")
-	assert _subjectValues(log, "Name") == [("p", "First")]
+	assert subjectValues(log, "Name") == [("p", "First")]
 	assert any(item.code == "retraction" for item in log.diagnostics)
 
 
@@ -174,9 +179,9 @@ x.Review.Included true {ctx=d}
 a = b
 c = d
 """)
-	assert _subjectValues(log, "Name") == [("a", "Alias")]
-	assert _subjectValues(log, "Owner") == [("x", {"ref": "a"})]
-	assert _subjectValues(log, "Friends") == [("x", {"set": [{"ref": "a"}]})]
+	assert subjectValues(log, "Name") == [("a", "Alias")]
+	assert subjectValues(log, "Owner") == [("x", {"ref": "a"})]
+	assert subjectValues(log, "Friends") == [("x", {"set": [{"ref": "a"}]})]
 	assert next(claim for claim in log.claims if "rel" in claim)["roles"] == {"Subject": "x", "Object": "a"}
 	assert next(claim for claim in log.claims if claim.get("p") == "Review.Included")["ctx"] == "c"
 	assert [claim["same"] for claim in log.claims if "same" in claim] == [["a", "b"], ["c", "d"]]
@@ -184,27 +189,60 @@ c = d
 
 def testGroupCanonicalUsesTheFirstHandlesExistingGroup():
 	log = state("a:Person = b:Person\nc:Person = d:Person\nb = d\nd.Name CanonicalA\n")
-	assert _subjectValues(log, "Name") == [("a", "CanonicalA")]
+	assert subjectValues(log, "Name") == [("a", "CanonicalA")]
 
 
 def testCanonicalTypeIsRefinedBeforeAttributeLookup():
 	log = state("a:Party = b:Person\nb.Name Person\n")
 	assert log.instances["a"]["type"] == "A/Person"
-	assert _subjectValues(log, "Name") == [("a", "Person")]
+	assert subjectValues(log, "Name") == [("a", "Person")]
 
 
 def testAliasSlotsSupersedeAndConflictAfterLinkApplication():
 	log = state("a:Person\nb:Person\na.Name Old {src=one}\nb.Name New {src=one}\na.Name Other {src=two}\na = b\n")
-	assert _subjectValues(log, "Name") == [("a", "New"), ("a", "Other")]
+	assert subjectValues(log, "Name") == [("a", "New"), ("a", "Other")]
 	assert all(claim.get("conflict") for claim in log.claims if claim.get("p") == "Name")
+
+
+@pytest.mark.parametrize(("facts", "code", "message"), [
+	("a.HomePhone Home\nc.WorkPhone Work\n", "one", "exclusive group"),
+	("a.Status Inactive\nc.ActiveProfile.Note Note\n", "when", "applies when"),
+])
+def testCanonicalStateRejectsInvalidJoinStrictlyAndHoldsOnlyThatLinkLeniently(facts: str, code: str, message: str):
+	log = load("a:Person\nb:Person\nc:Person\nd:Person\ne:Person\n" + facts + "a = b\nb = c\nd = e\n")
+	before = deepcopy(log)
+	with pytest.raises(FormatError, match=message) as error:
+		reconcileObservations(ONTOLOGY, log)
+	assert [item.code for item in error.value.diagnostics] == [code]
+	state = reconcileObservations(ONTOLOGY, log, "lenient")
+	assert log == before
+	assert [claim["same"] for claim in state.claims if "same" in claim] == [["a", "b"], ["d", "e"]]
+	assert {claim["s"] for claim in state.claims if "p" in claim} == {"a", "c"}
+	assert [(item.level, item.code) for item in state.diagnostics] == [("warning", "identity")]
+	printed = printObservationsState(ONTOLOGY, state)
+	assert formatObservations(ONTOLOGY, Source("t", printed)) == printed
+	data = observationsToJson(state)
+	assert observationsToJson(observationsFromJson(ONTOLOGY, data)) == data
+
+
+@pytest.mark.parametrize("facts", [
+	"a.HomePhone Home\nc.WorkPhone Work\n- c.WorkPhone\n",
+	"a.Status Inactive\nc.ActiveProfile.Note Note\nc.Status Active\n",
+])
+def testCanonicalValidationOnlyChecksSurvivingClaims(facts: str):
+	log = state("a:Person\nb:Person\nc:Person\n" + facts + "a = b\nb = c\n")
+	assert [claim["same"] for claim in log.claims if "same" in claim] == [["a", "b"], ["b", "c"]]
+	assert {claim["s"] for claim in log.claims if "p" in claim} == {"a"}
+	printed = printObservationsState(ONTOLOGY, log)
+	assert formatObservations(ONTOLOGY, Source("t", printed)) == printed
 
 
 def testRetractionOfIdentityLinkSplitsGroupsAndDoesNotRetractOtherFacts():
 	log = state("a:Person = b:Person {src=curator, by=one}\nb.Name B\n- b = a {src=curator, by=one}\n")
-	assert _subjectValues(log, "Name") == [("b", "B")]
+	assert subjectValues(log, "Name") == [("b", "B")]
 	assert not any("same" in claim for claim in log.claims)
 	log = state("a:Person = b:Person {src=curator, by=one}\nb.Name B\n- a = b {src=curator, by=two}\n")
-	assert _subjectValues(log, "Name") == [("a", "B")]
+	assert subjectValues(log, "Name") == [("a", "B")]
 
 
 @pytest.mark.parametrize("links", ["a:Person = b:Person\na != b\n", "a:Person != b:Person\na = b\n", "a:Person = b:Person\nb = a\n", "a:Person = b:Party\nb = c:Organisation\n", "a:Person = b:Person\nc:Person = d:Person\nc = a\nb = d\n"])
@@ -218,10 +256,10 @@ def testIdentityConflictsFailStrictlyWithoutMutatingTheLog(links: str):
 
 def testLenientDistinctWinsAndCanonicalChoiceDoesNotChange():
 	log = state("a:Person = b:Person\na != b\nb.Name B\n", "lenient")
-	assert _subjectValues(log, "Name") == [("b", "B")]
+	assert subjectValues(log, "Name") == [("b", "B")]
 	assert any(item.level == "warning" and item.code == "identity" for item in log.diagnostics)
 	log = state("b:Person = a:Person\na = b\na.Name B\n", "lenient")
-	assert _subjectValues(log, "Name") == [("b", "B")]
+	assert subjectValues(log, "Name") == [("b", "B")]
 	assert [claim["same"] for claim in log.claims if "same" in claim] == [["b", "a"]]
 	text = printObservationsState(ONTOLOGY, log)
 	assert formatObservations(ONTOLOGY, Source("t", text), mode="lenient") == text
@@ -260,14 +298,14 @@ def testUnknownRunModeIsRejected():
 def testStatePreservesGroupJoinOrderAndCanonicalHandle(fact: str):
 	log = load("a:Person = b:Person\nc:Person = d:Person\nb = d\n" + fact)
 	resolved = reconcileObservations(ONTOLOGY, log)
-	assert _subjectValues(resolved, "Name") == ([("a", "CanonicalA")] if fact else [])
+	assert subjectValues(resolved, "Name") == ([("a", "CanonicalA")] if fact else [])
 	printed = printObservationsState(ONTOLOGY, resolved)
 	loaded = loadObservations(ONTOLOGY, Source("t", printed))
 	assert [claim["same"] for claim in loaded.claims if "same" in claim] == [["a", "b"], ["c", "d"], ["b", "d"]]
-	assert _subjectValues(reconcileObservations(ONTOLOGY, loaded), "Name") == _subjectValues(resolved, "Name")
+	assert subjectValues(reconcileObservations(ONTOLOGY, loaded), "Name") == subjectValues(resolved, "Name")
 	assert formatObservations(ONTOLOGY, Source("t", printed)) == printed
 	text = printObservationsLog(ONTOLOGY, log)
-	assert _subjectValues(reconcileObservations(ONTOLOGY, loadObservations(ONTOLOGY, Source("t", text))), "Name") == _subjectValues(resolved, "Name")
+	assert subjectValues(reconcileObservations(ONTOLOGY, loadObservations(ONTOLOGY, Source("t", text))), "Name") == subjectValues(resolved, "Name")
 
 
 def testStateIdentityOrderUsesInstantsThenOrdinalsAndKeepsMetadata():
@@ -284,7 +322,7 @@ d.Name CanonicalA
 	assert [claim.get("same", claim.get("distinct")) for claim in links] == [["a", "e"], ["a", "b"], ["c", "d"], ["b", "d"]]
 	assert [claim["src"] for claim in links] == ["distinct", "first", "second", "third"]
 	assert links[1]["by"] == "one" and links[2]["by"] == "two" and links[3]["conf"] == 0.9
-	assert _subjectValues(reconcileObservations(ONTOLOGY, loaded), "Name") == [("a", "CanonicalA")]
+	assert subjectValues(reconcileObservations(ONTOLOGY, loaded), "Name") == [("a", "CanonicalA")]
 	assert formatObservations(ONTOLOGY, Source("t", printed)) == printed
 
 

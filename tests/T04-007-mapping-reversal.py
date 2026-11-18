@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from onto import Source, loadFunctions, loadMapping, loadOntology, mappingReverse, mappingToJson
+import asyncio
+
+import pytest
+
+from onto import Source, loadFunctions, loadMapping, loadOntology, mappingFromJson, mappingReverse, mappingToJson, printMapping
 from onto.referential import loadReferential
-from tests._helpers import _specExample
+from tests.helpers import specExample
 
 # -----------------------------------------------------------------------------
 #
@@ -13,13 +17,13 @@ from tests._helpers import _specExample
 # -----------------------------------------------------------------------------
 
 
-EXCHANGE = loadOntology([Source("exchange.onto", _specExample("spec-04-mapping", 1))])
-FINANCE = loadOntology([Source("finance.onto", _specExample("spec-01-ontology"))])
-SHEET = loadOntology([Source("sheet.onto", _specExample("spec-04-mapping", 7))])
-MARKETS = loadFunctions([FINANCE], [Source("markets.fn", _specExample("spec-04-mapping", 3))])
-REFERENTIAL = loadReferential([FINANCE, EXCHANGE], [Source("market-ids.ref", _specExample("spec-04-mapping", 4))])
-MAPPING = loadMapping(EXCHANGE, FINANCE, Source("exchange-finance.map", _specExample("spec-04-mapping", 5)), libraries=[MARKETS], referentials=[REFERENTIAL])
-SHEET_MAPPING = loadMapping(FINANCE, SHEET, Source("finance-sheet.map", _specExample("spec-04-mapping", 8)))
+EXCHANGE = loadOntology([Source("exchange.onto", specExample("spec-04-mapping", 1))])
+FINANCE = loadOntology([Source("finance.onto", specExample("spec-01-ontology"))])
+SHEET = loadOntology([Source("sheet.onto", specExample("spec-04-mapping", 7))])
+MARKETS = loadFunctions([FINANCE], [Source("markets.fn", specExample("spec-04-mapping", 3))])
+REFERENTIAL = loadReferential([FINANCE, EXCHANGE], [Source("market-ids.ref", specExample("spec-04-mapping", 4))])
+MAPPING = loadMapping(EXCHANGE, FINANCE, Source("exchange-finance.map", specExample("spec-04-mapping", 5)), libraries=[MARKETS], referentials=[REFERENTIAL])
+SHEET_MAPPING = loadMapping(FINANCE, SHEET, Source("finance-sheet.map", specExample("spec-04-mapping", 8)))
 SOURCE = loadOntology([Source("s.onto", """@ontology RevS rev=v1
 Code = X|Y
 Kind = A|B
@@ -58,6 +62,28 @@ def reverse(body: str, header: str = "", maps: str = ""):
 
 def lines(mapping):
 	return {line.get("target") or line.get("verb"): line for line in mappingToJson(mapping)["scopes"][0].get("lines", [])}
+
+
+def collidingMaps():
+	model = "Code = A|B\nWord = X|Y\nPerson\n  Code Code\n  Word Word\n  Other Word\n"
+	source = loadOntology([Source("old.onto", "@ontology S rev=old\n" + model +
+		"@map Convert Word -> Word\n  X exact Y\n  Y exact X\n")])
+	target = loadOntology([Source("new.onto", "@ontology S rev=new\n" + model +
+		"@map Convert Word -> Word\n  X exact X\n  Y exact Y\n")])
+	mapping = loadMapping(source, target, Source("migration.map", """@mapping S -> S from=old to=new
+@use S as Self
+@map Convert Code -> Code
+  A exact A
+  B exact B
+@fn Convert2 Text -> Text
+  x => x
+
+Person -> Person
+  Code <- Convert(Code)
+  Word <- Self/Convert(Word)
+  Other <- Self/Convert(Other)
+"""))
+	return source, target, mapping
 
 
 # -----------------------------------------------------------------------------
@@ -129,6 +155,40 @@ def test_maps_reverse_only_when_exact_and_one_to_one():
 		("RevT/Kind", "RevS/Code", [("A", "X"), ("B", "Y")])]
 	_, lossy = reverse("  Kind <- Kinds(Code)\n", maps="@map Kinds Code -> Kind\n  X exact A\n  Y exact A\n")
 	assert [item.line for item in lossy] == ["Kind"]
+
+
+def test_qualified_and_local_maps_with_the_same_name_get_distinct_inverses():
+	source, target, mapping = collidingMaps()
+	assert "Word <- Self/Convert(Word)" in printMapping(mapping)
+	assert mappingToJson(mappingFromJson(source, target, mappingToJson(mapping))) == mappingToJson(mapping)
+	reversed_, lossy = mappingReverse(mapping, source, target)
+	assert not lossy
+	inverses = {item.path: {line.fromValue: line.toValue for line in item.mapLines} for item in reversed_.maps}
+	reverseLines = lines(reversed_)
+	code, word, other = (reverseLines[field]["expr"]["call"] for field in ("Code", "Word", "Other"))
+	assert code != word and word == other
+	assert "Convert2" not in inverses
+	assert inverses[code] == {"A": "A", "B": "B"}
+	assert inverses[word] == {"X": "Y", "Y": "X"}
+
+
+def test_same_name_inverses_execute_their_own_conversion_tables():
+	pytest.importorskip("hexa.shapes")
+	from hexa.runtime import run
+
+	from onto import loadObservations, observationsToJson, reconcileObservations
+	from onto.integrations.hexa import HexaMappingOperator
+
+	source, target, mapping = collidingMaps()
+	reversed_, _ = mappingReverse(mapping, source, target)
+	ops = HexaMappingOperator(target, source)
+	program = ops.compile(reversed_)
+	log = loadObservations(target, Source("new.obs", "@obs S rev=new\np:Person\n  Code A\n  Word Y\n  Other X\n"))
+	state = observationsToJson(reconcileObservations(target, log))
+	raw = asyncio.run(run({"ClockRead": lambda context: "2026-11-18"}, program.stages.MappingRead, state))
+	converted, report = ops.result(program, raw)
+	assert not report.gaps
+	assert {claim["p"]: claim["v"] for claim in converted.claims if "p" in claim} == {"Code": "A", "Word": "X", "Other": "Y"}
 
 
 def test_references_reverse_through_keys_or_reverse_annotations():

@@ -71,11 +71,16 @@
           "additionalProperties": { "$ref": "#/$defs/token" }
         },
         "ctx": { "description": "Active @ctx default, distinct from any explicit meta.ctx.", "$ref": "#/$defs/handle" },
+        "witnesses": {
+          "description": "Historical attribute claims that explain a cross-statement conflict after reconciliation removed its evidence; never applied to the state.",
+          "type": "array", "minItems": 1,
+          "items": { "$ref": "#/$defs/claim", "required": ["p", "v"] }
+        },
         "diagnostics": {
           "type": "array", "minItems": 1,
           "items": {
             "type": "object", "required": ["code", "message"], "additionalProperties": false,
-            "properties": { "code": { "$ref": "#/$defs/handle" }, "message": { "type": "string", "minLength": 1 } }
+            "properties": { "code": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$" }, "message": { "type": "string", "minLength": 1 } }
           }
         }
       }

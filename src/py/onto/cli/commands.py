@@ -24,7 +24,7 @@ from ..inventory import Inventory, defaultBinding, inventoryFromDocuments, print
 from ..meta import META_DOMAIN, metaDeclarations, metaObservations
 from ..mapping import Mapping, mappingCoverage, mappingReverse, mappingToJson, printMapping
 from ..observations import Observations, observationsFromJson, observationsToJson, printObservationsLog, printObservationsState, reconcileObservations
-from ..ontology import Ontology, loadOntology, normaliseOntology, ontologyDiff, ontologyFromJson, ontologyToJson, printOntology, printOntologyDiff
+from ..ontology import Model, Ontology, loadOntology, normaliseOntology, ontologyDiff, ontologyFromJson, ontologyToJson, printOntology, printOntologyDiff
 from ..referential import Referential, printReferential, referentialToJson
 from ..text import Diagnostic, FormatError, Loc, Source, annotation, layoutText
 from .usage import UsageError
@@ -83,6 +83,8 @@ class Result:
 def targets(ws: Workspace, args: argparse.Namespace, files: list[str], kinds: tuple[str, ...] | None = None) -> list[Entry]:
 	"""Entries for the named `files`, or for the whole workspace when none are named."""
 	if not files:
+		if kinds is None:
+			ws.reportAll = True
 		return ws.all(kinds)
 	entries = [ws.add(path, getattr(args, "kind", None)) for path in files]
 	return [entry for entry in entries if entry is not None]
@@ -97,24 +99,58 @@ def one(ws: Workspace, args: argparse.Namespace, kinds: tuple[str, ...] | None =
 	return entry
 
 
-def mergedLogs(logs: list[Observations]) -> dict[str, Any]:
-	"""One observations document from several: statements renumbered, source aliases made distinct."""
+def sourceToken(template: str | None, path: str) -> str:
+	"""A document's source token: `--src` with `{path}` (as given) and `{stem}` (without its extension) filled, else the path."""
+	if not template:
+		return path
+	return template.replace("{path}", path).replace("{stem}", str(Path(path).with_suffix("")) if path != STDIN else path)
+
+
+def mergedLogs(ontology: Ontology, logs: list[tuple[Entry, Observations]]) -> dict[str, Any]:
+	"""Merge compatible handle registries and preserve each file's effective statement metadata."""
+	model = Model(ontology)
+	bareSources = {
+		token for _, log in logs for group in (log.claims, log.retractions) for claim in group
+		for key in ("src", "of") if (token := claim.get(key)) is not None and token not in log.sources
+	}
 	out: dict[str, Any] | None = None
-	for log in logs:
+	offset, sourceNumber = 0, 0
+	for entry, log in logs:
 		data = observationsToJson(log)
+		scope = log.obs.get("scope")
+		loc = Loc(entry.path, entry.line)
+		if log.obs["ontology"] != ontology.namespace:
+			raise FormatError([Diagnostic("error", "run.ontology", f"expected observations of {ontology.namespace}", loc)])
 		if out is None:
 			out = {**data, "sources": {}, "instances": {}, "claims": [], "retractions": []}
 			out.pop("gaps", None)
+			# Claims already hold their effective defaults; a merged default could fill a missing value.
+			out["obs"] = {key: value for key, value in log.obs.items() if key in ("ontology", "rev", "scope")}
+		elif scope != (shared := out["obs"].get("scope")):
+			raise FormatError([Diagnostic("error", "run.scope", f"@scope {scope!r} does not match the first input's @scope {shared!r}", loc)])
 		aliases = {}
 		for alias, token in data["sources"].items():
-			aliases[alias] = f"d{len(out['sources']) + 1}"
+			sourceNumber += 1
+			while f"d{sourceNumber}" in bareSources:
+				sourceNumber += 1
+			aliases[alias] = f"d{sourceNumber}"
 			out["sources"][aliases[alias]] = token
 		for handle, item in data["instances"].items():
-			out["instances"].setdefault(handle, item)
+			existing = out["instances"].get(handle)
+			if existing and scope is None:
+				raise FormatError([Diagnostic("error", "run.scope", f"handle '{handle}' appears in multiple inputs without a shared @scope", loc)])
+			if not existing or model.isA(item["type"], existing["type"]):
+				out["instances"][handle] = item
+			elif item["type"] != existing["type"] and not model.isA(existing["type"], item["type"]):
+				raise FormatError([Diagnostic("error", "run.type", f"handle '{handle}' has incompatible types '{existing['type']}' and '{item['type']}'", loc)])
+		last = 0
 		for key in ("claims", "retractions"):
 			for claim in data[key]:
 				renamed = {name: aliases.get(value, value) if name in ("src", "of") else value for name, value in claim.items()}
-				out[key].append({**renamed, "n": len(out["claims"]) + len(out["retractions"]) + 1})
+				# NOTE: Ordinals order claims and retractions at equal timestamps and group claims from one statement.
+				out[key].append({**renamed, "n": offset + claim["n"]})
+				last = max(last, claim["n"])
+		offset += last
 	return out or {}
 
 
@@ -459,6 +495,9 @@ class Commands:
 		else:
 			sidecar = Path(self.ws.file(entry)).with_suffix(".inv")
 			found = self.ws.add(str(sidecar)) if sidecar.exists() else None
+		if found and found.kind != "inventory":
+			self.ws.error("cli.kind", f"expected inventory, not {found.kind}", found.path)
+			return None
 		return load(self.ws, found) if found else None
 
 	def cmdReverse(self) -> Result:
@@ -489,7 +528,9 @@ class Commands:
 		context = self.ws.context(entry)
 		mode = "strict" if self.args.strict else "lenient"
 		at = self.args.at or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-		clock = {"ClockRead": lambda _context: at}
+		clock: dict[str, Any] = {"ClockRead": lambda context: at}
+		if self.args.max_nodes:
+			clock["policy"] = {"maxNodes": int(self.args.max_nodes)}
 		implementations = self.implementations()
 		if entry.kind == "binding":
 			items = []
@@ -500,7 +541,7 @@ class Commands:
 				except (OSError, UnicodeError, ValueError, csv.Error) as error:
 					self.ws.error("cli.read", f"cannot read document: {error}", self.ws.indexer.display(path))
 					continue
-				items.append({"src": self.args.src or self.ws.indexer.display(path), "document": document})
+				items.append({"src": sourceToken(self.args.src, self.ws.indexer.display(path) if path != STDIN else path), "document": document})
 			if len(items) != len(self.args.inputs):
 				return Result(checked=1)
 			ops = HexaBindingOperator(context.ontology, mode, context.libraries, implementations, context.ontologies)
@@ -512,11 +553,12 @@ class Commands:
 			for path in self.args.inputs:
 				found = self.ws.add(path, "observations")
 				observations = load(self.ws, found) if found else None
-				if observations is None:
+				if found is None or observations is None:
 					return Result(checked=1)
-				logs.append(observations)
+				logs.append((found, observations))
 			try:
-				state = observationsToJson(reconcileObservations(context.ontology, observationsFromJson(context.ontology, mergedLogs(logs), "inputs", self.ws.mode), self.ws.mode))
+				combined = observationsFromJson(context.ontology, mergedLogs(context.ontology, logs), "inputs", self.ws.mode)
+				state = observationsToJson(reconcileObservations(context.ontology, combined, self.ws.mode))
 			except FormatError as error:
 				self.ws.report(error.diagnostics)
 				return Result(checked=1)
@@ -528,6 +570,10 @@ class Commands:
 		level = "error" if self.args.strict else "warning"
 		self.ws.report([Diagnostic(level, "run.gap", f"{gap.target}: {gap.reason}" + (f" ({gap.handle})" if gap.handle else "") + (f" in {gap.src}" if gap.src else "") + (f" at {gap.location}" if gap.location else ""),
 			Loc(entry.path, entry.line)) for gap in report.gaps])
+		if self.args.report:
+			gaps = [{key: value for key, value in (("target", gap.target), ("reason", gap.reason), ("src", gap.src), ("location", gap.location), ("handle", gap.handle)) if value}
+				for gap in report.gaps]
+			Path(self.args.report).write_text(json.dumps({"format": "onto.run-report/1", "gaps": gaps}, indent="\t", ensure_ascii=False) + "\n", encoding="utf-8")
 		return Result(text=printObservationsLog(ontology, log), data=observationsToJson(log), checked=1)
 
 	def cmdInventory(self) -> Result:
@@ -569,18 +615,19 @@ class Commands:
 			return merged
 		path = list(sys.path)
 		sys.path.insert(0, self.ws.cwd)
-		importlib.invalidate_caches()
-		for name in self.args.impl:
-			try:
-				module = importlib.import_module(name)
-			except Exception as error:
-				raise UsageError(f"cannot import --impl {name}: {type(error).__name__}: {error}", self.args.command) from error
-			finally:
-				sys.path[:] = path
-			table = getattr(module, "IMPLEMENTATIONS", None)
-			if not isinstance(table, dict):
-				raise UsageError(f"--impl {name} has no IMPLEMENTATIONS mapping", self.args.command)
-			merged.update(table)
+		try:
+			importlib.invalidate_caches()
+			for name in self.args.impl:
+				try:
+					module = importlib.import_module(name)
+				except Exception as error:
+					raise UsageError(f"cannot import --impl {name}: {type(error).__name__}: {error}", self.args.command) from error
+				table = getattr(module, "IMPLEMENTATIONS", None)
+				if not isinstance(table, dict):
+					raise UsageError(f"--impl {name} has no IMPLEMENTATIONS mapping", self.args.command)
+				merged.update(table)
+		finally:
+			sys.path[:] = path
 		return merged
 
 	def cmdFn(self) -> Result:

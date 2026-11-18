@@ -5,8 +5,8 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 
-from ..expressions import Expression, keyedSteps
-from ..functions.model import Function, FunctionLibrary
+from ..expressions import Expression, keyedSteps, parseExpression
+from ..functions.model import BUILTIN_ARITIES, Function, FunctionLibrary
 from ..ontology.model import Decl, MapLine, Model, Ontology
 from ..text import Loc, annotation, lastSegment
 from .model import Mapping, MappingLine, MappingScope
@@ -55,6 +55,17 @@ def lineLabel(line: MappingLine) -> str:
 	return f"[{line.facet}]" if line.facet else line.target or line.verb or ""
 
 
+def targetExpression(target: str) -> Expression:
+	"""Read a forward target as a reverse expression, including any keyed element steps."""
+	try:
+		expr = parseExpression(target)
+		if "path" in expr:
+			return expr
+	except ValueError:
+		pass
+	raise Lossy(f"target '{target}' cannot be read as a path")
+
+
 def isDerived(model: Model, owner: str, path: str) -> bool:
 	"""Whether `owner.path` (through facets and structure fields) ends at a derived attribute."""
 	attr = model.lookup(owner, path)
@@ -82,21 +93,30 @@ class Reverser:
 		self.functions: dict[str, tuple[Function, str]] = {item.name: (item, "") for item in mapping.functions}
 		for library in libraries or []:
 			self.functions.update({f"{library.namespace}/{item.name}": (item, library.namespace) for item in library.functions})
-		self.maps: dict[str, Decl] = {decl.path: decl for ontology in (fromOntology, toOntology) for decl in ontology.decls if decl.kind == "map"}
+		# Like forward resolution, prefer the source declaration when a later revision reuses its path.
+		self.maps: dict[str, Decl] = {decl.path: decl for ontology in (toOntology, fromOntology) for decl in ontology.decls if decl.kind == "map"}
 		self.maps.update({decl.path: decl for decl in mapping.maps})
 		self.reverseMaps: dict[str, Decl] = {}
+		self.reverseNames: dict[str, str] = {}
 		self.lossy: list[LossyLine] = []
 
 	def reverseMap(self, name: str) -> str:
 		"""The local name of `@map` `name` with its columns swapped; it must be exact and one-to-one."""
+		if name in self.reverseNames:
+			return self.reverseNames[name]
 		decl = self.maps[name]
 		froms = [line.fromValue for line in decl.mapLines]
 		tos = [line.toValue for line in decl.mapLines]
 		if any(line.match != "exact" for line in decl.mapLines) or len(set(froms)) != len(froms) or len(set(tos)) != len(tos):
 			raise Lossy(f"@map '{name}' is not exact and one-to-one")
-		local = lastSegment(name)
+		base = local = lastSegment(name)
+		suffix = 2
+		while local in self.reverseMaps or local in self.functions or local in BUILTIN_ARITIES:
+			local = f"{base}{suffix}"
+			suffix += 1
 		self.reverseMaps[local] = Decl("map", local, mapFrom=decl.mapTo, mapTo=decl.mapFrom,
 			mapLines=[MapLine(line.toValue, "exact", line.fromValue) for line in decl.mapLines])
+		self.reverseNames[name] = local
 		return local
 
 	def inverse(self, expr: Expression, value: Expression) -> tuple[Expression, Expression]:
@@ -135,6 +155,8 @@ class Reverser:
 			return self.solve(scope, line, inner, solved)
 		if "path" not in expr:
 			raise Lossy("literals, metadata and '??' are not reversible")
+		if expr["path"] == [{"root": True}]:
+			raise Lossy("the scope instance '$' is not an assignable input")
 		steps = keyedSteps(expr["path"])
 		owner, index = scope.source, 0
 		facet = self.model.facetOf(owner, steps[0])
@@ -160,12 +182,14 @@ class Reverser:
 			return MappingLine(target=".".join(steps), expr=value)
 		raise Lossy(f"'{'.'.join(steps)}' reads another instance without {{reverse}}")
 
-	def condition(self, scope: MappingScope, when: dict, assigned: dict[str, str]) -> dict:
+	def condition(self, when: dict, assigned: dict[str, str]) -> dict:
 		"""Translate a `when` path into the reverse input that assigns it, when a direct line does."""
-		path = ".".join(when["path"])
+		if when["path"] == [{"root": True}]:
+			raise Lossy("the scope instance '$' is not read back by a direct line")
+		path = ".".join(keyedSteps(when["path"]))
 		if path not in assigned:
 			raise Lossy(f"condition '{path}' is not read back by a direct line")
-		return {"path": assigned[path].split("."), "value": when["value"]}
+		return targetExpression(assigned[path]) | {"value": when["value"]}
 
 	def scope(self, scope: MappingScope) -> MappingScope | None:
 		candidates = self.mapping.header.get("candidates") is True
@@ -177,15 +201,15 @@ class Reverser:
 			if scope.name or scope.present or scope.into:
 				raise Lossy("named, presence-selected or into scopes are not reversed")
 			if scope.when:
-				reverse.when = self.condition(scope, scope.when, assigned)
+				reverse.when = self.condition(scope.when, assigned)
 			if scope.ctx is not None:
 				raise Lossy("contextual scopes are not reversed")
 		except Lossy as error:
 			for line in lines:
 				self.lossy.append(LossyLine(scope.source, scope.target, lineLabel(line), str(error), line.loc))
 			return None
-		if scope.valid is not None and "path" in scope.valid:
-			reverse.lines.append(MappingLine(target=".".join(scope.valid["path"]), expr={"meta": "valid"}))
+		if scope.valid is not None and "path" in scope.valid and scope.valid["path"] != [{"root": True}]:
+			reverse.lines.append(MappingLine(target=".".join(keyedSteps(scope.valid["path"])), expr={"meta": "valid"}))
 		for line in lines:
 			if line.facet and not line.when:
 				continue
@@ -195,18 +219,18 @@ class Reverser:
 				if line.facet:
 					raise Lossy("a facet's condition cannot be written back")
 				if line.expr == {"meta": "valid"}:
-					reverse.valid = {"path": (line.target or line.verb or "").split(".")}
+					reverse.valid = targetExpression(lineLabel(line))
 					continue
 				if not line.when and any(other is not line and other.when and lineLabel(other) == lineLabel(line) for other in lines):
 					raise Lossy("the default of exclusive lines has no reversible condition")
 				if line.target and isDerived(self.targetModel, scope.target, line.target):
 					raise Lossy(DERIVED)
-				value = {"path": (line.target or line.verb or "").split(".")}
+				value = targetExpression(lineLabel(line))
 				solved = self.solve(scope, line, line.expr, value)
 				if solved.target and isDerived(self.model, scope.source, solved.target):
 					raise Lossy(DERIVED)
 				if line.when:
-					solved.when = self.condition(scope, line.when, assigned)
+					solved.when = self.condition(line.when, assigned)
 				solved.candidate, solved.doc = line.candidate, line.doc
 				reverse.lines.append(solved)
 			except Lossy as error:

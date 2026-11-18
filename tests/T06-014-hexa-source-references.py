@@ -197,6 +197,16 @@ def test_as_an_instance_known_only_by_reference_takes_the_chosen_target():
 	assert [set(claim["roles"].values()) for claim in log["claims"] if ".concerns." in claim.get("rel", "")] == [{"Note_s_2FRecord_2F1", "Matter_s_2FApp_2F5"}]
 
 
+def test_as_does_not_resurrect_a_target_skipped_by_presence():
+	text = AS_MAPPING.replace("{when=Advice:Full}", "{present=Advice}")
+	log, report = asMapped("App_5:App\n", text)
+	assert [gap.reason for gap in report.gaps] == ["Mapping.ReferenceUnmapped"]
+	assert not any(".concerns." in claim.get("rel", "") for claim in log["claims"])
+	log, report = asMapped("App_5:App\n  Advice Full\n", text)
+	assert not report.gaps
+	assert any(".concerns." in claim.get("rel", "") for claim in log["claims"])
+
+
 def test_as_prints_and_round_trips():
 	mapping = loadMapping(AS_SOURCE, AS_TARGET, Source("m", AS_MAPPING))
 	assert "concerns <- ref(App, ForeignId) {when=Table:AppId, as=Matter}" in printMapping(mapping)

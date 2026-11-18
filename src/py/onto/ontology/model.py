@@ -246,7 +246,7 @@ class ResolvedType:
 # -----------------------------------------------------------------------------
 
 
-def _typeKey(type: TypeExpr) -> str:
+def typeKey(type: TypeExpr) -> str:
 	return f"{type.path}.{type.attr}" if type.attr else str(type.path)
 
 
@@ -297,8 +297,8 @@ class Model:
 		header = dict(ontology.header)
 		self.defaultCard = header.get("card", "?")
 		self.defaultCounts = header.get("rel", "*:*")
-		self._looking: set[str] = set()
-		self._extensions: dict[str, list[Decl]] | None = None
+		self.lookupInProgress: set[str] = set()
+		self.extensionsByTarget: dict[str, list[Decl]] | None = None
 
 	def get(self, path: str | None) -> Decl | None:
 		"""Find declaration `path`, or return None when absent."""
@@ -314,14 +314,14 @@ class Model:
 
 	def extensionsOf(self, path: str) -> list[Decl]:
 		"""Vocabularies declaring `{extends=...}` the vocabulary `path` (after aliases), sorted by path."""
-		if self._extensions is None:
-			self._extensions = {}
+		if self.extensionsByTarget is None:
+			self.extensionsByTarget = {}
 			for decl in sorted(self.ontology.decls, key=lambda item: item.path):
 				target = annotation(decl.ann, "extends")
 				final = self.typeDecl(TypeExpr(path=target)) if decl.kind == "type" and isinstance(target, str) else None
 				if final and final is not decl:
-					self._extensions.setdefault(final.path, []).append(decl)
-		return self._extensions.get(path, [])
+					self.extensionsByTarget.setdefault(final.path, []).append(decl)
+		return self.extensionsByTarget.get(path, [])
 
 	def vocabularyOf(self, decl: Decl) -> list[str]:
 		"""Values of vocabulary declaration `decl` followed by those its extensions add, in declaration order."""
@@ -388,15 +388,15 @@ class Model:
 		"""Attribute `attrPath` of `ownerPath`, through facets and structures; roles act as attributes."""
 		# NOTE: A structure reached through attribute reuse may lead back here (`A P.A.X`): the guard stops it.
 		key = f"{ownerPath}.{attrPath}"
-		if key in self._looking:
+		if key in self.lookupInProgress:
 			return None
-		self._looking.add(key)
+		self.lookupInProgress.add(key)
 		try:
-			return self._lookup(ownerPath, attrPath)
+			return self.lookupAttributePath(ownerPath, attrPath)
 		finally:
-			self._looking.discard(key)
+			self.lookupInProgress.discard(key)
 
-	def _lookup(self, ownerPath: str, attrPath: str) -> Attr | None:
+	def lookupAttributePath(self, ownerPath: str, attrPath: str) -> Attr | None:
 		attrPath = unkeyed(attrPath)
 		decl = self.get(ownerPath)
 		if not decl:
@@ -438,6 +438,8 @@ class Model:
 			return f"Invalid attribute path '{attrPath}'"
 		parts = attrPath.split(".")
 		facet = self.facetOf(ownerPath, unkeyed(attrPath))
+		if facet and "[" in parts[0]:
+			return f"'{unkeyed(parts[0])}' is a facet and has no keyed elements"
 		start = 1 if facet else 0
 		for index in range(start, len(parts)):
 			name, _, key = parts[index].partition("[")
@@ -472,7 +474,7 @@ class Model:
 		seen = set() if seen is None else seen
 		if not type or not type.path:
 			return None
-		key = _typeKey(type)
+		key = typeKey(type)
 		if key in seen:
 			return None
 		seen.add(key)
@@ -488,16 +490,16 @@ class Model:
 
 	def resolveType(self, type: TypeExpr | None, ann: Annotations | None = None, observed: Annotations | None = None) -> ResolvedType:
 		"""Resolves a type expression to its final kind; qualifiers come from `observed` values, `ann`, then reused attributes and aliases."""
-		return self._resolve(type, ([observed] if observed else []) + [ann or []], set())
+		return self.resolveTypeSources(type, ([observed] if observed else []) + [ann or []], set(), set())
 
-	def _resolve(self, type: TypeExpr | None, sources: list[Annotations], seen: set[str]) -> ResolvedType:
+	def resolveTypeSources(self, type: TypeExpr | None, sources: list[Annotations], seen: set[str], qualifierPath: set[str]) -> ResolvedType:
 		# NOTE: Qualifier sources are listed nearest first: a nearer fixed value wins, `?` never overrides.
 		resolved = ResolvedType("unspecified")
 		current = type
 		while current:
 			if current.range:
 				# NOTE: The qualifiers of a range, and of its aliases and uses, are those of both bounds.
-				element = self._resolve(current.range, sources, seen)
+				element = self.resolveTypeSources(current.range, sources, seen, qualifierPath)
 				return ResolvedType(
 					"range", element=element, qualifiers=element.qualifiers,
 					qualifierVocabularies=element.qualifierVocabularies, conflicts=element.conflicts,
@@ -508,7 +510,7 @@ class Model:
 			if current.values is not None or current.unknown:
 				resolved = ResolvedType("vocab", values=list(current.values or []), open=current.open or current.unknown)
 				break
-			key = _typeKey(current)
+			key = typeKey(current)
 			if not current.path or key in seen:
 				break
 			seen.add(key)
@@ -555,7 +557,11 @@ class Model:
 			# NOTE: `?:V` leaves the qualifier to each value, taken from vocabulary `V`; the nearest one applies.
 			if vocabulary := next((value[2:] for value in values if value.startswith("?:")), None):
 				resolved.qualifierVocabularies[name] = vocabulary
-				allowed = self.resolveType(TypeExpr(path=vocabulary))
+				if vocabulary in qualifierPath:
+					resolved.conflicts.append(f"{name} references a qualifier vocabulary cycle through '{vocabulary}'")
+					continue
+				allowed = self.resolveTypeSources(TypeExpr(path=vocabulary), [[]], set(), qualifierPath | {vocabulary})
+				resolved.conflicts.extend(allowed.conflicts)
 				for value in dict.fromkeys(fixed):
 					if allowed.kind == "vocab" and not allowed.open and value not in (allowed.values or []):
 						resolved.conflicts.append(f"{name}={value} is not a value of '{vocabulary}'")

@@ -43,21 +43,17 @@ class Rules:
 
 
 def translate(glob: str) -> str:
-	"""A gitignore glob as a regular expression body: `*` and `?` stay within a segment, `**` crosses them."""
+	"""A gitignore glob as a regular expression body; only a full `**` segment crosses slashes."""
 	result, index = "", 0
 	while index < len(glob):
 		char = glob[index]
-		if glob.startswith("**/", index):
+		if glob.startswith("**/", index) and (index == 0 or glob[index - 1] == "/"):
 			result += "(?:.*/)?"
 			index += 3
 			continue
 		if glob.startswith("/**", index) and index + 3 == len(glob):
 			result += "/.*"
 			index += 3
-			continue
-		if glob.startswith("**", index):
-			result += ".*"
-			index += 2
 			continue
 		if char == "*":
 			result += "[^/]*"
@@ -97,7 +93,10 @@ def parseRule(line: str) -> Rule | None:
 	anchored = "/" in line
 	line = line.lstrip("/")
 	body = translate(line)
-	return Rule(re.compile(("" if anchored else "(?:.*/)?") + body + "$"), negated, directoryOnly)
+	try:
+		return Rule(re.compile(("" if anchored else "(?:.*/)?") + body + "$"), negated, directoryOnly)
+	except re.error:
+		return None
 
 
 def readRules(directory: str) -> Rules | None:

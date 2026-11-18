@@ -10,7 +10,7 @@ import pytest
 import onto.mapping as mappingApi
 from onto import FormatError, Source, loadFunctions, loadOntology, MappingOperator, formatMapping, loadMapping, mappingFromJson, mappingToJson, parseMapping, printMapping, resolveMapping
 from onto.referential import loadReferential
-from tests._helpers import _schemaValidator, _specExample
+from tests.helpers import schemaValidator, specExample
 
 # -----------------------------------------------------------------------------
 #
@@ -19,9 +19,9 @@ from tests._helpers import _schemaValidator, _specExample
 # -----------------------------------------------------------------------------
 
 
-EXCHANGE = loadOntology([Source("exchange.onto", _specExample("spec-04-mapping", 1))])
-FINANCE = loadOntology([Source("finance.onto", _specExample("spec-01-ontology"))])
-SHEET = loadOntology([Source("sheet.onto", _specExample("spec-04-mapping", 7))])
+EXCHANGE = loadOntology([Source("exchange.onto", specExample("spec-04-mapping", 1))])
+FINANCE = loadOntology([Source("finance.onto", specExample("spec-01-ontology"))])
+SHEET = loadOntology([Source("sheet.onto", specExample("spec-04-mapping", 7))])
 SOURCE = loadOntology([Source("source.onto", """@ontology S rev=v1
 Name =
   Given Text
@@ -88,15 +88,15 @@ def load(text: str):
 
 
 def testCompleteExchangeImportFromTheSpecification():
-	markets = loadFunctions([FINANCE], [Source("markets.fn", _specExample("spec-04-mapping", 3))])
-	ref = loadReferential([FINANCE, EXCHANGE], [Source("market-ids.ref", _specExample("spec-04-mapping", 4))])
+	markets = loadFunctions([FINANCE], [Source("markets.fn", specExample("spec-04-mapping", 3))])
+	ref = loadReferential([FINANCE, EXCHANGE], [Source("market-ids.ref", specExample("spec-04-mapping", 4))])
 	ops = MappingOperator(EXCHANGE, FINANCE, libraries=[markets], referentials=[ref])
-	text = _specExample("spec-04-mapping", 5)
+	text = specExample("spec-04-mapping", 5)
 	doc = ops.parse(Source("exchange-finance.map", text))
 	assert doc.scopes[0].loc.file == "exchange-finance.map"
 	mapping = ops.resolve(doc)
 	data = ops.toJson(mapping)
-	_schemaValidator("mapping").validate(data)
+	schemaValidator("mapping").validate(data)
 	assert data["format"] == "onto.mapping/1"
 	assert data["maps"][0]["path"] == "AssetClassFromCode"
 	assert data["maps"][0]["from"] == "Exchange/ClassCode"
@@ -107,10 +107,10 @@ def testCompleteExchangeImportFromTheSpecification():
 
 
 def testCompleteFinanceSheetProjectionFromTheSpecification():
-	text = _specExample("spec-04-mapping", 8)
+	text = specExample("spec-04-mapping", 8)
 	mapping = loadMapping(FINANCE, SHEET, Source("finance-sheet.map", text))
 	data = mappingToJson(mapping)
-	_schemaValidator("mapping").validate(data)
+	schemaValidator("mapping").validate(data)
 	assert data["header"]["view"] == "Finance/PortfolioReview"
 	assert printMapping(mapping) == text
 	assert mappingToJson(mappingFromJson(FINANCE, SHEET, data)) == data
@@ -119,16 +119,16 @@ def testCompleteFinanceSheetProjectionFromTheSpecification():
 
 def testSpecificationJsonExcerptLoadsWithItsReferencedLocalMap():
 	# Supply the excerpt's omitted local map, reference correspondence and referential key assignment.
-	data = json.loads(_specExample("spec-04-mapping", 1, "json"))
-	markets = loadFunctions([FINANCE], [Source("markets.fn", _specExample("spec-04-mapping", 3))])
-	ref = loadReferential([FINANCE, EXCHANGE], [Source("market-ids.ref", _specExample("spec-04-mapping", 4))])
+	data = json.loads(specExample("spec-04-mapping", 1, "json"))
+	markets = loadFunctions([FINANCE], [Source("markets.fn", specExample("spec-04-mapping", 3))])
+	ref = loadReferential([FINANCE, EXCHANGE], [Source("market-ids.ref", specExample("spec-04-mapping", 4))])
 	ops = MappingOperator(EXCHANGE, FINANCE, libraries=[markets], referentials=[ref])
-	complete = ops.toJson(ops.load(Source("t", _specExample("spec-04-mapping", 5))))
+	complete = ops.toJson(ops.load(Source("t", specExample("spec-04-mapping", 5))))
 	data["maps"] = complete["maps"]
 	instrument = next(item for item in complete["scopes"] if item["source"] == "Exchange/Instrument")
 	data["scopes"][0]["lines"].insert(-1, next(line for line in instrument["lines"] if line.get("target") == "Isin"))
 	data["scopes"] += [item for item in complete["scopes"] if item["source"] == "Exchange/Issuer"]
-	_schemaValidator("mapping").validate(data)
+	schemaValidator("mapping").validate(data)
 	assert ops.toJson(ops.fromJson(data)) == data
 
 
@@ -143,7 +143,7 @@ def testReferencePathsConditionsProvenanceAndProposalFlagsRoundTrip():
 - Person.Currency {reason=out-of-scope} -- Not selected
 ''')
 	data = mappingToJson(mapping)
-	_schemaValidator("mapping").validate(data)
+	schemaValidator("mapping").validate(data)
 	lines = data["scopes"][0]["lines"]
 	assert lines[0]["facet"] == "Investor" and lines[0]["candidate"] is True
 	assert next(line for line in lines if line.get("target") == "Code")["src"] == "Owner.Code"
@@ -180,7 +180,7 @@ Event -> Occurrence
   Who <- Who
 ''')
 	data = mappingToJson(mapping)
-	_schemaValidator("mapping").validate(data)
+	schemaValidator("mapping").validate(data)
 	assert mappingToJson(mappingFromJson(SOURCE, TARGET, data)) == data
 
 

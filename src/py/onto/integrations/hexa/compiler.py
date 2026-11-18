@@ -6,18 +6,20 @@ from dataclasses import dataclass, field
 import re
 from typing import Any as AnyValue
 
+from hexa.core import NAME_RE
+from hexa.shape import Slot, compileShape, validateShape
 from hexa.shapes import Any, Bool, DateOnly, DatePattern, DateTime, Decimal, DecimalText, Location, Null, Origin, Text, Timed, Tuple, derive, either, gather, loose, optional, parsed, rest, slot, tolerant, via
 
 from ...binding.model import Binding, BindingLine, BindingScope
-from ...binding.operations import BUILTIN_RESULTS
+from ...binding.operations import enclosingPath, enclosingScope, rootSteps
 from ...expressions import Expression, keyedSteps, printExpression
 from ...formats.model import Formats
-from ...functions.model import FunctionLibrary
-from ...functions.operations import _resolveSignature
+from ...functions.model import BUILTIN_RESULTS, FunctionLibrary
+from ...functions.operations import resolveSignature
 from ...functions.runtime import FunctionEvaluator
 from ...inventory.operations import pascalCase
 from ...ontology.model import Attr, Model, Ontology, ResolvedType, TypeExpr
-from ...mapping.operations import correspondenceScopes, correspondenceTarget
+from ...mapping.operations import contextModel, correspondenceScopes, correspondenceTarget
 from ...referential.operations import policyFor
 from ...text import annotation, lastSegment
 from . import vocabulary as V
@@ -118,6 +120,15 @@ def valueShape(model: Model, attr: Attr) -> AnyValue:
 def slotName(*parts: str) -> str:
 	# NOTE: An element key (`Phones[Mobile]`) is a segment of its own, `Phones.KeyMobile`: hexa names are dotted names.
 	return ".".join(segment for part in parts for segment in part.replace("[", ".Key").replace("]", "").replace("/", ".").split(".") if segment)
+
+
+def localSlot(name: str, shape: AnyValue) -> Slot:
+	"""Keep slots with revision-dependent shapes out of hexa's process-wide registry."""
+	if not NAME_RE.fullmatch(name):
+		raise ValueError("invalid slot name")
+	compiled = compileShape(shape)
+	validateShape(compiled)
+	return Slot(name, compiled)
 
 
 def isIndex(step: AnyValue) -> bool:
@@ -241,9 +252,15 @@ class ScopeCompiler:
 		# A selector has no index form (hexa spec-004). Index steps after the last `[*]` are read by the
 		# record's shape (`rows[*][0]` selects `rows/*`, and every line reads below position 0); an index
 		# before a `[*]` is a selector level of its own, `*`, keeping only that position (`levelPicks`).
-		steps = list(scope.path["path"])
+		steps = rootSteps(scope.path)
+		self.recordSteps = steps
 		last = max((index for index, step in enumerate(steps) if step == EACH), default=-1)
 		first = next((index for index, step in enumerate(steps) if isIndex(step) and index > last), len(steps))
+		if first < len(steps):
+			try:
+				first = max(first, len(enclosingPath(steps, 1, owner.binding.scopes)))
+			except ValueError:
+				pass
 		self.steps = steps[:first]
 		self.prefix = tuple(relativeStep(step) for step in steps[first:])
 		self.positions: dict[tuple, Position] = {}
@@ -346,6 +363,8 @@ class ScopeCompiler:
 
 	def fieldPath(self, key: tuple) -> str:
 		steps = list(self.steps) + [keyStep(step) for step in key]
+		if steps and isLevel(steps[0]):
+			steps.insert(0, {"root": True})
 		return printExpression({"path": steps}, binding=True)
 
 	def plan(self) -> None:
@@ -360,8 +379,8 @@ class ScopeCompiler:
 				self.countReads(line.expr)
 			if line.when:
 				self.countReads({"path": line.when["path"]})
-			if line.null and line.expr is not None and len(paths := self.linePaths(line.expr)) == 1:
-				self.nullPolicies[paths[0]] = line.null
+			if self.nullPolicy(line) and line.expr is not None and len(paths := self.linePaths(line.expr)) == 1:
+				self.nullPolicies[paths[0]] = self.nullPolicy(line)
 		for line in scope.lines:
 			if line.target is None or line.expr is None or self.isEnclosing(line.expr):
 				continue
@@ -380,7 +399,7 @@ class ScopeCompiler:
 			collection = "*" in key
 			if key in self.formatted and collection:
 				raise CompileError(V.BindingCodes.PathUnsupported, "'$format' cannot read a collection")
-			capture = slot(slotName("Bind", self.short, "Fields", fieldName([EACH if step == "*" else step for step in key])), [Any] if collection else Any)
+			capture = localSlot(slotName("Bind", self.short, "Fields", fieldName([EACH if step == "*" else step for step in key])), [Any] if collection else Any)
 			codecs = self.patterns(key, self.formatted[key]) if key in self.formatted else []
 			self.positions[key] = Position(capture, codecs, collection)
 		for key, kind in self.nullPolicies.items():
@@ -396,6 +415,9 @@ class ScopeCompiler:
 		if "coalesce" in expr:
 			return [path for item in expr["coalesce"] for path in self.linePaths(item)]
 		return []
+
+	def nullPolicy(self, line: BindingLine) -> str | None:
+		return line.null or self.owner.binding.header.get("null")
 
 	def isEnclosing(self, expr: Expression) -> bool:
 		steps = expr.get("path")
@@ -456,20 +478,12 @@ class ScopeCompiler:
 		hexa's selector fails as a whole on a missing path, which a nested scope reports per parent.
 		"""
 		steps = self.steps
-		if steps and isinstance(steps[0], dict) and "root" in steps[0]:
-			steps = steps[1:]
-			if 0 in self.blocks:
-				raise CompileError(V.BindingCodes.PathUnsupported, "A root list has no fields to capture")
-		eaches = sum(1 for step in steps if isLevel(step))
 		levels: list[list[str]] = [[blockText(self.blocks[0])] if 0 in self.blocks else []]
-		seen = 0
-		for step in steps:
+		for offset, step in enumerate(steps, 1):
 			levels[-1].append(selectorSegment(step))
+			if offset in self.blocks:
+				levels[-1].append(blockText(self.blocks[offset]))
 			if isLevel(step):
-				seen += 1
-				level = eaches - seen
-				if level and level in self.blocks:
-					levels[-1].append(blockText(self.blocks[level]))
 				levels.append([])
 		if not levels[-1] and len(levels) > 1:
 			levels.pop()
@@ -477,8 +491,7 @@ class ScopeCompiler:
 
 	def levelPicks(self) -> list[int | None]:
 		"""Per selector level, the position its `*` keeps (an index step), or None to keep every element."""
-		steps = self.steps[1:] if self.steps and isinstance(self.steps[0], dict) and "root" in self.steps[0] else self.steps
-		picks = [step["index"] if isIndex(step) else None for step in steps if isLevel(step)]
+		picks = [step["index"] if isIndex(step) else None for step in self.steps if isLevel(step)]
 		return picks + [None] * (len(self.levels()) - len(picks))
 
 	def selector(self) -> str:
@@ -487,14 +500,15 @@ class ScopeCompiler:
 
 	# --- templates --------------------------------------------------------------
 
-	def capture(self, level: int, name: str) -> AnyValue:
-		"""A field captured by the selector block `level` records up (0: the document root)."""
-		fields = self.blocks.setdefault(level, {})
+	def capture(self, offset: int, up: int, name: str) -> AnyValue:
+		"""A field captured at a prefix of the selector path."""
+		fields = self.blocks.setdefault(offset, {})
 		if name not in fields:
-			if level == 0:
+			if offset == 0:
 				owner = "Root"
 			else:
-				owner = "Outer" if level == 1 else f"Outer{level}"
+				owner = "Outer" if up == 1 else f"Outer{up}"
+			# Textual selectors resolve these fixed-shape captures through hexa's slot registry.
 			fields[name] = slot(slotName("Bind", self.short, "Fields", owner, pascalCase(name)), Any)
 			self.outer.append(fields[name])
 			self.outer.sort(key=lambda item: item.name)
@@ -503,17 +517,18 @@ class ScopeCompiler:
 	def pathValue(self, steps: list[AnyValue]) -> AnyValue:
 		first = steps[0]
 		if isinstance(first, dict) and ("root" in first or "up" in first):
-			eaches = sum(1 for step in self.steps if isLevel(step))
-			level = 0 if "root" in first else first["up"]
-			if level >= eaches and "up" in first:
-				raise CompileError(V.BindingCodes.PathUnsupported, "'^' climbs above the document root")
-			rest = [("*" if step == EACH else step) for step in steps[1:]]
+			up = first.get("up", 0)
+			try:
+				offset = len(enclosingPath(self.recordSteps, up, self.owner.binding.scopes)) if up else 0
+			except ValueError as error:
+				raise CompileError(V.BindingCodes.PathUnsupported, str(error)) from error
+			rest = [relativeStep(step) for step in steps[1:]]
 			if not rest or not isinstance(rest[0], str) or rest[0] == "*":
 				raise CompileError(V.BindingCodes.PathUnsupported, "An enclosing path must name a field")
-			if level == 0 and self.owner.atSlot is not None and rest == [self.owner.atField]:
+			if offset == 0 and self.owner.atSlot is not None and rest == [self.owner.atField]:
 				self.registerAt()
 				return optional(self.owner.atSlot)
-			captured = optional(self.capture(level, rest[0]))
+			captured = optional(self.capture(offset, up, rest[0]))
 			return derive(V.Field, captured, rest[1:]) if len(rest) > 1 else captured
 		key = self.relative(steps)
 		for index in range(1, len(key)):
@@ -569,7 +584,7 @@ class ScopeCompiler:
 			position = self.positions[key]
 			value = optional(position.slot)
 			if position.nulls is not None:
-				value = derive(V.Nullable, value, optional(position.nulls), line.null or self.owner.binding.header.get("null", "absent"))
+				value = derive(V.Nullable, value, optional(position.nulls), self.nullPolicy(line))
 			if position.codecs and len(position.codecs) > 1:
 				self.formats[self.fieldPath(key)] = derive(V.FormatName, parsed(position.slot))
 		else:
@@ -582,8 +597,8 @@ class ScopeCompiler:
 				value = derive(V.Set, value, "Ref")
 			paths = self.linePaths(expr)
 			if len(paths) == 1 and (position := self.positions.get(paths[0])) is not None:
-				if position.nulls is not None and line.null:
-					value = derive(V.Nullable, value, optional(position.nulls), line.null)
+				if position.nulls is not None and (policy := self.nullPolicy(line)):
+					value = derive(V.Nullable, value, optional(position.nulls), policy)
 				if len(position.codecs) > 1:
 					self.formats[self.fieldPath(paths[0])] = derive(V.FormatName, parsed(position.slot))
 		if line.when:
@@ -633,15 +648,15 @@ class BindingCompiler:
 		self.atSlot = None
 		self.atField = None
 		at = binding.at
-		if at is not None and "path" in at and len(at["path"]) == 1 and isinstance(at["path"][0], str):
-			self.atField = at["path"][0]
+		if at is not None and "path" in at and len(steps := rootSteps(at)) == 1 and isinstance(steps[0], str):
+			self.atField = steps[0]
 			self.atSlot = slot("Bind.At", Any)
 
 	def attributeSlot(self, typePath: str, attrPath: str) -> AnyValue:
 		name = slotName(typePath, attrPath)
 		if name not in self.slots:
 			attr = self.model.lookup(typePath, attrPath)
-			self.slots[name] = slot(name, valueShape(self.model, attr))
+			self.slots[name] = localSlot(name, valueShape(self.model, attr))
 		return self.slots[name]
 
 	def declareSlots(self) -> None:
@@ -670,14 +685,11 @@ class BindingCompiler:
 		return sorted(self.binding.scopes, key=lambda item: (item.type, printExpression(item.path, binding=True)))
 
 	def enclosing(self, scope: BindingScope, up: int) -> BindingScope | None:
-		steps = scope.path["path"]
-		# Record levels: `[*]`, and index steps before the last one (selector levels of their own)
-		last = max((index for index, step in enumerate(steps) if step == EACH), default=-1)
-		eaches = [index for index, step in enumerate(steps) if step == EACH or isIndex(step) and index < last]
-		if len(eaches) <= up:
+		try:
+			path = enclosingPath(rootSteps(scope.path), up, self.binding.scopes)
+		except ValueError:
 			return None
-		prefix = steps[:eaches[-1 - up] + 1]
-		return next((item for item in self.binding.scopes if item.path["path"] == prefix), None)
+		return enclosingScope(path, self.binding.scopes)
 
 	def atValue(self, scope: ScopeCompiler) -> AnyValue:
 		at = self.binding.at
@@ -787,6 +799,7 @@ class MappingScopeCompiler:
 		self.positions: dict[str, AnyValue] = {}
 		self.lines: list[LineInfo] = []
 		self.roots: dict[str, AnyValue] = {}
+		self.when = self.compiledCondition(scope.when)
 		self.sourceRefs: dict[str, tuple[str, list[str]]] = {}  # `$ref<n>` -> (source type, key path): `ref(S, Key)`
 
 	# --- paths ---------------------------------------------------------------
@@ -867,9 +880,9 @@ class MappingScopeCompiler:
 				return ResolvedType("builtin", builtin=BUILTIN_RESULTS[name])
 			evaluator = self.owner.calls.evaluator
 			if (function := evaluator.functions.get(name)) is not None:
-				return _resolveSignature(evaluator.model, function.result)
+				return resolveSignature(evaluator.model, function.result)
 			if (mapping := evaluator.maps.get(name)) is not None:
-				return evaluator.model.resolveType(TypeExpr(path=mapping.mapTo))
+				return evaluator.mapTargetModel(name).resolveType(TypeExpr(path=mapping.mapTo))
 			return None
 		if "coalesce" in expr:
 			return self.exprType(expr["coalesce"][0])
@@ -948,10 +961,15 @@ class MappingScopeCompiler:
 	def condition(self, when: dict, value: AnyValue) -> AnyValue:
 		return derive(V.When, derive(V.TextEquals, self.pathValue(when["path"])[0], when["value"]), value)
 
+	def compiledCondition(self, condition: dict | None) -> dict | None:
+		"""Use the same member steps as expression inputs and reach."""
+		return {**condition, "path": keyedSteps(condition["path"])} if condition else None
+
 	def lineValue(self, line: AnyValue, exclusive: dict | None = None) -> tuple[AnyValue, LineInfo]:
 		"""`exclusive`, for the default of exclusive lines: the `{path, values}` of its siblings' conditions."""
 		read = self.paths(line.expr)
-		inputs = read + [path for expr in line.qualifiers.values() for path in self.paths(expr)] + ([line.when["path"]] if line.when else [])
+		when, exclusive = self.compiledCondition(line.when), self.compiledCondition(exclusive)
+		inputs = read + [path for expr in line.qualifiers.values() for path in self.paths(expr)] + ([when["path"]] if when else [])
 		inputs += [exclusive["path"]] if exclusive else []
 		# The source input comes from the expression (`{src=Path}`, else its first path), never from `when`.
 		source = 0 if read else -1
@@ -987,9 +1005,9 @@ class MappingScopeCompiler:
 				value = self.owner.correspond(value, actual.path if actual is not None and actual.kind in ("entity", "relation") else None, accepted)
 			info = LineInfo("links" if line.verb else "values", key, inputs, source, also)
 		info.qualifiers = tuple(line.qualifiers)
-		info.when, info.unless = line.when, exclusive
-		if line.when:
-			value = self.condition(line.when, value)
+		info.when, info.unless = when, exclusive
+		if when:
+			value = self.condition(when, value)
 		elif exclusive:
 			value = derive(V.WhenNone, self.pathValue(exclusive["path"])[0], exclusive["values"], value)
 		info.contextual = any(segment.context for path in inputs for segment in self.segments(path))
@@ -1027,7 +1045,7 @@ class MappingScopeCompiler:
 		return record | sections | ({"qualifiers": qualifiers} if qualifiers else {}) | {"source": Location}
 
 	def handleTemplate(self) -> dict[str, AnyValue]:
-		"""`{handle}`: derived from the key line of `T`'s policy, else source-qualified."""
+		"""`{handle}`: derived from a single key line of `T`'s policy, else source-qualified."""
 		if self.scope.into is not None:
 			actual = self.exprType(self.scope.into)
 			value = self.owner.correspond(self.expression(self.scope.into), actual.path, [self.scope.target])
@@ -1048,9 +1066,15 @@ class MappingScopeCompiler:
 		if self.scope.name:
 			raise CompileError(V.MappingCodes.PolicyUnsupported, "Named scopes currently require source-qualified identities")
 		key = policy.keys[0]
-		line = next((item for item in self.scope.lines if item.target == key and (not item.candidate or self.owner.mapping.header.get("candidates") is True)), None)
-		if line is None:
+		candidates = self.owner.mapping.header.get("candidates") is True
+		lines = [line for line in self.scope.lines if line.target == key and (not line.candidate or candidates)]
+		if not lines:
 			raise CompileError(V.MappingCodes.PolicyUnsupported, f"No line of '{self.scope.source} -> {self.scope.target}' assigns key '{key}'")
+		if len(lines) > 1:
+			# Handle projection precedes body emission and its transforms evaluate arguments eagerly:
+			# coalescing the branches would run inactive expressions and treat a conflicting condition as absent.
+			raise CompileError(V.MappingCodes.PolicyUnsupported, f"Exclusive assignments to referential key '{key}' are not supported")
+		line = lines[0]
 		actual = self.exprType(line.expr)
 		if actual is not None and actual.kind in ("entity", "relation"):
 			raise CompileError(V.MappingCodes.KeyReference, f"Key '{key}' reads a reference's target")
@@ -1059,7 +1083,8 @@ class MappingScopeCompiler:
 		value = self.convert(value, actual, attr)
 		if line.when:
 			value = self.condition(line.when, value)
-		return {"handle": derive(V.Handle, short, value)}
+		# spec-05: a record without its key keeps a source-qualified handle; it never becomes a gap
+		return {"handle": derive(V.KeyedHandle, short, value, optional(self.root("$scope")), optional(self.root("$handle")), self.scope.source)}
 
 	def shape(self) -> AnyValue:
 		fields = {f"{key}?": slotValue for key, slotValue in self.roots.items()}
@@ -1069,9 +1094,9 @@ class MappingScopeCompiler:
 	def reach(self) -> dict:
 		"""Every path the scope reads: `{key: {segment, children}}`, references continuing under their type."""
 		tree: dict = {}
-		paths = [path for line in self.scope.lines for path in self.paths(line.expr) + ([line.when["path"]] if line.when else [])]
+		paths = [path for line in self.scope.lines for path in self.paths(line.expr) + self.paths(line.when)]
 		paths += [path for line in self.scope.lines for expr in line.qualifiers.values() for path in self.paths(expr)]
-		paths += self.paths(self.scope.valid) + self.paths(self.scope.ctx) + self.paths(self.scope.present) + self.paths(self.scope.into) + ([self.scope.when["path"]] if self.scope.when else [])
+		paths += self.paths(self.scope.valid) + self.paths(self.scope.ctx) + self.paths(self.scope.present) + self.paths(self.scope.into) + ([self.when["path"]] if self.when else [])
 		for steps in paths:
 			node = tree
 			for segment in self.segments(steps):
@@ -1080,7 +1105,7 @@ class MappingScopeCompiler:
 
 
 class MappingCompiler:
-	"""Compile every scope of a mapping, sharing attribute slots with bindings of the same ontology."""
+	"""Compile every scope of a mapping, using the same attribute slot definitions as bindings."""
 
 	def __init__(self, fromOntology: Ontology, toOntology: Ontology, mapping: AnyValue, referential: AnyValue, libraries: list[FunctionLibrary] | None,
 		implementations: dict | None, ontologies: list[Ontology] | None = None):
@@ -1090,15 +1115,17 @@ class MappingCompiler:
 		self.referential = referential
 		self.slots: dict[str, AnyValue] = {}
 		self.used: set[str] = set()
-		decls = {decl.path: decl for item in [fromOntology, toOntology] + list(ontologies or []) for decl in item.decls}
-		context = Ontology(namespace=fromOntology.namespace, header=fromOntology.header, decls=list(decls.values()))
-		self.calls = Calls(FunctionEvaluator([context], libraries or [], mapping.functions, mapping.maps, implementations or {}), self.used)
+		contexts = [fromOntology, toOntology] + list(ontologies or [])
+		context = contextModel(fromOntology, contexts).ontology
+		target = contextModel(toOntology, contexts) if mapping.maps else None
+		self.calls = Calls(FunctionEvaluator([context], libraries or [], mapping.functions, mapping.maps, implementations or {},
+			mapTargetModel=target), self.used)
 
 	def attributeSlot(self, typePath: str, attrPath: str, owner: str | None = None) -> AnyValue:
 		name = slotName(typePath, attrPath)
 		if name not in self.slots:
 			attr = self.model.lookup(owner or typePath, attrPath)
-			self.slots[name] = slot(name, valueShape(self.model, attr))
+			self.slots[name] = localSlot(name, valueShape(self.model, attr))
 		return self.slots[name]
 
 	def correspond(self, value: AnyValue, source: str | None, accepted: list[str]) -> AnyValue:

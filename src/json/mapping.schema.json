@@ -356,6 +356,10 @@
       "type": "string",
       "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
     },
+    "elementPath": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\[[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)*\\])?(\\.[A-Za-z_][A-Za-z0-9_]*(\\[[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)*\\])?)*$"
+    },
     "token": {
       "type": "string",
       "pattern": "^[^\\s{},=]+$"
@@ -505,6 +509,18 @@
         {
           "type": "string",
           "minLength": 1
+        },
+        {
+          "type": "object",
+          "required": [
+            "key"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "key": {
+              "$ref": "#/$defs/path"
+            }
+          }
         },
         {
           "type": "object",
@@ -725,7 +741,7 @@
           "additionalProperties": false,
           "properties": {
             "target": {
-              "$ref": "#/$defs/attrPath"
+              "$ref": "#/$defs/elementPath"
             },
             "expr": {
               "$ref": "#/$defs/expr"

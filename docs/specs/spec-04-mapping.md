@@ -859,6 +859,8 @@ A line is **reversible** when its expression can be solved for its input:
   reference attribute, translated back through the instance correspondence;
 - a call to a function with an `inverse`, on a reversible argument;
 - an `@map` whose lines are all `exact` and form a one-to-one correspondence.
+  Distinct forward maps get distinct local names in the reverse, even when
+  their names differ only by qualification.
 
 A path through a reference (`Instrument.Isin`) reads another instance:
 
@@ -935,6 +937,10 @@ instruments[*].name	trim	trim 380; padded 35
 - After the header line, one tab-separated line per field, sorted by path: the
   chosen `format`, the formats `seen` with their counts (most frequent first,
   then by name), and, optionally, `pin` for a format chosen by a person.
+  Field paths use binding syntax from the document root, including wildcards
+  and fixed indexes (e.g. `rows[*][0].date`).
+  Write a format name containing `; `, a tab, or a line break as a JSON string
+  so it cannot be confused with the row or `seen` delimiters.
 - Formats are date and date-time patterns (as in `date(a, format)`),
   `decimals:N` (fixed decimal places), `case:upper` or `case:lower`, `trim` or
   `padded`, and `sep:<text>` for a collection written in one field. How a format
@@ -1000,7 +1006,8 @@ claim.
 | `none` | Nothing is retracted | Additive or delta feeds |
 
 Whatever `complete` says, a scope line's `deleted=path:value` retracts the
-instances the feed reports as deleted.
+instances the feed reports as deleted. For a replacement snapshot, these
+explicit retractions also carry `{of=<previous token>}`.
 
 ### Safeguards
 
@@ -1107,9 +1114,11 @@ missing from the inventory are reported when a binding runs.
 
 Since extraction already derives the source ontology from the same evidence, it
 can also derive a **default binding**: one scope line per list of objects, and
-one body line per scalar field, assigning the attribute named by the field in
-PascalCase (`couponRate` → `CouponRate <- bond.couponRate`). People then edit
-only the exceptions: `id=`, `??`, `date(...)`, references and exclusions. The
+one body line per field, assigning the attribute named by the field in
+PascalCase (`couponRate` → `CouponRate <- bond.couponRate`). Colliding names
+are disambiguated by path and, if needed, a numeric suffix. A scope with no
+addressable scalar key candidate is left for the author to add. People then
+edit the exceptions: `id=`, `??`, `date(...)`, references and exclusions. The
 default binding is regenerated, and compared with the edited one, when the
 source format changes.
 

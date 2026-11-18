@@ -8,7 +8,7 @@ from typing import Any
 from ..expressions import printExpression
 from ..functions.formatter import functionBlock, functionsToJson
 from ..functions.model import FunctionLibrary
-from ..ontology.formatter import Namer, Printer, _toJson, normaliseOntology
+from ..ontology.formatter import Namer, Printer, encodeOntology, normaliseOntology
 from ..ontology.model import ANNOTATION_KEYS as ONTOLOGY_ANNOTATIONS, Ontology
 from ..text import printAnnotations, withDoc
 from .model import ANNOTATION_KEYS, HEADER_KEYS, MAPPING_FORMAT, QUALIFIER_KEYS, Mapping, MappingLine
@@ -35,13 +35,19 @@ def shortElement(path: str, short: Namer) -> str:
 	return short(parts[0]) + ("." + ".".join(parts[1:]) if len(parts) > 1 else "")
 
 
-def expressionText(expr: dict[str, Any], short: Namer) -> str:
+def expressionText(expr: dict[str, Any], short: Namer, localCalls: set[str]) -> str:
 	def names(value: dict[str, Any]) -> dict[str, Any]:
 		if "call" in value:
 			args = [names(arg) for arg in value["args"]]
 			if value["call"] == "ref" and args and len(args[0].get("path", [])) == 1 and "/" in str(args[0]["path"][0]):
 				args[0] = {"path": [short(args[0]["path"][0])]}  # ref(Type, Key): the type is a name
-			return {"call": short(value["call"]) if "/" in value["call"] else value["call"], "args": args}
+			path = value["call"]
+			name = short(path) if "/" in path else path
+			if "/" in path and name in localCalls:
+				name = short.aliasName(path)
+				if name is None:
+					raise ValueError(f"Call '{path}' is shadowed by a local declaration: add a @use alias")
+			return {"call": name, "args": args}
 		if "coalesce" in value:
 			return {"coalesce": [names(item) for item in value["coalesce"]]}
 		return value
@@ -59,6 +65,7 @@ def printMapping(mapping: Mapping) -> str:
 	"""Print a resolved mapping without evaluating any function or instance correspondence."""
 	left = Namer(mapping.fromNamespace, sorted(mapping.uses.items()))
 	right = Namer(mapping.toNamespace, sorted(mapping.uses.items()))
+	localCalls = {function.name for function in mapping.functions} | {decl.path for decl in mapping.maps}
 	def annotations(item: Any, keys: tuple[str, ...]) -> str:
 		parts = []
 		for key in ANNOTATION_KEYS:
@@ -69,7 +76,7 @@ def printMapping(mapping: Mapping) -> str:
 				parts.append(key)
 				continue
 			if key in ("ctx", "valid", "present", "into", *QUALIFIER_KEYS):
-				value = expressionText(value, left)
+				value = expressionText(value, left, localCalls)
 			elif key == "when":
 				value = printExpression({"path": value["path"]}) + ":" + value["value"]
 			elif key == "as":
@@ -94,7 +101,7 @@ def printMapping(mapping: Mapping) -> str:
 	for scope in sorted(mapping.scopes, key=lambda item: (item.source, item.target, item.name or "")):
 		lines += ["", withDoc(f"{left(scope.source)} -> {right(scope.target)}" + annotations(scope, ("name", "into", "present", "when", "ctx", "valid")), scope.doc)]
 		for line in sorted(scope.lines, key=lineKey):
-			text = f"[{line.facet}]" if line.facet else f"{line.target or line.verb} <- {expressionText(line.expr, left)}"
+			text = f"[{line.facet}]" if line.facet else f"{line.target or line.verb} <- {expressionText(line.expr, left, localCalls)}"
 			lines.append(withDoc("  " + text + annotations(line, ("when", "src", "as", *QUALIFIER_KEYS, "reverse", "candidate")), line.doc))
 	if mapping.exclusions:
 		lines.append("")
@@ -113,7 +120,7 @@ def mappingToJson(mapping: Mapping) -> dict[str, Any]:
 	if mapping.functions:
 		data["functions"] = functionsToJson(FunctionLibrary(mapping.fromNamespace, functions=mapping.functions))["functions"]
 	if mapping.maps:
-		data["maps"] = _toJson(normaliseOntology(Ontology(namespace=mapping.fromNamespace, decls=mapping.maps)), None)["decls"]
+		data["maps"] = encodeOntology(normaliseOntology(Ontology(namespace=mapping.fromNamespace, decls=mapping.maps)), None)["decls"]
 	scopes = []
 	for scope in sorted(mapping.scopes, key=lambda item: (item.source, item.target, item.name or "")):
 		value = {"source": scope.source, "target": scope.target}

@@ -8,8 +8,9 @@ import pytest
 
 pytest.importorskip("hexa.shapes")
 from hexa.runtime import run
-from onto import FormatError, Source, loadMapping, loadObservations, loadOntology, mappingFromJson, mappingToJson, observationsToJson, printMapping, reconcileObservations
+from onto import FormatError, Source, loadMapping, loadObservations, loadOntology, mappingFromJson, mappingToJson, observationsFromJson, observationsToJson, printMapping, reconcileObservations
 from onto.integrations.hexa.operations import HexaMappingOperator
+from onto.integrations.hexa.runs import outputLog, tokenized
 
 SOURCE = loadOntology([Source("s.onto", """@ontology S
 Row
@@ -101,6 +102,36 @@ def test_invalid_presence_expression_reports_a_gap_instead_of_silently_skipping(
 	log, report = mapped("  Main not-a-number\n", MAPPING.replace("present=trim(Main)", "present=number(Main)"))
 	assert report.gaps
 	assert not any(item["type"] == "T/Goal" for item in log["instances"].values())
+
+
+@pytest.mark.parametrize(("presence", "initial", "later"), [
+	("trim(Main)", "First", "One\n@src g=other\n@src g\nRow_1.Main Two"),
+	("number(Main)", "1", "not-a-number"),
+])
+def test_failed_presence_keeps_prior_existence_and_slots(presence, initial, later):
+	text = MAPPING.replace("present=trim(Main)", f"present={presence}")
+	first, _ = mapped(f"  Main {initial}\n  Short Remove me\n", text)
+	main = next(handle for handle in first["instances"] if "_40Main" in handle)
+	short = next(handle for handle in first["instances"] if "_40Short" in handle)
+	mapping = loadMapping(SOURCE, TARGET, Source("m.map", text.replace("@mapping S -> T", "@mapping S -> T retract=100%")))
+	ops = HexaMappingOperator(SOURCE, TARGET, mode="lenient")
+	program = ops.compile(mapping)
+	obs = loadObservations(SOURCE, Source("o.obs", "@obs S at=2026-11-18\n@src f=fixture\n@src f\nApp_1:App\nRow_1:Row\n  App App_1\n"
+		f"  Main {later}\n"))
+	env = {"ClockRead": lambda context: "2026-11-18",
+		"OutputPreviousRead": lambda request, context: first if request["src"] == "fixture" else None,
+		"RetractionsPendingRead": lambda request, context: []}
+	result = asyncio.run(run(env, program.stages.MappingRun, observationsToJson(reconcileObservations(SOURCE, obs))))
+	outcome = ops.outcome(program, result)
+	assert [(claim["s"], claim["exists"]) for claim in outcome.log["retractions"]] == [(short, True)]
+	assert not outcome.held
+	assert any(item["s"] == main and item.get("exists") for item in outcome.report.stale)
+	claims = [tokenized(claim, log["sources"]) for log in (first, outcome.log) for claim in log["claims"]]
+	retractions = [tokenized(claim, outcome.log["sources"]) for claim in outcome.log["retractions"]]
+	combined = outputLog({**first, "instances": first["instances"] | outcome.log["instances"]}, claims, retractions)
+	state = reconcileObservations(TARGET, observationsFromJson(TARGET, combined))
+	assert any(claim.get("s") == main and claim.get("p") == "Description" for claim in state.claims)
+	assert not any(claim.get("s") == short for claim in state.claims)
 
 
 def test_names_and_presence_roundtrip_json_and_text():

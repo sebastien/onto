@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from onto import FormatError, Source, loadObservations, loadOntology
+from onto import FormatError, Source, loadObservations, loadOntology, observationsFromJson, observationsToJson, reconcileObservations
 from onto.ontology import Operator
 
 # -----------------------------------------------------------------------------
@@ -75,6 +75,7 @@ def testOneValueOfAGroupIsAccepted():
 @pytest.mark.parametrize("text", [
 	"c:Cover\n  Benefit.Amount 100\n  Benefit.PeriodicAmount 10\n",
 	"c:Cover\n  Rate 2\n  Premium 30\n",
+	"@src a=feed b=feed\nc:Cover\n  Rate 2 {src=a}\n  Premium 30 {src=b}\n",
 ])
 def testTwoValuesOfAGroupAreErrors(text: str):
 	assert observeCodes(text) == ["one"]
@@ -91,9 +92,14 @@ def testAbsenceUnknownsOtherPeriodsSourcesAndSubjectsAreAccepted(text: str):
 	observe(text)
 
 
-def testLenientModeKeepsTheDiagnostic():
-	observations = observe("c:Cover\n  Rate 2\n  Premium 30\n", "lenient")
-	assert [item.code for item in observations.diagnostics] == ["one"]
+def testLenientModeKeepsEarlierExclusiveValuesAndHoldsAllClashes():
+	observations = observe("c:Cover\n  Rate 2\n  Premium 30\n  Premium 40\n  Benefit.Amount 100\n", "lenient")
+	assert [item.code for item in observations.diagnostics] == ["one", "one"]
+	assert [gap.n for gap in observations.gaps] == [3, 4]
+	state = reconcileObservations(load(), observations, "lenient")
+	assert [claim.get("p") for claim in state.claims] == [None, "Rate", "Benefit.Amount"]
+	data = observationsToJson(state)
+	assert observationsToJson(observationsFromJson(load(), data, mode="lenient")) == data
 
 
 # EOF

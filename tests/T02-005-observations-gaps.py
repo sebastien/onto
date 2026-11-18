@@ -8,6 +8,7 @@ import pytest
 
 from onto.observations import Observations
 from onto import FormatError, Source, formatObservations, loadObservations, loadOntology, observationsCoverage, observationsFromJson, observationsToJson, printObservationsLog, printObservationsState, reconcileObservations
+from tests.helpers import schemaValidator
 
 # -----------------------------------------------------------------------------
 #
@@ -146,6 +147,41 @@ def testStateJsonKeepsGapsButStateTextRefusesToSilentlyLoseThem():
 		printObservationsLog(ONTOLOGY, state)
 	data = observationsToJson(state)
 	assert observationsToJson(observationsFromJson(ONTOLOGY, data, mode="lenient")) == data
+
+
+@pytest.mark.parametrize("statement, update, code, survivingValue", [
+	("p.B 2", "- p.A", "one", None),
+	("p[F]", "- p.A", "when", None),
+	("p[F]", "p.A 2", "when", "2"),
+])
+def testStateJsonKeepsConflictGapsAfterTheirBlockerIsRemoved(statement, update, code, survivingValue):
+	ontology = loadOntology([Source("t", """@ontology A
+P
+  A Integer {one=Choice}
+  B Integer {one=Choice}
+F of P {when=A:2}
+""")])
+	log = loadObservations(ontology, Source("t", f"@obs A\np:P\np.A 1\n{statement}\n{update}\n"), "lenient")
+	assert [item.code for item in log.gaps[0].diagnostics] == [code]
+	logData = observationsToJson(log)
+	assert "witnesses" not in logData["gaps"][0]
+	for original in (log, observationsFromJson(ontology, logData, mode="lenient")):
+		state = reconcileObservations(ontology, original, "lenient")
+		assert [claim["v"] for claim in state.claims if "v" in claim] == ([survivingValue] if survivingValue else [])
+		data = observationsToJson(state)
+		schemaValidator("observations").validate(data)
+		loaded = observationsFromJson(ontology, data, mode="lenient")
+		assert observationsToJson(loaded) == data
+		assert loaded.claims == state.claims and not loaded.retractions
+		assert reconcileObservations(ontology, loaded, "lenient").claims == state.claims
+		# Neither a bare diagnostic nor a type-correct but non-conflicting witness is enough.
+		unwitnessed = deepcopy(data)
+		unwitnessed["gaps"][0].pop("witnesses")
+		with pytest.raises(FormatError, match="round trip"):
+			observationsFromJson(ontology, unwitnessed, mode="lenient")
+		data["gaps"][0]["witnesses"][0]["src"] = "differentSource"
+		with pytest.raises(FormatError, match="round trip"):
+			observationsFromJson(ontology, data, mode="lenient")
 
 
 def testTextFormattingRefusesGapsAndCoverageDoesNotTreatThemAsEvidence():

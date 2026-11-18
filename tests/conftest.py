@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from tests._cli import workspace  # noqa: F401 — the CLI tests' project fixture
+from tests.cli import workspace  # noqa: F401 — the CLI tests' project fixture
 
 # EOF

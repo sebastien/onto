@@ -9,7 +9,7 @@ import pytest
 
 from onto import FormatError, Source, formatObservations, loadObservations, loadOntology, observationsCoverage, observationsFromJson, observationsToJson, printObservationsLog, printObservationsState, reconcileObservations
 from onto.observations import Observations
-from tests._helpers import _semanticClaims
+from tests.helpers import semanticClaims
 
 # -----------------------------------------------------------------------------
 #
@@ -137,7 +137,7 @@ def testHistoricalConflictDetectionAndReplay(left: str, right: str, conflict: bo
 	assert [claim["valid"] for claim in claims] == [left, right]
 	printed = printObservationsState(ONTOLOGY, resolved)
 	replayed = reconcileObservations(ONTOLOGY, loadObservations(ONTOLOGY, Source("t", printed)))
-	assert _semanticClaims(replayed) == _semanticClaims(resolved)
+	assert semanticClaims(replayed) == semanticClaims(resolved)
 	assert formatObservations(ONTOLOGY, Source("t", printed)) == printed
 
 
@@ -163,7 +163,7 @@ def testFacetAttributeOnlySubjectsDoNotAcquireExistenceOrExplicitFacets(value: s
 	assert rows[("A/Person[Investor]", "p", None)].statuses == ("supplied",)
 	printed = printObservationsState(ONTOLOGY, resolved)
 	replayed = reconcileObservations(ONTOLOGY, loadObservations(ONTOLOGY, Source("t", printed)))
-	assert _semanticClaims(replayed) == _semanticClaims(resolved)
+	assert semanticClaims(replayed) == semanticClaims(resolved)
 	assert observationsToJson(observationsFromJson(ONTOLOGY, observationsToJson(resolved))) == observationsToJson(resolved)
 	assert formatObservations(ONTOLOGY, Source("t", printed)) == printed
 
@@ -175,7 +175,7 @@ def testContextOnlyAndReferenceOnlyHandlesRemainImplicitUntilTheirReferencesDisa
 	assert not any(claim.get("exists") or "facet" in claim for claim in resolved.claims)
 	printed = printObservationsState(ONTOLOGY, resolved)
 	replayed = reconcileObservations(ONTOLOGY, loadObservations(ONTOLOGY, Source("t", printed)))
-	assert _semanticClaims(replayed) == _semanticClaims(resolved)
+	assert semanticClaims(replayed) == semanticClaims(resolved)
 	assert replayed.instances == resolved.instances
 	assert formatObservations(ONTOLOGY, Source("t", printed)) == printed
 	resolved = state(text + "- p.Friends q\n- p[Review] {ctx=c}\n")
@@ -203,7 +203,7 @@ def testMemberWithdrawalsPreserveCollectionEvidenceAndOtherProducers(partial: st
 	assert [(claim["v"], claim["src"], claim["by"]) for claim in claims] == expected + [(collection, "feed", "snapshot"), ("3", "alias", "addition")]
 	printed = printObservationsState(ONTOLOGY, resolved)
 	replayed = reconcileObservations(ONTOLOGY, loadObservations(ONTOLOGY, Source("t", printed)))
-	assert _semanticClaims(replayed) == _semanticClaims(resolved)
+	assert semanticClaims(replayed) == semanticClaims(resolved)
 	assert observationsToJson(observationsFromJson(ONTOLOGY, observationsToJson(resolved))) == observationsToJson(resolved)
 	assert formatObservations(ONTOLOGY, Source("t", printed)) == printed
 	# A producer-qualified member withdrawal must leave the other producer's member alone.
@@ -292,7 +292,7 @@ def testRepeatedIdentityLinksAccumulateWithoutChangingCanonicalHandleOnReplay(mo
 	assert next(claim for claim in resolved.claims if claim.get("p") == "Name")["s"] == "b"
 	printed = printObservationsState(ONTOLOGY, resolved)
 	replayed = reconcileObservations(ONTOLOGY, loadObservations(ONTOLOGY, Source("t", printed)), mode)
-	assert _semanticClaims(replayed) == _semanticClaims(resolved)
+	assert semanticClaims(replayed) == semanticClaims(resolved)
 	assert formatObservations(ONTOLOGY, Source("t", printed), mode=mode) == printed
 	assert observationsToJson(observationsFromJson(ONTOLOGY, observationsToJson(resolved), mode=mode)) == observationsToJson(resolved)
 
@@ -321,7 +321,7 @@ def testDeterministicReplayAuditPreservesClaimsAndFormatting():
 		assert observationsToJson(observationsFromJson(ONTOLOGY, observationsToJson(log))) == observationsToJson(log)
 		printed = printObservationsState(ONTOLOGY, resolved)
 		loaded = reconcileObservations(ONTOLOGY, loadObservations(ONTOLOGY, Source("t", printed)))
-		assert _semanticClaims(loaded) == _semanticClaims(resolved)
+		assert semanticClaims(loaded) == semanticClaims(resolved)
 		assert formatObservations(ONTOLOGY, Source("t", printed)) == printed
 
 

@@ -257,7 +257,8 @@ Defaults come from `@obs` and the latest `@src`/`@at`/`@ctx` directives.
 - For `kind=event` relations, `valid` is a point; for `kind=state` relations, an
   interval. A new claim on the instance with a closed interval (e.g.
   `dr1 {valid=2021-07-01..2026-06-30}`) states the state ended. It is not a
-  retraction.
+  retraction. A bare update of a named binary relation preserves the
+  participants from a still-live earlier claim by the same source.
 
 ## Contexts
 
@@ -414,6 +415,10 @@ removed, conflicts kept and marked `{conflict}`, identity links applied (claims
 on and references to aliases reported on the canonical handle), implicit
 instances listed.
 
+If an identity link makes the surviving claims violate an exclusive group or a
+facet condition, strict reconciliation fails. Lenient reconciliation warns and
+leaves the conflicting link unapplied, preserving the separate claims.
+
 1. `@obs`, then `@src` alias declarations sorted by alias, then `@scope`, then
    necessary `@type` declarations sorted by handle, then `@implicit` with its
    handles sorted. Log form uses the same registry-only type prelude.
@@ -517,6 +522,11 @@ excerpt of the [example](#example):
   default separately from any explicit `meta.ctx`. Gap-bearing JSON requires
   lenient loading; gap statements are revalidated but never promoted silently to
   claims. The raw source and original locations remain available for review.
+  If a claim needed to reproduce an exclusive-group or facet-condition conflict
+  is no longer present (for example, after reconciliation), `witnesses` retains
+  the blocking attribute claims on that gap. The loader rechecks the conflict in
+  isolation; the witnesses are historical context, not applied observations or
+  proof of provenance.
 - `n` is the 1-based ordinal of the statement in the document. Each line-form
   statement, record header and record body line counts once; directives,
   comments and blank lines do not. `n` orders claims with equal `at`. Claims

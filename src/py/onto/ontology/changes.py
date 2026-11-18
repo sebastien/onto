@@ -128,8 +128,15 @@ def ontologyDiff(before: Ontology, after: Ontology) -> list[dict[str, Any]]:
 			pairs[path] = target
 			used.add(target)
 	changes: list[dict[str, Any]] = []
-	oldHeader = {"namespace": before.namespace, **HEADER_DEFAULTS, **dict(before.header)}
-	newHeader = {"namespace": after.namespace, **HEADER_DEFAULTS, **dict(after.header)}
+	oldHeader: dict[str, str | list[str] | None] = {"namespace": before.namespace, **HEADER_DEFAULTS, **dict(before.header)}
+	newHeader: dict[str, str | list[str] | None] = {"namespace": after.namespace, **HEADER_DEFAULTS, **dict(after.header)}
+	for header, ontology in ((oldHeader, before), (newHeader, after)):
+		if header.get("layering") == "declared":
+			# NOTE: Meta ranks first regardless of its position in the source.
+			meta = f"{ontology.namespace}/Meta"
+			header["domainOrder"] = [
+				decl.path for decl in ontology.decls if decl.kind == "domain" and decl.path != meta
+			]
 	for field in sorted(oldHeader.keys() | newHeader.keys()):
 		if oldHeader.get(field) != newHeader.get(field):
 			changes.append({"op": "change", "path": "@ontology", "field": field, "before": oldHeader.get(field), "after": newHeader.get(field)})

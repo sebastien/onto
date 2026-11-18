@@ -98,6 +98,15 @@ def testInvalidQualifierVocabulariesAreErrors(body: str, code: str):
 	assert code in codes(body)
 
 
+@pytest.mark.parametrize("body", [
+	"Core/Currency = EUR|NZD {cur=?:Core/Currency}\n",
+	"Core/Currency = EUR|NZD {unit=?:Core/Unit}\nCore/Unit = Day|Year {cur=?:Core/Currency}\n",
+])
+def testQualifierVocabularyCyclesAreDiagnosed(body: str):
+	with pytest.raises(FormatError, match="qualifier vocabulary cycle"):
+		load(body)
+
+
 def testAnOpenVocabularyAcceptsOtherValues():
 	load("Core/Currency = EUR|NZD|...\nCore/Money = Amount {cur=?:Core/Currency}\nCore/Pounds = Core/Money {cur=GBP}\n")
 

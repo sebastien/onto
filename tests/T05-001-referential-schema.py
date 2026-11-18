@@ -6,11 +6,11 @@ import json
 
 import pytest
 
-from tests._helpers import _schemaValidator, _specExample
+from tests.helpers import schemaValidator, specExample
 
 
 def testReferentialSpecExampleMatchesSchema() -> None:
-	_schemaValidator("referential").validate(json.loads(_specExample("spec-05-identities", kind="json")))
+	schemaValidator("referential").validate(json.loads(specExample("spec-05-identities", kind="json")))
 
 
 @pytest.mark.parametrize("duration,valid", [
@@ -19,7 +19,7 @@ def testReferentialSpecExampleMatchesSchema() -> None:
 ])
 def testImplicitDurations(duration: str, valid: bool) -> None:
 	policy = {"type": "Finance/Person", "implicit": duration}
-	assert _schemaValidator("referential", "policy").is_valid(policy) is valid
+	assert schemaValidator("referential", "policy").is_valid(policy) is valid
 
 
 # EOF

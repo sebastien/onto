@@ -6,7 +6,8 @@ import re
 from typing import Any
 
 from ..binding.model import Binding, BindingLine, BindingScope
-from ..expressions import parseExpression, printExpression
+from ..expressions import RESERVED, parseExpression, printExpression
+from ..text import isPath
 from .model import CONTAINER_TYPES, FIELD_TYPES, Inventory, InventoryField
 
 # -----------------------------------------------------------------------------
@@ -56,7 +57,9 @@ def walk(value: Any, steps: Steps, found: dict[str, set[str]]) -> None:
 	"""Record list items and scalars below `steps`; plain objects are traversed, not listed."""
 	if isinstance(value, dict):
 		for key, item in value.items():
-			walk(item, steps + [key], found)
+			# NOTE: The binding path grammar does not represent empty field names.
+			if key:
+				walk(item, steps + [key], found)
 	elif isinstance(value, list):
 		for item in value:
 			kind = jsonType(item)
@@ -122,8 +125,8 @@ def defaultBinding(inventory: Inventory, namespace: str, csv: bool = False) -> B
 	"""One scope line per list of objects, one body line per scalar field below it (spec-04).
 
 	Attributes are the field names in PascalCase, types the singular list names (`Row`
-	for CSV rows). The `id` is `id`, `key` or a field ending in `Id`, else the first field.
-	People then edit the exceptions: `id=`, `??`, conversions, references, exclusions.
+	for CSV rows). The `id` is `id`, `key` or a field ending in `Id`, else the first scalar
+	field; scopes without a scalar key candidate are omitted. People edit the exceptions.
 	"""
 	types = inventory.types()
 	scopes: list[BindingScope] = []
@@ -137,7 +140,6 @@ def defaultBinding(inventory: Inventory, namespace: str, csv: bool = False) -> B
 		name, index = typeName, 2
 		while name in used:
 			name, index = f"{typeName}{index}", index + 1
-		used.add(name)
 		fields: list[Steps] = []
 		for other, otherKind in types.items():
 			rest = fieldSteps(other)[len(steps):]
@@ -146,17 +148,25 @@ def defaultBinding(inventory: Inventory, namespace: str, csv: bool = False) -> B
 			if EACH in rest[:-1] or rest[0] == EACH:
 				continue
 			fields.append(rest)
-		if not fields:
+		# NOTE: A lone quoted string in an id expression is a literal, not a relative field.
+		scalar = [rest for rest in fields if EACH not in rest and (len(rest) > 1 or isPath(rest[0]) and rest[0] not in RESERVED)]
+		if not scalar:
 			continue
+		used.add(name)
 		lines: list[BindingLine] = []
 		short = [pascalCase(next(step for step in reversed(rest) if isinstance(step, str))) for rest in fields]
+		targets: set[str] = set()
 		for rest, attr in zip(fields, short):
 			if short.count(attr) > 1:
 				attr = "".join(pascalCase(step) for step in rest if isinstance(step, str))
+			stem, index = attr, 2
+			while attr in targets:
+				attr, index = f"{stem}{index}", index + 1
+			targets.add(attr)
 			lines.append(BindingLine(target=attr, expr={"path": rest}))
-		plain = [rest for rest in fields if len(rest) == 1]
+		plain = [rest for rest in scalar if len(rest) == 1]
 		key = next((rest for name in ID_NAMES for rest in plain if rest[0].lower() == name), None)
-		key = key or next((rest for rest in plain if rest[0].endswith(("Id", "_id", "ID"))), None) or (plain or fields)[0]
+		key = key or next((rest for rest in plain if rest[0].endswith(("Id", "_id", "ID"))), None) or (plain or scalar)[0]
 		scopes.append(BindingScope(type=f"{namespace}/{name}", path={"path": steps}, id={"path": key}, lines=lines))
 	return Binding(ontology=namespace, header={"format": "csv"} if csv else {}, scopes=scopes)
 

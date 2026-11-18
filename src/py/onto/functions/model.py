@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..ontology.model import TypeExpr
 from ..text import Annotations, Diagnostic, Loc
 
 # -----------------------------------------------------------------------------
@@ -16,11 +17,28 @@ from ..text import Annotations, Diagnostic, Loc
 
 FUNCTIONS_FORMAT = "onto.functions/1"
 
-BUILTIN_ARITIES = {
-	"concat": (1, None), "split": (2, 2), "join": (2, 2), "trim": (1, 1), "lower": (1, 1), "upper": (1, 1),
-	"number": (1, 1), "text": (1, 1), "date": (1, 2), "datetime": (2, 2), "epoch": (1, 1), "format": (2, 2),
-	"sum": (1, None), "multiply": (1, None), "subtract": (2, 2), "divide": (2, 2), "count": (1, 1), "ref": (2, 2),
+BUILTIN_SIGNATURES = {
+	"concat": (1, None, "Text"),
+	"split": (2, 2, "Text"),
+	"join": (2, 2, "Text"),
+	"trim": (1, 1, "Text"),
+	"lower": (1, 1, "Text"),
+	"upper": (1, 1, "Text"),
+	"number": (1, 1, "Number"),
+	"text": (1, 1, "Text"),
+	"date": (1, 2, "Date"),
+	"datetime": (2, 2, "DateTime"),
+	"epoch": (1, 1, "Integer"),
+	"format": (2, 2, "Text"),
+	"sum": (1, None, "Number"),
+	"multiply": (1, None, "Number"),
+	"subtract": (2, 2, "Number"),
+	"divide": (2, 2, "Number"),
+	"count": (1, 1, "Integer"),
+	"ref": (2, 2, None),  # The first argument names the result's instance type.
 }
+BUILTIN_ARITIES = {name: (minimum, maximum) for name, (minimum, maximum, _) in BUILTIN_SIGNATURES.items()}
+BUILTIN_RESULTS = {name: result for name, (_, _, result) in BUILTIN_SIGNATURES.items() if result is not None}
 
 
 @dataclass(slots=True)
@@ -32,8 +50,7 @@ class SignatureType:
 	collection: bool = False
 	range: bool = False
 
-	def typeExpr(self) -> "TypeExpr":
-		from ..ontology.model import TypeExpr
+	def typeExpr(self) -> TypeExpr:
 		element = TypeExpr(builtin=self.builtin, path=self.path)
 		return TypeExpr(range=element) if self.range else element
 

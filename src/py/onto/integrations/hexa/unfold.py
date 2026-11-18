@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any as AnyValue
 
 from hexa.combinators import Policy, collect, each, lift, pipe, project, stage
+from hexa.shapes import Location
 
 from ...observations.model import parseInterval
 from ...ontology.model import Model, TypeExpr
@@ -317,6 +318,14 @@ def lineApplies(plan: MappingScopePlan, occurrence: dict, info: LineInfo) -> boo
 	return text == info.when["value"] if info.when else text not in info.unless["values"]
 
 
+def scopeSelected(plan: MappingScopePlan, occurrence: dict) -> bool:
+	if plan.when is None:
+		return True
+	keys = plan.segmentKeys[tuple(plan.when["path"])]
+	return not any(pointer in occurrence["conflicts"] for pointer in pointersOf(occurrence["value"], keys)) and (
+		textOf(valueAt(occurrence["value"], keys)) == plan.when["value"])
+
+
 def pointersOf(tree: dict, steps: list[str]) -> list[str]:
 	"""The tree pointers of the claims along a path, through references and their `of` subtrees."""
 	result: list[str] = []
@@ -373,7 +382,7 @@ class MappingEmitter:
 	def segmentKeys(self, occurrence: dict, steps: list[str]) -> list[str]:
 		return self.plans[occurrence["scope"]].segmentKeys[tuple(steps)]
 
-	def metadata(self, occurrence: dict, info: LineInfo, paths: list[list[str]], variant: tuple[str, dict] | None) -> tuple[dict, list[str]]:
+	def metadata(self, occurrence: dict, info: LineInfo, paths: list[list[str]], variant: tuple[str, dict] | None) -> tuple[dict, list[str]] | None:
 		"""`src` (shared, else the source input's), intersected `valid`, lowest `conf`; literals take the existence claim's."""
 		table = occurrence["meta"]
 		entries = []
@@ -393,8 +402,11 @@ class MappingEmitter:
 			if last:
 				src = variant[1]["src"] if variant and last[-1] == variant[0] else table[last[-1]]["src"]
 		meta = {"src": src, "at": self.runTime, "by": self.by}
-		valid = intersect([entry["valid"] for entry in entries if "valid" in entry])
-		if valid:
+		valids = [entry["valid"] for entry in entries if "valid" in entry]
+		if valids:
+			valid = intersect(valids)
+			if valid is None:
+				return None
 			meta["valid"] = valid
 		confs = [entry["conf"] for entry in entries if "conf" in entry]
 		if confs:
@@ -408,9 +420,8 @@ class MappingEmitter:
 		occurrence = {**occurrence, "scope": plan.name}
 		if plan.presence:
 			if any(pointer in occurrence["conflicts"] for keys in plan.presenceInputs for pointer in pointersOf(occurrence["value"], keys)):
-				self.gap(plan.target, str(MappingCodes.InputConflicting), occurrence, handle)
-				for info in plan.activeLines(occurrence):
-					self.markStale(plan, occurrence, info, handle, str(MappingCodes.InputConflicting), record, variant)
+				if variant is None:
+					self.presenceGap(plan, occurrence, handle, str(MappingCodes.InputConflicting), record)
 				return
 			if not isPresent(record.get("present")):
 				return
@@ -445,7 +456,10 @@ class MappingEmitter:
 				continue
 			if value is None and info.record not in record.get(info.section, {}) or isAbsent(value) or value is False and info.section == "facets":
 				continue
-			meta, others = self.metadata(occurrence, info, paths, variant)
+			metadata = self.metadata(occurrence, info, paths, variant)
+			if metadata is None:
+				continue  # There is no time at which all inputs hold.
+			meta, others = metadata
 			if info.qualifiers:
 				qualifiers = record.get("qualifiers", {}).get(info.record, {})
 				attr = self.program.targetModel.lookup(plan.target, info.key)
@@ -493,18 +507,24 @@ class MappingEmitter:
 		entries = [entry for entry in entries if entry is not None]
 		last = entries[-1] if entries else occurrence["exists"]
 		sources = {entry["src"] for entry in (last if isinstance(last, list) else [last])}
-		for src in sorted(sources):
+		for src in sorted(sources, key=lambda token: token or ""):
 			self.stale.append({"src": src, "s": handle, **self.slotOf(info), **self.contextSlot(plan, occurrence, info, record), "reason": reason})
+
+	def presenceGap(self, plan: MappingScopePlan, occurrence: dict, handle: str, reason: str, record: dict | None) -> None:
+		"""A failed presence selector leaves both the declaration and its lines stale."""
+		self.gap(plan.target, reason, occurrence, handle)
+		if not plan.update:
+			self.stale.append({"src": occurrence["exists"]["src"], "s": handle, "exists": True, "reason": reason})
+		for info in plan.activeLines(occurrence):
+			self.markStale(plan, occurrence, info, handle, reason, record)
 
 	def projectionGap(self, plan: MappingScopePlan, occurrence: dict, record: dict | None, entry: dict,
 		variant: tuple[str, dict] | None = None, lines: list[LineInfo] | None = None) -> None:
 		"""Report a main or variant projection hole only for the lines active in this occurrence."""
 		path = entry.get("path") or []
 		if path[:1] == ["present"] and plan.presence:
-			handle = occurrence["value"]["$target"]
-			self.gap(plan.target, reasonCode(entry["reason"]), occurrence, handle)
-			for info in plan.activeLines(occurrence):
-				self.markStale(plan, occurrence, info, handle, reasonCode(entry["reason"]), record, variant)
+			if variant is None:
+				self.presenceGap(plan, occurrence, occurrence["value"]["$target"], reasonCode(entry["reason"]), record)
 			return
 		if len(path) < 2:
 			return
@@ -604,12 +624,15 @@ def mappingStages(program: AnyValue, plans: list[MappingScopePlan], mode: str) -
 	"""The stages of a mapping program, ending with `MappingRead`."""
 	members: dict[str, AnyValue] = {}
 	handleStages = {}
+	presenceStages = {}
 	projectStages = {}
 	variantStages = {}
 	policy = Policy.Drop
 	for plan in plans:
 		scope = plan.program
 		handleStages[plan.name] = each(project(scope.shape, plan.handleTemplate), policy)
+		if plan.presence and not plan.update:
+			presenceStages[plan.name] = each(project(scope.shape, {"present?": scope.template["present?"], "source": Location}), policy)
 		projectStages[plan.name] = namedStage(f"{plan.name}RecordsProject", each(project(scope.shape, scope.template), policy))
 		variantStages[plan.name] = namedStage(f"{plan.name}VariantsProject", each(project(scope.shape, scope.template), policy))
 		members[f"{plan.name}RecordsProject"] = projectStages[plan.name]
@@ -632,10 +655,21 @@ def mappingStages(program: AnyValue, plans: list[MappingScopePlan], mode: str) -
 				unfolder = Unfolder(index, correspondence, targets, scopeTargets)
 			occurrences = []
 			targetConflicts = set()
+			whenSelected = set()
+			presenceOccurrences = []
 			for handle in index.handlesOf(plan.source):
 				occurrence = unfolder.occurrence(plan, handle) or {"value": {"$handle": handle, "$scope": index.scope, "$type": index.typeOf(handle)}, "location": f"/{plan.name}/{escape(handle)}"}
 				if "exists" in occurrence:
 					present.add(occurrence["location"])
+					if not plan.update and scopeSelected(plan, occurrence):
+						whenSelected.add(handle)
+				if plan.name in presenceStages and "exists" in occurrence:
+					contexts = sorted(unfolder.contexts(handle, plan.reach)) if plan.contextualScope else [None]
+					for context in contexts:
+						candidate = unfolder.occurrence(plan, handle, context) if context else occurrence
+						if scopeSelected(plan, candidate) and not any(pointer in candidate["conflicts"]
+							for path in plan.presenceInputs for pointer in pointersOf(candidate["value"], path)):
+							presenceOccurrences.append(candidate)
 				if plan.update:
 					if plan.when:
 						keys = plan.segmentKeys[tuple(plan.when["path"])]
@@ -652,6 +686,11 @@ def mappingStages(program: AnyValue, plans: list[MappingScopePlan], mode: str) -
 						targetConflicts.add(occurrence["location"])
 				occurrences.append({"value": occurrence["value"], "location": occurrence["location"]})
 			result = yield from collect(handleStages[plan.name])(env, occurrences)
+			presenceSelected = set()
+			if presenceOccurrences:
+				projected = yield from collect(presenceStages[plan.name])(env, presenceOccurrences)
+				byLocation = {item["location"]: item["value"]["$handle"] for item in presenceOccurrences}
+				presenceSelected = {byLocation[item["source"]] for item in projected["value"] if isPresent(item.get("present"))}
 			resolved = iter(result["value"])
 			failed = {entry.get("source") for entry in result["ledger"]}
 			for occurrence in occurrences:
@@ -668,7 +707,8 @@ def mappingStages(program: AnyValue, plans: list[MappingScopePlan], mode: str) -
 				if isinstance(value.get("handle"), str):
 					if not plan.update:
 						# An instance known only by reference (no existence claim) cannot be tested: it is not skipped
-						if plan.when is None or occurrence["location"] not in present or textOf(valueAt(occurrence["value"], plan.segmentKeys[tuple(plan.when["path"])]) or "") == plan.when["value"]:
+						active = presenceSelected if plan.presence else whenSelected
+						if occurrence["location"] not in present or occurrence["value"]["$handle"] in active:
 							selected.setdefault(occurrence["value"]["$handle"], set()).add(plan.target)
 						correspondence.setdefault(occurrence["value"]["$handle"], value["handle"])
 						targets.setdefault(occurrence["value"]["$handle"], {}).setdefault(plan.target, value["handle"])
@@ -777,12 +817,14 @@ def emitMapping(program: AnyValue, plans: list[MappingScopePlan], collected: dic
 	log = emitter.builder.finish()
 	counts: dict[str, int] = {}
 	for claim in log["claims"]:
-		counts[claim["src"]] = counts.get(claim["src"], 0) + 1
+		if (src := claim.get("src")) is not None:
+			counts[src] = counts.get(src, 0) + 1
 	tokens = sorted(set(collected["sources"]) | set(counts))
 	aliases = {token: f"d{index + 1}" for index, token in enumerate(tokens)}
 	log["sources"] = {alias: token for token, alias in aliases.items()}
 	for claim in log["claims"] + log["retractions"]:
-		claim["src"] = aliases[claim["src"]]
+		if (src := claim.pop("src", None)) is not None:
+			claim["src"] = aliases[src]
 	stale = [{**item, "src": item["src"]} for item in emitter.stale]
 	return {"log": log, "stale": stale, "unidentified": [{"src": token, "type": item["type"]} for item in emitter.unidentified for token in tokens],
 		"deleted": [], "formats": {}, "gaps": emitter.gaps, "mixed": emitter.mixed, "correspondence": collected["correspondence"],

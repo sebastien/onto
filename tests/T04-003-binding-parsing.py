@@ -8,7 +8,7 @@ import pytest
 
 import onto.binding as bindingApi
 from onto import FormatError, Source, loadFunctions, loadOntology, BindingOperator, bindingFromJson, bindingToJson, formatBinding, loadBinding, parseBinding, printBinding, resolveBinding
-from tests._helpers import _schemaValidator, _specExample
+from tests.helpers import schemaValidator, specExample
 
 # -----------------------------------------------------------------------------
 #
@@ -17,8 +17,8 @@ from tests._helpers import _schemaValidator, _specExample
 # -----------------------------------------------------------------------------
 
 
-EXCHANGE = loadOntology([Source("exchange.onto", _specExample("spec-04-mapping", 1))])
-SHEET = loadOntology([Source("sheet.onto", _specExample("spec-04-mapping", 7))])
+EXCHANGE = loadOntology([Source("exchange.onto", specExample("spec-04-mapping", 1))])
+SHEET = loadOntology([Source("sheet.onto", specExample("spec-04-mapping", 7))])
 ONTOLOGY = loadOntology([Source("a.onto", """@ontology A rev=v1
 Person
   Name Text
@@ -51,12 +51,12 @@ def load(text: str):
 
 @pytest.mark.parametrize(("ontology", "index"), [(EXCHANGE, 2), (SHEET, 9)])
 def testCompleteSpecBindingFilesRoundTrip(ontology, index: int):
-	text = _specExample("spec-04-mapping", index)
+	text = specExample("spec-04-mapping", index)
 	doc = parseBinding(Source("example.bind", text))
 	assert doc.scopes[0].loc.file == "example.bind"
 	binding = resolveBinding(ontology, doc)
 	data = bindingToJson(binding)
-	_schemaValidator("mapping").validate(data)
+	schemaValidator("mapping").validate(data)
 	assert data["format"] == "onto.binding/1"
 	assert all(scope["type"].startswith(ontology.namespace + "/") for scope in data["scopes"])
 	assert printBinding(binding) == text
@@ -77,7 +77,7 @@ Meeting <- meetings[*] {id=id}
 - people[*].unused {reason=ignore} -- Deliberate
 ''')
 	data = bindingToJson(binding)
-	_schemaValidator("mapping").validate(data)
+	schemaValidator("mapping").validate(data)
 	person = next(scope for scope in data["scopes"] if scope["type"] == "A/Person")
 	assert person["id"]["args"][1:] == [{"text": ","}, {"text": "}"}]
 	assert person["deleted"] == {"path": ["flags", "deleted"], "value": "true"}
@@ -100,7 +100,7 @@ Person <- people[*] {id=id}
 	assert len(data["functions"]) == 2
 	assert data["functions"][0]["name"] == "Rename"
 	assert data["scopes"][0]["lines"][0]["expr"]["call"] == "Rename"
-	_schemaValidator("mapping").validate(data)
+	schemaValidator("mapping").validate(data)
 	assert bindingToJson(bindingFromJson(ONTOLOGY, data)) == data
 
 
@@ -128,7 +128,7 @@ def testImportedLibraryCallsAreQualifiedAndLocalSignatureAliasesUseTheirOwnConte
 	expr = bindingToJson(binding)["scopes"][0]["lines"][0]["expr"]
 	assert expr["call"] == "Markets/Rename"
 	assert expr["args"][0]["call"] == "Label"
-	_schemaValidator("mapping").validate(ops.toJson(binding))
+	schemaValidator("mapping").validate(ops.toJson(binding))
 	assert ops.toJson(ops.fromJson(ops.toJson(binding))) == ops.toJson(binding)
 	assert ops.format(Source("t", ops.print(binding))) == ops.print(binding)
 	with pytest.raises(FormatError):

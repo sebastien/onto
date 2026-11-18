@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..coverage import CoverageReport, Elements, _selections, coverageRows, impliedKeys
+from ..coverage import CoverageReport, Elements, coverageRows, impliedKeys, viewSelections
 from ..expressions import Expression
 from ..ontology.model import Model, Ontology
 from .model import Mapping, MappingScope
@@ -59,7 +59,7 @@ class MappingCoverage:
 
 	def scope(self, scope: MappingScope) -> None:
 		candidates = self.mapping.header.get("candidates") is True
-		conditions = [scope.when["path"]] if scope.when else []
+		conditions = expressionPaths(scope.when)
 		conditions += expressionPaths(scope.ctx) + expressionPaths(scope.valid) + expressionPaths(scope.present) + expressionPaths(scope.into)
 		self.record(scope, conditions, None, "condition", None)
 		targetType = self.target.display(scope.target)
@@ -74,13 +74,13 @@ class MappingCoverage:
 			for expr in line.qualifiers.values():
 				self.record(scope, expressionPaths(expr), targetType + member, "ambiguous" if status == "ambiguous" else "transformed", line.doc)
 			if line.when:
-				self.record(scope, [line.when["path"]], None, "ambiguous" if status == "ambiguous" else "condition", None)
+				self.record(scope, expressionPaths(line.when), None, "ambiguous" if status == "ambiguous" else "condition", None)
 
 	def keys(self) -> list[str]:
 		"""Source elements, restricted to the mapping's view when it has one."""
 		model = self.source.model
 		view = self.mapping.header.get("view")
-		selections = _selections(model, model.get(view)) if view else None
+		selections = viewSelections(model, model.get(view)) if view else None
 		keys: list[str] = []
 		for decl in self.source.instanceTypes():
 			for key in self.source.declared(decl.path):

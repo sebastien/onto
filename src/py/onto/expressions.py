@@ -32,7 +32,7 @@ DECODER = json.JSONDecoder()
 # -----------------------------------------------------------------------------
 
 
-def _path(steps: Any, binding: bool) -> list[str | dict[str, Any]]:
+def readPathSteps(steps: Any, binding: bool) -> list[str | dict[str, Any]]:
 	if not isinstance(steps, list) or not steps:
 		raise ValueError("An expression path needs at least one step")
 	result = []
@@ -65,23 +65,23 @@ def _path(steps: Any, binding: bool) -> list[str | dict[str, Any]]:
 	return result
 
 
-def _read(data: Any, binding: bool, field: bool) -> Expression:
+def readExpression(data: Any, binding: bool, field: bool) -> Expression:
 	if not isinstance(data, dict):
 		raise ValueError("An expression must be an object")
 	if set(data) == {"call", "args"}:
 		if not isinstance(data["call"], str) or not isPath(data["call"]) or not isinstance(data["args"], list):
 			raise ValueError("Invalid function call")
-		return {"call": data["call"], "args": [_read(arg, binding, False) for arg in data["args"]]}
+		return {"call": data["call"], "args": [readExpression(arg, binding, False) for arg in data["args"]]}
 	if len(data) != 1:
 		raise ValueError("An expression needs exactly one variant and no extra members")
 	key, value = next(iter(data.items()))
 	if key == "path":
-		return {key: _path(value, binding)}
+		return {key: readPathSteps(value, binding)}
 	if key == "coalesce":
 		if not isinstance(value, list) or len(value) < 2:
 			raise ValueError("Coalescing needs at least two expressions")
 		# A nested coalesce has the same meaning, but no separate spelling in this grammar.
-		items = [_read(item, binding, False) for item in value]
+		items = [readExpression(item, binding, False) for item in value]
 		if any("coalesce" in item for item in items):
 			raise ValueError("Nested coalescing must use one flat expression")
 		return {key: items}
@@ -98,7 +98,7 @@ def _read(data: Any, binding: bool, field: bool) -> Expression:
 	raise ValueError(f"Invalid expression variant '{key}'")
 
 
-def _printPath(steps: list[str | dict[str, Any]]) -> str:
+def printPath(steps: list[str | dict[str, Any]]) -> str:
 	result = ""
 	for index, step in enumerate(steps):
 		if isinstance(step, str):
@@ -117,13 +117,13 @@ def _printPath(steps: list[str | dict[str, Any]]) -> str:
 	return result
 
 
-def _print(expr: Expression) -> str:
+def spellExpression(expr: Expression) -> str:
 	if "path" in expr:
-		return _printPath(expr["path"])
+		return printPath(expr["path"])
 	if "call" in expr:
-		return expr["call"] + "(" + ", ".join(_print(arg) for arg in expr["args"]) + ")"
+		return expr["call"] + "(" + ", ".join(spellExpression(arg) for arg in expr["args"]) + ")"
 	if "coalesce" in expr:
-		return " ?? ".join(_print(item) for item in expr["coalesce"])
+		return " ?? ".join(spellExpression(item) for item in expr["coalesce"])
 	if "text" in expr:
 		return json.dumps(expr["text"], ensure_ascii=False)
 	if "number" in expr:
@@ -135,7 +135,7 @@ def _print(expr: Expression) -> str:
 	return "?" if "unknown" in expr else "null"
 
 
-class _Parser:
+class ExpressionParser:
 	def __init__(self, text: str, binding: bool):
 		self.text = text
 		self.binding = binding
@@ -270,26 +270,26 @@ def parseExpression(text: str, *, binding: bool = False, field: bool = True) -> 
 	"""Parse one expression; `binding` admits document paths and `field` treats a whole string as a field."""
 	if not isinstance(text, str) or "\n" in text or "\r" in text:
 		raise ValueError("An expression must be a single line of text")
-	parser = _Parser(text, binding)
+	parser = ExpressionParser(text, binding)
 	result = parser.expr()
 	if parser.pos != len(text):
 		raise ValueError(f"Unexpected text at expression offset {parser.pos}")
 	if binding and field and "text" in result:
 		result = {"path": [result["text"]]}
-	return _read(result, binding, field)
+	return readExpression(result, binding, field)
 
 
 def expressionFromJson(data: Any, *, binding: bool = False, field: bool = True) -> Expression:
 	"""Validate and copy an expression, rejecting JSON that cannot preserve its meaning in text."""
-	result = _read(data, binding, field)
-	if parseExpression(_print(result), binding=binding, field=field) != result:
+	result = readExpression(data, binding, field)
+	if parseExpression(spellExpression(result), binding=binding, field=field) != result:
 		raise ValueError("Expression JSON does not survive its text round trip")
 	return result
 
 
 def printExpression(expr: Expression, *, binding: bool = False, field: bool = True) -> str:
 	"""Print a validated expression in canonical spacing without mutating it."""
-	return _print(expressionFromJson(expr, binding=binding, field=field))
+	return spellExpression(expressionFromJson(expr, binding=binding, field=field))
 
 
 # EOF

@@ -20,7 +20,7 @@ from hexa.shapes import Any, Bool, DateOnly, DatePattern, DateTime, Decimal, Dec
 
 from ...functions.model import FunctionResult
 from ...functions.runtime import FunctionEvaluator, patternFormat, patternParse
-from ...observations.model import RE_DURATION, _time, canonicalNumber, parseInterval
+from ...observations.model import RE_DURATION, timestampValue, canonicalNumber, parseInterval
 
 # -----------------------------------------------------------------------------
 #
@@ -40,7 +40,7 @@ BUILTINS = {
 	"number": "Number", "text": "Text", "date": "Date", "datetime": "DateTime", "epoch": "Epoch", "format": "Format",
 	"sum": "Sum", "multiply": "Multiply", "subtract": "Subtract", "divide": "Divide", "count": "Count",
 }
-BindingCodes = codes("Binding", "KeyMissing", "TypeMismatch", "PathUnsupported", "InputEmpty", "SnapshotOlder", "ParentMissing")
+BindingCodes = codes("Binding", "KeyMissing", "TypeMismatch", "PathUnsupported", "InputEmpty", "SnapshotOlder", "ParentMissing", "ReplacementConflicting")
 MappingCodes = codes("Mapping", "InputConflicting", "ReferenceUnmapped", "ReferenceAmbiguous", "NotIntegral", "ValueUnmapped", "KeyReference", "ContextUnsupported", "PolicyUnsupported")
 # NOTE: Only these prototypes are registered. Compiled calls carry their own evaluator,
 # like program-local stages, without competing for hexa's process-wide names.
@@ -247,7 +247,7 @@ def readValue(value: AnyValue, spec: str) -> AnyValue:
 				return value == "true"
 		elif kind in ("Date", "DateTime"):
 			if isinstance(value, str) and ("T" in value) == (kind == "DateTime"):
-				_time(value)
+				timestampValue(value)
 				return value
 		elif kind == "Duration":
 			if detail == "iso":
@@ -278,7 +278,10 @@ def readSet(value: AnyValue, spec: str) -> AnyValue:
 	members: dict[str, AnyValue] = {}
 	for item in items:
 		if item is not None:
-			member = readValue(item, spec)
+			try:
+				member = readValue(item, spec)
+			except Gap as error:
+				raise Gap(Set.TypeMismatch) from error
 			members.setdefault(json.dumps(member, sort_keys=True), member)
 	result = {"set": sorted(members.values(), key=lambda item: json.dumps(item, sort_keys=True))}
 	return result | ({"partial": True} if isinstance(value, dict) and value.get("partial") else {})
@@ -319,6 +322,16 @@ def sourceHandle(typeName: str, scope: str, source: str, sourceType: str) -> str
 	prefix = short + "_"
 	key = decodeKey(source[len(prefix):]) if source.startswith(prefix) else None
 	return handleOf(typeName, f"{scope}/{short}/{key if key is not None else source}")
+
+
+def keyedHandle(typeName: str, key: AnyValue, scope: str, source: str, sourceType: str) -> str:
+	"""A referential key's handle (spec-05 "Producing handles"): derived from the key, else source-qualified."""
+	if isAbsent(key) or key is None or key == UNKNOWN:
+		return sourceHandle(typeName, scope, source, sourceType)
+	try:
+		return handleOf(typeName, key)
+	except ValueError as error:
+		raise Gap(KeyedHandle.TypeMismatch) from error
 
 
 def reference(typePath: str, key: AnyValue) -> AnyValue:
@@ -404,7 +417,7 @@ def timeValue(value: AnyValue) -> AnyValue:
 	if isAbsent(value):
 		return ABSENT_VALUE
 	try:
-		_time(value)
+		timestampValue(value)
 		return value
 	except (ValueError, TypeError) as error:
 		raise Gap(At.Invalid) from error
@@ -439,7 +452,7 @@ def nullable(value: AnyValue, marker: AnyValue, kind: str) -> AnyValue:
 	"""A JSON `null` caught by a null policy reads as `null` (`absent`) or `?` (`unknown`)."""
 	if not isAbsent(marker):
 		return None if kind == "absent" else dict(UNKNOWN)
-	return value
+	return ABSENT_VALUE if isAbsent(value) else value
 
 
 def given(value: AnyValue, result: AnyValue) -> AnyValue:
@@ -628,8 +641,8 @@ Case = codec("Onto.Case", source=Text, canonical=Text, params={"Case": either("u
 
 Read = transform("Onto.Read", readValue, inputs=[Any, Text], output=Any, gaps=["TypeMismatch"],
 	examples=[{"input": [0.42, "Decimal"], "output": "0.42"}, {"input": ["x", "Integer"], "gap": "TypeMismatch"}])
-Set = transform("Onto.Set", readSet, inputs=[Any, Text], output=Any, gaps=[],
-	examples=[{"input": [["b", "a", "b"], "Text"], "output": {"set": ["a", "b"]}}])
+Set = transform("Onto.Set", readSet, inputs=[Any, Text], output=Any, gaps=["TypeMismatch"],
+	examples=[{"input": [["b", "a", "b"], "Text"], "output": {"set": ["a", "b"]}}, {"input": [["a", False], "Text"], "gap": "TypeMismatch"}])
 TextEquals = transform("Onto.TextEquals", textEquals, inputs=[Any, Text], output=Bool,
 	examples=[{"input": ["F", "F"], "output": True}, {"input": [6, "6"], "output": True}])
 When = transform("Onto.When", whenValue, inputs=[Any, Any], output=Any,
@@ -641,6 +654,9 @@ Coalesce = transform("Onto.Coalesce", coalesce, inputs=[[Any, ...]], output=Any,
 	examples=[{"input": [ABSENT_VALUE, "ACM30"], "output": "ACM30"}, {"input": [None, "x"], "output": None}])
 Handle = transform("Onto.Handle", handle, inputs=[Text, Any], output=Text, gaps=["KeyMissing", "TypeMismatch"],
 	examples=[{"input": ["Issuer", "C-17"], "output": "Issuer_C_2D17"}, {"input": ["Issuer", ABSENT_VALUE], "gap": "KeyMissing"}])
+KeyedHandle = transform("Onto.KeyedHandle", keyedHandle, inputs=[Text, Any, Any, Any, Text], output=Text, gaps=["TypeMismatch"],
+	examples=[{"input": ["Organisation", "1234567", "AdviceLink", "MemberCompany_1", "MemberCompany"], "output": "Organisation_1234567"},
+		{"input": ["Organisation", ABSENT_VALUE, "AdviceLink", "MemberCompany_1", "MemberCompany"], "output": "Organisation_AdviceLink_2FMemberCompany_2F1"}])
 SourceHandle = transform("Onto.SourceHandle", sourceHandle, inputs=[Text, Any, Any, Text], output=Text,
 	examples=[{"input": ["Company", "Exchange", "Issuer_C_2D17", "Issuer"], "output": "Company_Exchange_2FIssuer_2FC_2D17"}])
 Ref = transform("Onto.Ref", reference, inputs=[Text, Any], output=Any, gaps=["TypeMismatch"],
@@ -668,7 +684,8 @@ FormatName = transform("Onto.FormatName", formatName, inputs=[Any], output=Any,
 Field = transform("Onto.Field", field, inputs=[Any, Any], output=Any,
 	examples=[{"input": [{"bond": {"interval": 6}}, ["bond", "interval"]], "output": 6}])
 Nullable = transform("Onto.Nullable", nullable, inputs=[Any, Any, Text], output=Any,
-	examples=[{"input": [ABSENT_VALUE, None, "unknown"], "output": UNKNOWN}])
+	examples=[{"input": [ABSENT_VALUE, None, "unknown"], "output": UNKNOWN},
+		{"input": [ABSENT_VALUE, ABSENT_VALUE, "unknown"], "output": ABSENT_VALUE}])
 QualifierConvert = transform("Onto.QualifierConvert", qualifierConvert, inputs=[Any, Any, Any], output=Any, gaps=["Inconvertible"],
 	examples=[{"input": ["0.0525", {"scale": "1"}, {"scale": "100"}], "output": "5.25"}, {"input": ["90", {"unit": "Minute"}, {"unit": "Hour"}], "output": "1.5"}])
 ToInteger = transform("Onto.ToInteger", toInteger, inputs=[Any], output=Any, gaps=["NotIntegral"],
@@ -704,7 +721,7 @@ for builtinName, builtinExamples in BUILTIN_EXAMPLES.items():
 
 CODECS = {"EpochDate": EpochDate, "IntegerText": IntegerText, "SplitText": SplitText, "DateTimePattern": DateTimePattern,
 	"DecimalNumber": DecimalNumber, "DecimalPlaces": DecimalPlaces, "Case": Case}
-TRANSFORMS = {item.name: item for item in (Read, Set, TextEquals, When, WhenNone, Coalesce, Handle, SourceHandle, Ref, HandleKey, Correspond, CorrespondAs, CorrespondEmitted, Single, Valid, At,
+TRANSFORMS = {item.name: item for item in (Read, Set, TextEquals, When, WhenNone, Coalesce, Handle, KeyedHandle, SourceHandle, Ref, HandleKey, Correspond, CorrespondAs, CorrespondEmitted, Single, Valid, At,
 	FormatName, Field, Nullable, QualifierConvert, ToInteger, ToVocabulary, Given, Members, *BUILTIN_TRANSFORMS.values())}
 
 
@@ -770,7 +787,7 @@ def vocabularyConformance() -> int:
 __all__ = [
 	"ABSENT_VALUE", "BindingCodes", "MappingCodes", "Integral", "IsoDuration", "EpochDate", "IntegerText", "SplitText",
 	"DateTimePattern", "DecimalNumber", "DecimalPlaces", "Case", "DatePattern", "DecimalText", "Read", "Set", "TextEquals", "When", "WhenNone",
-	"Coalesce", "Handle", "SourceHandle", "Ref", "HandleKey", "Correspond", "CorrespondAs", "CorrespondEmitted", "Single", "Valid", "At", "FormatName", "Field", "Nullable",
+	"Coalesce", "Handle", "KeyedHandle", "SourceHandle", "Ref", "HandleKey", "Correspond", "CorrespondAs", "CorrespondEmitted", "Single", "Valid", "At", "FormatName", "Field", "Nullable",
 	"QualifierConvert", "ToInteger", "ToVocabulary", "Given", "Members", "TRANSFORMS", "CODECS", "builtin", "functionTransform", "functionCodec",
 	"reasonCode", "vocabularyConformance", "isAbsent", "decimalText", "documentValue", "encodeKey", "decodeKey",
 	"handleOf", "textOf",

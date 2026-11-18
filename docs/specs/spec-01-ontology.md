@@ -393,7 +393,9 @@ closed one fixes them, an open one admits others.
   key: each element is its fields' values under that key. The key field's value
   is the key, so it is never stated on its own.
 - A multi-valued attribute of a structure without a key field cannot tell its
-  elements apart: `check` warns.
+  elements apart: `check` warns, unless the attribute is marked
+  `{check=unkeyed}`, a deliberate exception such as a source's shape kept as it
+  is (a list of recipients, keyed by nothing the source names).
 - Elements are addressed in observations (`h.Phones[Mobile].Number 021…`,
   [spec-02](spec-02-observations.md#statements)), and in binding and mapping
   lines and paths (`Phones[Mobile].Number <- MobilePhone`,

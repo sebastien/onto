@@ -10,7 +10,9 @@ pytest.importorskip("hexa.shapes")
 from hexa.runtime import run  # noqa: E402
 
 from onto import FormatError, Source, loadMapping, loadObservations, loadOntology, mappingReverse, observationsToJson, printMapping, reconcileObservations  # noqa: E402
+from onto.integrations.hexa.compiler import CompileError  # noqa: E402
 from onto.integrations.hexa.operations import HexaMappingOperator  # noqa: E402
+from onto.referential import loadReferential  # noqa: E402
 
 # -----------------------------------------------------------------------------
 #
@@ -28,7 +30,7 @@ Review
 """)])
 TARGET = loadOntology([Source("t.onto", """@ontology T
 Review
-  StoppedReason Text
+  StoppedReason Text {key}
 """)])
 MAPPING = """@mapping S -> T
 
@@ -64,8 +66,10 @@ def mapped(fields: str, text: str = MAPPING):
 	("  Reason Lost\n", ["Lost"]),
 ])
 def test_at_most_one_exclusive_line_applies(fields: str, expected: list):
-	values, report = mapped(fields)
-	assert values == expected and not report.gaps
+	printed = printMapping(loadMapping(SOURCE, TARGET, Source("m.map", MAPPING)))
+	for text in (MAPPING, printed):
+		values, report = mapped(fields, text)
+		assert values == expected and not report.gaps
 
 
 def test_a_conflicting_condition_is_a_conflicting_input_for_every_line():
@@ -73,6 +77,16 @@ def test_a_conflicting_condition_is_a_conflicting_input_for_every_line():
 	values, report = mapped("  Status Open\n  Reason Lost\n@src g=other\n@src g\nReview_1.Status Migrated\n")
 	assert values == []
 	assert {(gap.target, gap.reason) for gap in report.gaps} == {("T/Review.StoppedReason", "Mapping.InputConflicting")}
+
+
+def test_exclusive_identity_key_is_rejected_before_execution():
+	referential = loadReferential([SOURCE, TARGET], [Source("identity.ref", "@referential Identity\n@use T as Target\nTarget/Review key=StoppedReason from=S\n")])
+	text = MAPPING.replace("S -> T", "S -> T referential=Identity")
+	ops = HexaMappingOperator(SOURCE, TARGET, referential=referential, mode="lenient")
+	mapping = loadMapping(SOURCE, TARGET, Source("m.map", text), referentials=[referential])
+	for item in (mapping, loadMapping(SOURCE, TARGET, Source("printed.map", printMapping(mapping)), referentials=[referential])):
+		with pytest.raises(CompileError, match="Mapping.PolicyUnsupported: Exclusive assignments to referential key 'StoppedReason'"):
+			ops.compile(item)
 
 
 # -----------------------------------------------------------------------------

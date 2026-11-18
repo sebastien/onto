@@ -8,8 +8,8 @@ import json
 
 import pytest
 
-from onto import Source, loadObservations, loadOntology, observationsToJson, reconcileObservations
-from tests._helpers import _schemaValidator, _specExample
+from onto import Source, loadObservations, loadOntology, observationsFromJson, observationsToJson, reconcileObservations
+from tests.helpers import schemaValidator, specExample
 
 ONTOLOGY = loadOntology([Source("t", "@ontology A\nPerson\n  Name Text\n")])
 FORMS = [
@@ -21,17 +21,24 @@ FORMS = [
 
 
 def testObservationSpecExampleMatchesSchema() -> None:
-	_schemaValidator("observations").validate(json.loads(_specExample("spec-02-observations", kind="json")))
+	schemaValidator("observations").validate(json.loads(specExample("spec-02-observations", kind="json")))
+
+
+def testIntegralConfidenceMatchesTheLoader():
+	data = observationsToJson(loadObservations(ONTOLOGY, Source("t", "@obs A\np:Person {conf=1}\n")))
+	data["claims"][0]["conf"] = 1
+	schemaValidator("observations").validate(data)
+	assert observationsToJson(observationsFromJson(ONTOLOGY, data)) == data
 
 
 @pytest.mark.parametrize("left,right", list(combinations(FORMS, 2)))
 def testEveryPairOfClaimFormsIsRejected(left: dict, right: dict) -> None:
-	assert not _schemaValidator("observations", "claim").is_valid({"n": 1, **left, **right})
+	assert not schemaValidator("observations", "claim").is_valid({"n": 1, **left, **right})
 
 
 @pytest.mark.parametrize("form", FORMS)
 def testIndividualClaimFormsMatchSchema(form: dict) -> None:
-	_schemaValidator("observations", "claim").validate({"n": 1, **form})
+	schemaValidator("observations", "claim").validate({"n": 1, **form})
 
 
 @pytest.mark.parametrize("valid", [
@@ -41,20 +48,20 @@ def testIndividualClaimFormsMatchSchema(form: dict) -> None:
 ])
 def testExportedValidityMatchesSchema(valid: str) -> None:
 	log = loadObservations(ONTOLOGY, Source("t", f"@obs A\np:Person\np.Name Hi {{valid={valid}}}\n"))
-	validator = _schemaValidator("observations")
+	validator = schemaValidator("observations")
 	validator.validate(observationsToJson(log))
 	validator.validate(observationsToJson(reconcileObservations(ONTOLOGY, log)))
 
 
 @pytest.mark.parametrize("valid", ["", "..", "2026-11-10garbage", "2026-11-10...2026-11-11"])
 def testMalformedIntervalSyntaxIsRejected(valid: str) -> None:
-	assert not _schemaValidator("observations", "interval").is_valid(valid)
+	assert not schemaValidator("observations", "interval").is_valid(valid)
 
 
 def testOnlyRetractionsMayOmitAttributeValues() -> None:
 	data = observationsToJson(loadObservations(ONTOLOGY, Source("t", "@obs A\np:Person\n")))
 	data["claims"] = [{"n": 1, "s": "p", "p": "Name"}]
-	validator = _schemaValidator("observations")
+	validator = schemaValidator("observations")
 	assert not validator.is_valid(data)
 	retracted = deepcopy(data)
 	retracted["claims"], retracted["retractions"] = [], data["claims"]
@@ -68,7 +75,7 @@ def testOnlyRetractionsMayOmitAttributeValues() -> None:
 	{"n": 1, "rel": "A/Person.knows.A/Person", "roles": {}, "p": "Name"},
 ])
 def testClaimPayloadsCannotMixVariants(claim: dict) -> None:
-	assert not _schemaValidator("observations", "claim").is_valid(claim)
+	assert not schemaValidator("observations", "claim").is_valid(claim)
 
 
 # EOF

@@ -9,7 +9,7 @@ import pytest
 
 import onto.referential as referentialApi
 from onto import FormatError, Source, loadMapping, loadOntology, ReferentialOperator, ReferentialPolicy, formatReferential, loadReferential, parseReferential, printReferential, referentialFromJson, referentialImplicit, referentialPolicy, referentialToJson, validateReferential
-from tests._helpers import _schemaValidator, _specExample
+from tests.helpers import schemaValidator, specExample
 
 # -----------------------------------------------------------------------------
 #
@@ -18,8 +18,8 @@ from tests._helpers import _schemaValidator, _specExample
 # -----------------------------------------------------------------------------
 
 
-FINANCE = loadOntology([Source("finance.onto", _specExample("spec-01-ontology"))])
-EXCHANGE = loadOntology([Source("exchange.onto", _specExample("spec-04-mapping", 1))])
+FINANCE = loadOntology([Source("finance.onto", specExample("spec-01-ontology"))])
+EXCHANGE = loadOntology([Source("exchange.onto", specExample("spec-04-mapping", 1))])
 TARGET = loadOntology([Source("t.onto", """@ontology T rev=v1
 Party
   Code Text {key}
@@ -52,15 +52,15 @@ def load(text: str):
 
 
 def testCompleteSpecReferentialAndJsonExcerptRoundTrip():
-	text = _specExample("spec-05-identities")
+	text = specExample("spec-05-identities")
 	ref = loadReferential([FINANCE, EXCHANGE], [Source("market-ids.ref", text)])
 	assert ref.policies[0].loc.file == "market-ids.ref"
 	data = referentialToJson(ref)
-	_schemaValidator("referential").validate(data)
+	schemaValidator("referential").validate(data)
 	assert data["policies"][-1]["minted"] is True
 	assert printReferential(ref) == text
 	assert referentialToJson(referentialFromJson([FINANCE, EXCHANGE], data)) == data
-	excerpt = json.loads(_specExample("spec-05-identities", kind="json"))
+	excerpt = json.loads(specExample("spec-05-identities", kind="json"))
 	assert referentialToJson(referentialFromJson([FINANCE, EXCHANGE], excerpt)) == excerpt
 
 

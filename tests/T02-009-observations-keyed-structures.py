@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from onto import FormatError, Source, loadObservations, loadOntology, observationsFromJson, observationsToJson, printObservationsState, reconcileObservations
-from tests._helpers import _schemaValidator
+from tests.helpers import schemaValidator
 
 # -----------------------------------------------------------------------------
 #
@@ -27,6 +27,8 @@ Person
   * Phones Phone
   * Addresses Address
   Main Phone
+Contact of Person
+  * Phones Phone
 """
 
 
@@ -68,6 +70,8 @@ def testKeyFieldsAreOneRequiredVocabularyPerStructure():
 def testMultiValuedStructuresWithoutKeysWarn():
 	warnings = [item for item in ontology(BODY + "  * Others Other\nOther =\n  Text Text\n").diagnostics if item.code == "key"]
 	assert len(warnings) == 1 and warnings[0].level == "warning" and "Others" in warnings[0].message
+	acknowledged = ontology(BODY + "  * Others Other {check=unkeyed}\nOther =\n  Text Text\n").diagnostics
+	assert not [item for item in acknowledged if item.code == "key"]
 
 
 # -----------------------------------------------------------------------------
@@ -87,7 +91,7 @@ def testElementsAreDistinctSlotsInLineAndRecordForms():
 def testElementsRoundTripThroughJsonAndTheSchema():
 	observations = observe("p1:Person\n  Phones[Mobile].Number 021\n")
 	data = observationsToJson(observations)
-	_schemaValidator("observations").validate(data)
+	schemaValidator("observations").validate(data)
 	assert observationsToJson(observationsFromJson(ontology(), data)) == data
 
 
@@ -96,6 +100,7 @@ def testElementsRoundTripThroughJsonAndTheSchema():
 	"p1.Phones[Fax].Number 021",           # not a value of a closed key vocabulary
 	"p1.Phones[Mobile].Use Mobile",        # the key field is implied by the key
 	"p1.Main[Mobile].Number 021",          # a single structure has no elements
+	"p1.Contact[Mobile].Phones[Home].Number 021",  # a facet name cannot carry an element key
 ])
 def testMisnamedElementsAreRejected(line: str):
 	assert codes("p1:Person\n" + line + "\n") == ["key"]

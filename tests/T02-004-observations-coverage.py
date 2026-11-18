@@ -6,8 +6,8 @@ from copy import deepcopy
 
 import pytest
 
-from onto import CoverageItem, FormatError, Observations, Source, loadObservations, loadOntology, observationsCoverage
-from tests._helpers import _specExample
+from onto import CoverageItem, FormatError, Observations, Source, loadObservations, loadOntology, observationsCoverage, observationsFromJson, observationsToJson, printObservationsState, reconcileObservations
+from tests.helpers import specExample
 
 # -----------------------------------------------------------------------------
 #
@@ -19,6 +19,10 @@ ONTOLOGY = loadOntology([Source("coverage.onto", """@ontology A
 Name =
   Given Text
   Family Text
+Phone =
+  1 Use Mobile|Home {key}
+  Number Text
+  Note Text
 Party
   Code Text
 Person < Party
@@ -33,8 +37,9 @@ Assessment of Person {ctx=Scenario}
   Included Boolean
 Investor of Person
   Rating Low|High
+  * Phones Phone
 Household
-Household -has/memberOf-> Person
+Household -has/memberOf-> Person {kind=state}
   Role Adult|Child
 Person -knows-> Person
 Review(Person, Household)
@@ -129,6 +134,18 @@ def testStructuredSelectionsReportLeafFields():
 		assert items[("A/Person.Name.Family", "p", None)].statuses == (status,)
 
 
+def testKeyedStructureCoverageCountsLeavesAndImpliedKeys():
+	items = report("p:Person\np.Investor.Phones[Mobile].Number ?\n"
+		"p.Investor.Phones[Home].Number 09\np.Investor.Phones[Home].Note null\n", "Facets")
+	assert items[("A/Person[Investor]", "p", None)].statuses == ("supplied",)
+	assert items[("A/Person.Investor.Phones.Use", "p", None)].statuses == ("supplied",)
+	number = items[("A/Person.Investor.Phones.Number", "p", None)]
+	assert number.statuses == ("supplied", "unknown") and not number.conflict
+	assert items[("A/Person.Investor.Phones.Note", "p", None)].statuses == ("absent",)
+	item = report("p:Person\np.Investor.Phones[Mobile].Number 021\n- p.Investor.Phones[Mobile]\n", "Facets")
+	assert item[("A/Person.Investor.Phones.Use", "p", None)].statuses == ("missing",)
+
+
 def testCoreIncludesInheritedAttributesButNotSubclassExtrasOrFacets():
 	items = report("p:Employee\np.Code X\np.Title Employee\n", "Core")
 	assert items[("A/Person.Code", "p", None)].statuses == ("supplied",)
@@ -187,6 +204,48 @@ def testNamedBinaryAttributesAndAssociationsAreCovered():
 	assert items[("A/Review.ReviewFacet.Checked", "r", None)].statuses == ("supplied",)
 
 
+def testNamedBinaryIntervalUpdatePreservesEndpointsThroughReplay():
+	log = load("""@src one=feed alias=feed
+r: h:Household has p:Person {src=one, valid=2020-01-01..}
+r {src=alias, valid=2020-01-01..2021-12-31}
+""")
+	state = reconcileObservations(ONTOLOGY, log)
+	assert state.claims == [{"n": 2, "s": "r", "rel": "A/Household.has.A/Person",
+		"roles": {"Household": "h", "Person": "p"}, "src": "alias", "valid": "2020-01-01..2021-12-31"}]
+	assert all(state.instances[handle]["implicit"] for handle in ("h", "p"))
+	printed = printObservationsState(ONTOLOGY, state)
+	replayed = loadObservations(ONTOLOGY, Source("replay.obs", printed))
+	assert printObservationsState(ONTOLOGY, reconcileObservations(ONTOLOGY, replayed)) == printed
+	data = observationsToJson(state)
+	assert observationsToJson(reconcileObservations(ONTOLOGY, observationsFromJson(ONTOLOGY, data))) == data
+	for view in ("Links", "ExactLink", "InverseLink"):
+		rows = observationsCoverage(ONTOLOGY, replayed, view)
+		assert next(row.statuses for row in rows if row.path == "A/Household.has.A/Person") == ("supplied",)
+
+
+@pytest.mark.parametrize("case", ["other-source", "after-withdrawal", "before-definition"])
+def testNamedBinaryBareAssertionDoesNotBorrowEndpoints(case: str):
+	link = "r: h:Household has p:Person {src=feed, by=edge, valid=2020-01-01..}\n"
+	withdrawal = "- r {src=feed, by=edge}\n"
+	source = "other" if case == "other-source" else "feed"
+	bare = f"r {{src={source}, by=note, valid=2020-01-01..2021-12-31}}\n"
+	log = load({
+		"other-source": link + bare,
+		"after-withdrawal": link + withdrawal + bare,
+		"before-definition": bare + link + withdrawal,
+	}[case])
+	state = reconcileObservations(ONTOLOGY, log)
+	assert not any(claim.get("conflict") for claim in state.claims)
+	assert [claim["src"] for claim in state.claims if "rel" in claim] == (["feed"] if case == "other-source" else [])
+	assert [claim["src"] for claim in state.claims if "exists" in claim] == [source]
+	printed = printObservationsState(ONTOLOGY, state)
+	assert ("@type r Household.has.Person\n" in printed) == (case != "other-source")
+	replayed = loadObservations(ONTOLOGY, Source("replay.obs", printed))
+	assert printObservationsState(ONTOLOGY, reconcileObservations(ONTOLOGY, replayed)) == printed
+	data = observationsToJson(state)
+	assert observationsToJson(reconcileObservations(ONTOLOGY, observationsFromJson(ONTOLOGY, data))) == data
+
+
 def testEmptyDocumentsReportMissingRequestsWithoutInventingHandles():
 	items = report("")
 	assert items and all(item.statuses == ("missing",) and item.subject is None for item in items.values())
@@ -221,8 +280,8 @@ def testRecursiveStructureSelectionTerminates():
 
 
 def testCompleteSpecExamplesProducePerPersonCoverage():
-	ontologyText = _specExample("spec-01-ontology")
-	observationText = _specExample("spec-02-observations")
+	ontologyText = specExample("spec-01-ontology")
+	observationText = specExample("spec-02-observations")
 	ontology = loadOntology([Source("finance.onto", ontologyText)])
 	log = loadObservations(ontology, Source("statement.obs", observationText))
 	items = {(item.path, item.subject, item.ctx): item for item in observationsCoverage(ontology, log, "PortfolioReview")}

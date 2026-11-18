@@ -41,8 +41,8 @@ def ontoVersion() -> str:
 
 
 def searchPath(cwd: str, paths: list[str], scan: bool) -> list[str]:
-	"""The project root (unless `scan` is off), then `-I` directories, then `ONTO_PATH`."""
-	extra = [item for item in os.environ.get("ONTO_PATH", "").split(":") if item]
+	"""The project root, `-I`, then `ONTO_PATH`; only `-I` when `scan` is off."""
+	extra = [item for item in os.environ.get("ONTO_PATH", "").split(":") if item] if scan else []
 	roots = ([projectRoot(cwd)] if scan else []) + paths + extra
 	return list(dict.fromkeys(os.path.abspath(root) for root in roots))
 

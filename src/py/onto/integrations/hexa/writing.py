@@ -21,7 +21,7 @@ from ...inventory.model import Inventory
 from ...inventory.operations import documentFields
 from ...ontology.model import Model
 from ...text import lastSegment
-from .compiler import BindingCompiler, CompileError, isMulti, scalarShape, slotName, typeSpec
+from .compiler import BindingCompiler, CompileError, isIndex, isMulti, relativeStep, scalarShape, slotName, typeSpec
 from .stages import namedStage
 from .unfold import StateIndex
 from . import vocabulary as V
@@ -34,6 +34,7 @@ from . import vocabulary as V
 
 
 EACH = {"each": True}
+ROOT = {"root": True}
 SPELLING = ("trim", "lower", "upper")
 
 
@@ -84,12 +85,24 @@ def documentPath(steps: list[AnyValue]) -> str:
 	return printExpression({"path": steps}, binding=True) if steps else "$"
 
 
-def navigate(value: AnyValue, steps: list[str]) -> AnyValue:
-	for step in steps:
-		if not isinstance(value, dict) or step not in value:
-			return None
-		value = value[step]
-	return value
+def placeFragment(node: AnyValue, steps: list[AnyValue], fields: dict) -> dict:
+	"""Place fields at the endpoint, appending only at wildcards and padding fixed positions."""
+	for index, step in enumerate(steps):
+		empty = [] if index + 1 < len(steps) and isinstance(steps[index + 1], dict) else {}
+		if step == EACH:
+			node.append(empty)
+			node = empty
+		elif isIndex(step):
+			position = step["index"]
+			while len(node) <= position:
+				node.append(None)
+			if node[position] is None:
+				node[position] = empty
+			node = node[position]
+		else:
+			node = node.setdefault(step, empty)
+	node.update(fields)
+	return node
 
 
 def pointerSteps(pointer: str) -> list[AnyValue]:
@@ -339,6 +352,10 @@ class Writer:
 		numbers = self.numberFields(previous) if previous is not None and not self.types else set()
 		fragments: dict[str, list[dict]] = {}
 		for scope in self.program.scopes:
+			# The selector location stops before the fixed index suffix read by the shape.
+			lastEach = max((index for index, step in enumerate(scope.steps) if step == EACH), default=-1)
+			start = next((index for index, step in enumerate(scope.steps) if index > lastEach and isIndex(step)), len(scope.steps))
+			suffix = [relativeStep(step) for step in scope.steps[start:]]
 			trees = {occurrence["value"]["$handle"]: occurrence for occurrence in item["occurrences"][scope.name]}
 			result = []
 			for fragment in item["fragments"][scope.name]:
@@ -354,7 +371,7 @@ class Writer:
 					if not present:
 						continue
 					if record is not None and leaf.key and comparable(record.get("values", {}).get(leaf.key)) == comparable(tree.get(leaf.key)):
-						found, raw = at(previous, pointerSteps(record["source"]) + leaf.steps)
+						found, raw = at(previous, pointerSteps(record["source"]) + suffix + leaf.steps)
 						if found:
 							setField(fragment["fields"], leaf.steps, deepcopy(raw))
 							originals[path] = originals.get(path, 0) + 1
@@ -378,48 +395,27 @@ class Writer:
 		binding = self.program.binding
 		parentless: list[str] = []
 		elements: dict[tuple[str, str], dict] = {}
-		document: AnyValue = [] if self.csv else {}
-		if binding.at is not None and runTime is not None and "path" in binding.at and isinstance(binding.at["path"][0], str) and not self.csv:
-			setField(document, binding.at["path"], runTime)
-		for scope in sorted(self.program.scopes, key=lambda item: sum(1 for step in item.steps if step == EACH)):
-			eaches = [index for index, step in enumerate(scope.steps) if step == EACH]
+		paths = {scope.name: scope.steps[1:] if scope.steps[:1] == [ROOT] else scope.steps for scope in self.program.scopes}
+		rootArray = any(steps and isinstance(steps[0], dict) for steps in paths.values())
+		document: AnyValue = [] if self.csv or rootArray else {}
+		# A parent's path is a strict prefix, even when there is no extra wildcard.
+		for scope in sorted(self.program.scopes, key=lambda scope: (paths[scope.name].count(EACH), 0 if self.csv else len(paths[scope.name]))):
 			for fragment in sorted(item["fragments"][scope.name], key=lambda value: value.get("handle", "")):
 				fields = pruned(fragment["fields"])
 				if self.csv:
 					columns = binding.columns or list(fields)
 					document.append({column: fields.get(column, "") for column in columns})
 					continue
+				container, steps = document, paths[scope.name]
 				if scope.parent is not None:
 					container = elements.get((scope.parent, fragment.get("parent")))
 					if container is None:
 						parentless.append(fragment.get("handle"))
 						continue
-					parentScope = next(item for item in self.program.scopes if item.name == scope.parent)
-					steps = [step for step in scope.steps[len(parentScope.steps):] if step != EACH]
-				else:
-					# Fields and list positions (`groups[0].items[*]`) above the last `[*]`
-					container, steps = document, [step for step in scope.steps[:eaches[-1] if eaches else len(scope.steps)] if isinstance(step, str) or "index" in step]
-				node = container
-				for step, following in zip(steps[:-1], steps[1:]):
-					empty = [] if isinstance(following, dict) else {}
-					if isinstance(step, dict):
-						while len(node) <= step["index"]:
-							node.append(None)
-						if node[step["index"]] is None:
-							node[step["index"]] = empty
-						node = node[step["index"]]
-					else:
-						node = node.setdefault(step, empty)
-				if isinstance(steps[-1], dict):
-					# `pairs[0][*]`: the list at that position
-					while len(node) <= steps[-1]["index"]:
-						node.append(None)
-					if node[steps[-1]["index"]] is None:
-						node[steps[-1]["index"]] = []
-					node[steps[-1]["index"]].append(fields)
-				else:
-					node.setdefault(steps[-1], []).append(fields)
-				elements[(scope.name, fragment.get("handle"))] = fields
+					steps = steps[len(paths[scope.parent]):]
+				elements[(scope.name, fragment.get("handle"))] = placeFragment(container, steps, fields)
+		if binding.at is not None and runTime is not None and "path" in binding.at and isinstance(binding.at["path"][0], str) and isinstance(document, dict):
+			setField(document, binding.at["path"], runTime)
 		return {"document": document, "parentless": parentless}
 
 

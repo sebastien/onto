@@ -345,6 +345,8 @@ def emitClaims(program: AnyValue, documents: list[dict], runTime: str | None) ->
 			meta = {"src": alias, "at": record["at"] if isinstance(record.get("at"), str) else runTime, "by": builder.by}
 			if record.get("deleted") is True:
 				deleted.append({"src": document["src"], "s": record["handle"]})
+				if document.get("replaces"):
+					meta["of"] = builder.alias(document["replaces"])
 			builder.record(record, meta)
 		for path, tally in document.get("writing", {}).items():
 			for name, count in tally.items():

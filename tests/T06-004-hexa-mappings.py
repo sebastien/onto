@@ -18,7 +18,7 @@ from onto.integrations.hexa.compiler import CompileError  # noqa: E402
 from onto.integrations.hexa.operations import HexaBindingOperator, HexaMappingOperator, mappingCompile, mappingResult  # noqa: E402
 from onto.integrations.hexa.unfold import StateIndex, Unfolder, intersect  # noqa: E402
 from onto.referential import loadReferential  # noqa: E402
-from tests._helpers import _specExample  # noqa: E402
+from tests.helpers import specExample  # noqa: E402
 
 # -----------------------------------------------------------------------------
 #
@@ -27,14 +27,14 @@ from tests._helpers import _specExample  # noqa: E402
 # -----------------------------------------------------------------------------
 
 
-EXCHANGE = loadOntology([Source("exchange.onto", _specExample("spec-04-mapping", 1))])
-FINANCE = loadOntology([Source("finance.onto", _specExample("spec-01-ontology"))])
-MARKETS = loadFunctions([FINANCE], [Source("markets.fn", _specExample("spec-04-mapping", 3))])
-REFERENTIAL = loadReferential([FINANCE, EXCHANGE], [Source("market-ids.ref", _specExample("spec-04-mapping", 4))])
-BINDING = loadBinding(EXCHANGE, Source("exchange.bind", _specExample("spec-04-mapping", 2)))
-MAPPING = loadMapping(EXCHANGE, FINANCE, Source("exchange-finance.map", _specExample("spec-04-mapping", 5)), libraries=[MARKETS], referentials=[REFERENTIAL])
-FEED = json.loads(_specExample("spec-04-mapping", 0, "json"))
-TREE = json.loads(_specExample("spec-06-hexa", 1, "json"))
+EXCHANGE = loadOntology([Source("exchange.onto", specExample("spec-04-mapping", 1))])
+FINANCE = loadOntology([Source("finance.onto", specExample("spec-01-ontology"))])
+MARKETS = loadFunctions([FINANCE], [Source("markets.fn", specExample("spec-04-mapping", 3))])
+REFERENTIAL = loadReferential([FINANCE, EXCHANGE], [Source("market-ids.ref", specExample("spec-04-mapping", 4))])
+BINDING = loadBinding(EXCHANGE, Source("exchange.bind", specExample("spec-04-mapping", 2)))
+MAPPING = loadMapping(EXCHANGE, FINANCE, Source("exchange-finance.map", specExample("spec-04-mapping", 5)), libraries=[MARKETS], referentials=[REFERENTIAL])
+FEED = json.loads(specExample("spec-04-mapping", 0, "json"))
+TREE = json.loads(specExample("spec-06-hexa", 1, "json"))
 SRC = "feed:instruments/2026-11-10"
 FREQUENCIES = {"1": "Monthly", "3": "Quarterly", "6": "Biannually", "12": "Yearly"}
 IMPLEMENTATIONS = {
@@ -99,7 +99,7 @@ def test_handles_follow_the_referential_or_are_source_qualified():
 
 def test_policies_needing_a_registry_are_unsupported():
 	minted = loadReferential([FINANCE, EXCHANGE], [Source("m.ref", "@referential Minted rev=2026-11-10\n@use Finance as F\n\nF/Company minted\n")])
-	text = _specExample("spec-04-mapping", 5).replace("referential=MarketIds", "referential=Minted")
+	text = specExample("spec-04-mapping", 5).replace("referential=MarketIds", "referential=Minted")
 	mapping = loadMapping(EXCHANGE, FINANCE, Source("m", text), libraries=[MARKETS], referentials=[minted])
 	with pytest.raises(CompileError) as error:
 		HexaMappingOperator(EXCHANGE, FINANCE, referential=minted, libraries=[MARKETS]).compile(mapping)
@@ -141,7 +141,7 @@ def test_conditions_qualifiers_and_existence_validity():
 	({"unknown": True}, "Name", {"unknown": True}),
 ])
 def test_mapping_functions_propagate_null_before_unknown(code, name, expected):
-	text = _specExample("spec-04-mapping", 5).replace("  Name <- Name\n", "  Name <- concat(Code, Name)\n")
+	text = specExample("spec-04-mapping", 5).replace("  Name <- Name\n", "  Name <- concat(Code, Name)\n")
 	mapping = loadMapping(EXCHANGE, FINANCE, Source("m", text), libraries=[MARKETS], referentials=[REFERENTIAL])
 	data = state()
 	for claim in data["claims"]:
@@ -189,7 +189,7 @@ def test_conflicting_class_fans_out_asset_class_and_gaps_the_bond_lines():
 
 
 def test_mixed_provenance_takes_the_source_input_and_is_reported():
-	text = _specExample("spec-04-mapping", 5).replace("  Name <- Name\n", "  Name <- concat(Code, Name) {src=Name}\n")
+	text = specExample("spec-04-mapping", 5).replace("  Name <- Name\n", "  Name <- concat(Code, Name) {src=Name}\n")
 	mapping = loadMapping(EXCHANGE, FINANCE, Source("m", text), libraries=[MARKETS], referentials=[REFERENTIAL])
 	data = state()
 	for claim in data["claims"]:
@@ -213,15 +213,29 @@ def test_unmapped_references_and_failed_functions_are_gaps():
 	_, _, log, report = mapped(data)
 	reasons = {(gap.target, gap.reason) for gap in report.gaps}
 	assert ("Finance/Instrument.Bond.InterestFrequency", "Markets.FrequencyFromInterval.Invalid") in reasons
-	assert ("Finance/Instrument.issuedBy", "Mapping.ReferenceUnmapped") in reasons
-	assert ("Finance/Company", "Binding.KeyMissing") in reasons
-	assert not any("rel" in claim for claim in log.claims)
+	# spec-05: a company without its key keeps a source-qualified handle, and references reach it
+	assert not any(target in ("Finance/Company", "Finance/Instrument.issuedBy") for target, _ in reasons)
+	issued = [claim for claim in log.claims if ".issues." in claim.get("rel", "")]
+	assert issued and "Company_Exchange_2FIssuer_2FC_2D17" in issued[0]["roles"].values()
 
 
 def test_validity_intersection():
 	assert intersect(["2026-01-01..2026-12-31", "2026-06-01.."]) == "2026-06-01..2026-12-31"
 	assert intersect(["2026-01-01", "2026-01-01"]) == "2026-01-01"
 	assert intersect(["..2026-01-01", "2026-02-01.."]) is None
+
+
+def test_disjoint_inputs_do_not_emit_an_unrestricted_value():
+	text = specExample("spec-04-mapping", 5).replace("  Name <- Name\n", "  Name <- concat(Code, Name)\n")
+	mapping = loadMapping(EXCHANGE, FINANCE, Source("m", text), libraries=[MARKETS], referentials=[REFERENTIAL])
+	data = state()
+	for claim in data["claims"]:
+		if claim.get("s") == BOND and claim.get("p") in ("Code", "Name"):
+			claim["valid"] = "..2026-01-01" if claim["p"] == "Code" else "2026-02-01.."
+	ops = operator()
+	program = ops.compile(mapping)
+	log, _ = ops.result(program, asyncio.run(run(CLOCK, program.stages.MappingRead, data)))
+	assert "Name" not in values(log, BOND)
 
 
 def test_functional_forms_and_json_mappings():

@@ -16,7 +16,7 @@ from hexa.combinators import lift, pipe, stage
 from hexa.shapes import Failure
 
 from ...formats.operations import formatsUpdate
-from ...observations.model import _slot, _time
+from ...observations.model import claimSlot, timestampValue
 from ...observations.operations import observationsFromJson, reconcileObservations
 from ...ontology.model import Model, Ontology
 from .stages import namedStage
@@ -54,7 +54,7 @@ class RunSettings:
 
 def slotKey(claim: dict) -> tuple:
 	"""A claim's slot (subject, attribute or facet or relation, context); retractions of a slot share it."""
-	return _slot(claim)
+	return claimSlot(claim)
 
 
 def tokenized(claim: dict, sources: dict[str, str]) -> dict:
@@ -72,7 +72,7 @@ def comparable(claim: dict) -> dict:
 
 
 def latest(log: dict) -> AnyValue:
-	times = [_time(item["at"]) for item in log.get("claims", []) + log.get("retractions", []) if "at" in item]
+	times = [timestampValue(item["at"]) for item in log.get("claims", []) + log.get("retractions", []) if "at" in item]
 	return max(times) if times else None
 
 
@@ -128,6 +128,7 @@ class Rerun:
 		aliases = log["sources"]
 		claims = [tokenized(claim, aliases) for claim in log["claims"]]
 		deleted = [tokenized(item, aliases) for item in log["retractions"]]
+		olderSources: set[str] = set()
 		safeguards: list[str] = []
 		strict = settings.mode == "strict"
 		noRetractions = settings.complete == "none"
@@ -136,12 +137,17 @@ class Rerun:
 				raise Failure(Failure.Contract, BindingCodes.InputEmpty)
 			safeguards.append(str(BindingCodes.InputEmpty))
 			noRetractions = True
-		output: list[dict] = []
+		# Unattributed mapping claims have no host partition to fetch or retract.
+		output = [claim for claim in claims if "src" not in claim]
 		retractions: list[dict] = []
 		counts: dict[str, int] = {}
 		instances: dict[str, dict] = {}
+		composed: set[str] = set()
 		for document in value["documents"]:
 			src = document["src"]
+			if src in composed:
+				continue  # `mine` already contains every document's claims for this source.
+			composed.add(src)
 			mine = [claim for claim in claims if claim.get("src") == src]
 			previous = run["previous"].get(src)
 			if previous is None:
@@ -154,11 +160,12 @@ class Rerun:
 				bySlot.setdefault(slotKey(claim), []).append(claim)
 			counts[src] = len(bySlot)
 			at = document.get("at") or (mine[0]["at"] if mine else None)
-			older = at is not None and latest(previous) is not None and _time(at) < latest(previous)
-			if older:
+			previousAt = latest(previous)
+			if at is not None and previousAt is not None and timestampValue(at) < previousAt:
 				if strict:
 					raise Failure(Failure.Contract, BindingCodes.SnapshotOlder)
 				safeguards.append(f"{BindingCodes.SnapshotOlder}:{src}")
+				olderSources.add(src)
 				output += [claim for claim in mine if slotKey(claim) not in bySlot]
 				continue
 			kept = [claim for claim in mine if not any(comparable(claim) == comparable(item) for item in bySlot.get(slotKey(claim), []))]
@@ -167,10 +174,27 @@ class Rerun:
 			output += [claim for claim in mine if claim in kept or claim["n"] in statements]
 			if noRetractions or at is None:
 				continue
-			retractions += self.absent(value, src, document, mine, bySlot, at, previous.get("instances", {}))
+			priorSrc = document.get("replaces") or src
+			removed = {item["s"] for item in deleted if item.get("src") == src and item.get("of", src) == priorSrc and item.get("exists")}
+			retractions += self.absent(value, src, document, mine, bySlot, at, previous.get("instances", {}), removed)
+		deleted = [item for item in deleted if item.get("src") not in olderSources]
 		return {**run, "output": {"claims": output, "deleted": deleted, "retractions": retractions, "instances": instances}, "counts": counts, "safeguards": safeguards}
 
-	def absent(self, value: dict, src: str, document: dict, mine: list[dict], bySlot: dict, at: str, types: dict[str, dict]) -> list[dict]:
+	def slotOwners(self, claim: dict, key: tuple) -> list[tuple[str, str]]:
+		"""Subject and line name(s) by which a previous slot can be reported stale."""
+		if "rel" not in claim:
+			return [(key[0], key[1])]
+		decl = self.model.get(claim["rel"])
+		if decl is None or decl.arrow is None:
+			return []
+		first, second = (claim["roles"][party.role] for party in decl.participants)
+		owners = [(first, decl.arrow.verb)]
+		if decl.arrow.inverse:
+			owners.append((second, decl.arrow.inverse))
+		return owners
+
+	def absent(self, value: dict, src: str, document: dict, mine: list[dict], bySlot: dict, at: str, types: dict[str, dict],
+		removed: set[str]) -> list[dict]:
 		"""Retractions of the previous slots this run no longer produces, within completeness, never stale ones."""
 		settings = self.settings
 		meta = {"src": src, "by": settings.by, "at": at} | ({"of": document["replaces"]} if document.get("replaces") else {})
@@ -181,18 +205,18 @@ class Rerun:
 		unscopedStale = {(item["s"], item.get("p") or (f"[{item['facet']}]" if "facet" in item else item.get("verb", "")))
 			for item in value["stale"] if item["src"] == src and "ctx" not in item}
 		unidentified = {item["type"] for item in value["unidentified"] if item["src"] == src}
-		gone: set[str] = set()
+		# A missing key could belong to any unmatched handle of that type.
+		unmatched = {handle for handle, instance in types.items() if handle not in produced
+			and any(instance["type"] == item or self.model.isA(instance["type"], item) for item in unidentified)}
+		gone = set(removed)
 		result: list[dict] = []
 		for key, items in bySlot.items():
 			claim = items[0]
-			if key in present or not claim.get("exists"):
+			if key in present or not claim.get("exists") or claim["s"] in removed or claim["s"] in unmatched:
 				continue
 			if (claim["s"], "", claim.get("ctx")) in stale or (claim["s"], "") in unscopedStale:
 				continue
 			if settings.complete == "record":
-				continue
-			typePath = types.get(claim["s"], {}).get("type")
-			if typePath and any(self.model.isA(typePath, item) or typePath == item for item in unidentified):
 				continue
 			gone.add(claim["s"])
 			result.append(retraction(claim, meta))
@@ -201,7 +225,8 @@ class Rerun:
 			if key in present or claim.get("exists") or "rel" in claim and "s" in claim:
 				continue
 			owners = subjects(claim)
-			if owners & gone or (claim.get("s"), key[1], claim.get("ctx")) in stale or (claim.get("s"), key[1]) in unscopedStale:
+			if owners & gone or owners & unmatched or any((subject, member, claim.get("ctx")) in stale or (subject, member) in unscopedStale
+				for subject, member in self.slotOwners(claim, key)):
 				continue
 			if settings.complete == "record" and not owners & produced:
 				continue
@@ -302,12 +327,17 @@ def runStages(settings: RunSettings, read: AnyValue, kind: str) -> dict[str, Any
 
 	def OutputPreviousRetrieve(env, run):
 		"""Run → run with `previous` and `pending` per source, from the host's store."""
-		previous, pending = {}, {}
+		previous, pending, partitions = {}, {}, {}
 		for document in run["value"]["documents"]:
 			src = document["src"]
-			if src in previous:
+			priorSrc = document.get("replaces") or src
+			if src in partitions:
+				if partitions[src] != priorSrc:
+					raise Failure(Failure.Contract, BindingCodes.ReplacementConflicting)
 				continue
-			previous[src] = yield env.OutputPreviousRead({"by": settings.by, "src": document.get("replaces") or src})
+			partitions[src] = priorSrc
+		for src, priorSrc in partitions.items():
+			previous[src] = yield env.OutputPreviousRead({"by": settings.by, "src": priorSrc})
 			pending[src] = yield env.RetractionsPendingRead({"by": settings.by, "src": src})
 		return {**run, "previous": previous, "pending": pending}
 

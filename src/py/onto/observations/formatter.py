@@ -31,10 +31,10 @@ from .model import (
 	META_KEYS,
 	OBSERVATIONS_FORMAT,
 	Observations,
-	_markImplicit,
-	_order,
-	_slot,
-	_valueKey,
+	markImplicit,
+	claimOrder,
+	claimSlot,
+	valueKey,
 )
 
 # -----------------------------------------------------------------------------
@@ -51,18 +51,19 @@ def printText(value: str, inSet: bool = False) -> str:
 	return json.dumps(value, ensure_ascii=False) if unsafe else value
 
 
-def _defaults(observations: Observations) -> dict[str, Any]:
+def observationDefaults(observations: Observations) -> dict[str, Any]:
 	return {key: float(value) if key == "conf" else value for key, value in observations.obs.items() if key in ("src", "at", "by", "conf")}
 
 
-def _claimMeta(claim: Claim) -> dict[str, Any]:
+def claimMeta(claim: Claim) -> dict[str, Any]:
 	return {key: claim[key] for key in META_KEYS if key in claim}
 
 
-def _gapJson(gap: Gap) -> dict[str, Any]:
+def gapJson(gap: Gap, liveClaims: set[str]) -> dict[str, Any]:
 	return {"n": gap.n, "raw": gap.raw, "text": gap.text,
 		"loc": {"file": gap.loc.file, "line": gap.loc.line}, "meta": dict(gap.meta),
 		**({"ctx": gap.ctx} if gap.ctx is not None else {}),
+		**({"witnesses": list(gap.witnesses)} if any(valueKey(claim) not in liveClaims for claim in gap.witnesses) else {}),
 		"diagnostics": [{"code": item.code, "message": item.message} for item in gap.diagnostics]}
 
 
@@ -73,7 +74,7 @@ def _gapJson(gap: Gap) -> dict[str, Any]:
 # -----------------------------------------------------------------------------
 
 
-class _Printer:
+class ObservationPrinter:
 	"""Shared spelling for values, typed mentions and statement metadata."""
 
 	def __init__(self, ontology: Ontology, observations: Observations):
@@ -121,7 +122,13 @@ class _Printer:
 			decl = self.model.get(claim["rel"])
 			left, right = decl.participants
 			prefix = f"{claim['s']}: " if "s" in claim else ""
-			return f"{prefix}{self.handle(claim['roles'][left.role])} {decl.arrow.verb} {self.handle(claim['roles'][right.role])}"
+			subject, obj = claim["roles"][left.role], claim["roles"][right.role]
+			if subject == "?":
+				# Only the object can be unknown in text. Keep canonical roles by using the inverse verb.
+				if obj == "?" or not decl.arrow.inverse:
+					raise ValueError("A relation with an unknown subject requires an inverse verb and a known object")
+				return f"{prefix}{self.handle(obj)} {decl.arrow.inverse} ?"
+			return f"{prefix}{self.handle(subject)} {decl.arrow.verb} {self.handle(obj)}"
 		subject = self.handle(claim["s"])
 		if "facet" in claim:
 			return f"{subject}[{claim['facet']}]"
@@ -163,35 +170,37 @@ class _Printer:
 			self.typed.add(handle)
 		return lines
 
-def _printObservationsLog(ontology: Ontology, observations: Observations) -> str:
-	"""Render a log; gaps are only replayed internally for JSON round-trip validation."""
-	p = _Printer(ontology, observations)
+def renderObservationsLog(ontology: Ontology, observations: Observations, ordinals: list[int] | None = None) -> str:
+	"""Render a log, optionally mapping each emitted statement to its original ordinal."""
+	p = ObservationPrinter(ontology, observations)
 	lines = p.headers()
-	current = _defaults(observations)
+	current = observationDefaults(observations)
 	events = [(claim, False) for claim in observations.claims] + [(claim, True) for claim in observations.retractions]
-	events += [({"n": gap.n, **gap.meta, "_gap": gap}, False) for gap in observations.gaps]
-	events.sort(key=lambda pair: (*_order(pair[0]), not pair[0].get("exists", False)))
+	events += [({"n": gap.n, **gap.meta, "gap": gap}, False) for gap in observations.gaps]
+	events.sort(key=lambda pair: (*claimOrder(pair[0]), not pair[0].get("exists", False)))
 	directiveKeys = {key for key in ("src", "at") if all(key in event for event, _ in events)}
 	grouped: set[int] = set()
 	for claim, retract in events:
 		if id(claim) in grouped:
 			continue
-		if "_gap" in claim:
-			gap = claim["_gap"]
+		if ordinals is not None:
+			ordinals.append(claim["n"])
+		if "gap" in claim:
+			gap = claim["gap"]
 			if gap.ctx != current.get("ctx"):
 				lines.append(f"@ctx {gap.ctx or 'none'}")
 				current["ctx"] = gap.ctx
 			# Emit effective defaults explicitly; raw source stays available on the Gap object.
 			lines.append(gap.text + p.meta(gap.meta, {}))
 			continue
-		meta = _claimMeta(claim)
+		meta = claimMeta(claim)
 		facets = []
 		if claim.get("exists") and not retract:
 			# NOTE: Reconstitute a record header's existence + facets as one statement.
 			for facet in observations.claims:
 				if "facet" not in facet or facet["n"] != claim["n"] or facet["s"] != claim["s"]:
 					continue
-				facetMeta = _claimMeta(facet)
+				facetMeta = claimMeta(facet)
 				context = facetMeta.pop("ctx", None)
 				if facetMeta != {key: value for key, value in meta.items() if key not in ("valid", "ctx")}:
 					continue
@@ -226,12 +235,12 @@ def printObservationsState(ontology: Ontology, observations: Observations) -> st
 		raise ValueError("State printing requires reconciliation first")
 	if observations.gaps:
 		raise ValueError("State text cannot preserve gaps; use JSON")
-	p = _Printer(ontology, observations)
+	p = ObservationPrinter(ontology, observations)
 	lines = p.headers()
-	implicit = sorted(handle for handle, instance in _markImplicit(observations.instances, observations.claims).items() if instance.get("implicit"))
+	implicit = sorted(handle for handle, instance in markImplicit(observations.instances, observations.claims).items() if instance.get("implicit"))
 	if implicit:
 		lines.append("@implicit " + " ".join(implicit))
-	defaults = _defaults(observations)
+	defaults = observationDefaults(observations)
 	for key in ("src", "at"):
 		counts = Counter(claim[key] for claim in observations.claims if key in claim)
 		if counts and all(key in claim for claim in observations.claims):
@@ -255,28 +264,28 @@ def printObservationsState(ontology: Ontology, observations: Observations) -> st
 		return observations.instances[handle]["type"]
 
 	def sourceSlot(claim: Claim) -> tuple:
-		return (_slot(claim), observations.sources.get(claim.get("src"), claim.get("src")))
+		return (claimSlot(claim), observations.sources.get(claim.get("src"), claim.get("src")))
 
 	sourceCounts = Counter(sourceSlot(claim) for claim in observations.claims if "p" in claim)
-	chronologicalSlots = {_slot(claim) for claim in observations.claims
+	chronologicalSlots = {claimSlot(claim) for claim in observations.claims
 		if isinstance(claim.get("v"), dict) and "set" in claim["v"] and not claim["v"].get("partial")
 		and sourceCounts[sourceSlot(claim)] > 1}
 
 	def valueSort(claim: Claim) -> tuple:
 		# Snapshot + later members is order-sensitive. Keep the slot's provenance-bearing claims intact.
-		order = _order(claim) if _slot(claim) in chronologicalSlots else (Fraction(0), 0)
-		return (claim.get("p", ""), claim.get("ctx", ""), order, p.value(claim.get("v"), typed=False), _valueKey(_claimMeta(claim)))
+		order = claimOrder(claim) if claimSlot(claim) in chronologicalSlots else (Fraction(0), 0)
+		return (claim.get("p", ""), claim.get("ctx", ""), order, p.value(claim.get("v"), typed=False), valueKey(claimMeta(claim)))
 
 	def record(handle: str) -> list[str]:
 		claims = bySubject[handle]
-		exists = sorted((claim for claim in claims if claim.get("exists")), key=lambda claim: _valueKey(_claimMeta(claim)))
+		exists = sorted((claim for claim in claims if claim.get("exists")), key=lambda claim: valueKey(claimMeta(claim)))
 		attrs = sorted((claim for claim in claims if "p" in claim), key=valueSort)
-		facets = sorted((claim for claim in claims if "facet" in claim), key=lambda claim: (claim["facet"], claim.get("ctx", ""), _valueKey(_claimMeta(claim))))
+		facets = sorted((claim for claim in claims if "facet" in claim), key=lambda claim: (claim["facet"], claim.get("ctx", ""), valueKey(claimMeta(claim))))
 		out = []
 		inline = []
 		if exists:
 			head = exists[0]
-			inline = [claim for claim in facets if "ctx" not in claim and "conflict" not in claim and _claimMeta(claim) == {key: value for key, value in _claimMeta(head).items() if key != "valid"}]
+			inline = [claim for claim in facets if "ctx" not in claim and "conflict" not in claim and claimMeta(claim) == {key: value for key, value in claimMeta(head).items() if key != "valid"}]
 			names = sorted({claim["facet"] for claim in inline})
 			out.append(p.handle(handle) + (f"[{', '.join(names)}]" if names else "") + p.meta(head, defaults))
 			for claim in attrs:
@@ -292,7 +301,7 @@ def printObservationsState(ontology: Ontology, observations: Observations) -> st
 			def linkSort(claim: Claim) -> tuple:
 				decl = p.model.get(claim["rel"])
 				left, right = decl.participants
-				return (claim["roles"][left.role], decl.arrow.verb, claim["roles"][right.role], claim.get("s", ""), _valueKey(_claimMeta(claim)))
+				return (claim["roles"][left.role], decl.arrow.verb, claim["roles"][right.role], claim.get("s", ""), valueKey(claimMeta(claim)))
 			for link in sorted(links, key=linkSort):
 				block = [p.statement(link) + p.meta(link, defaults)]
 				if link.get("s") in bySubject:
@@ -305,7 +314,7 @@ def printObservationsState(ontology: Ontology, observations: Observations) -> st
 	if identities:
 		lines.append("")
 		# NOTE: Link order chooses canonical handles; preserve it rather than sorting endpoints.
-		for claim in sorted(identities, key=_order):
+		for claim in sorted(identities, key=claimOrder):
 			lines.append(p.statement(claim) + p.meta(claim, defaults))
 	return "\n".join(lines) + "\n"
 
@@ -314,14 +323,16 @@ def printObservationsLog(ontology: Ontology, observations: Observations) -> str:
 	"""Print a gap-free audit log; reject gaps rather than exposing them as active statements."""
 	if observations.gaps:
 		raise ValueError("Log text cannot preserve inert gaps; use JSON")
-	return _printObservationsLog(ontology, observations)
+	return renderObservationsLog(ontology, observations)
 
 
 def observationsToJson(observations: Observations) -> dict[str, Any]:
 	"""Return an independent JSON-ready copy of a typed log or state."""
+	liveClaims = {valueKey({key: value for key, value in claim.items() if key != "conflict"})
+		for claim in observations.claims} if observations.gaps else set()
 	return deepcopy({"format": OBSERVATIONS_FORMAT, "obs": observations.obs, "sources": observations.sources,
 		"instances": observations.instances, "claims": observations.claims, "retractions": observations.retractions,
-		**({"gaps": [_gapJson(gap) for gap in observations.gaps]} if observations.gaps else {})})
+		**({"gaps": [gapJson(gap, liveClaims) for gap in observations.gaps]} if observations.gaps else {})})
 
 
 # EOF

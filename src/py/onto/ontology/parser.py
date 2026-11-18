@@ -77,7 +77,7 @@ from .model import (
 
 
 @dataclass(slots=True)
-class _Context:
+class OntologyParseContext:
 	"""Per-file parsing state: namespace and aliases."""
 
 	diag: Diagnostics
@@ -91,11 +91,11 @@ class _Context:
 # -----------------------------------------------------------------------------
 
 
-def _effectiveHeader(header: list[tuple[str, str]]) -> dict[str, str]:
+def effectiveHeader(header: list[tuple[str, str]]) -> dict[str, str]:
 	return HEADER_DEFAULTS | dict(header)
 
 
-def _resolvePath(name: str, ctx: _Context, loc: Loc | None) -> str | None:
+def resolvePath(name: str, ctx: OntologyParseContext, loc: Loc | None) -> str | None:
 	if not isPath(name):
 		ctx.diag.error("name", f"Invalid name '{name}'", loc)
 		return None
@@ -105,32 +105,32 @@ def _resolvePath(name: str, ctx: _Context, loc: Loc | None) -> str | None:
 	return f"{ctx.namespace}/{name}"
 
 
-def _resolveDeclared(name: str, ctx: _Context, loc: Loc | None) -> str | None:
+def resolveDeclared(name: str, ctx: OntologyParseContext, loc: Loc | None) -> str | None:
 	if name in BUILTINS:
 		ctx.diag.error("reserved", f"'{name}' is a built-in type and cannot be declared", loc)
 		return None
-	return _resolvePath(name, ctx, loc)
+	return resolvePath(name, ctx, loc)
 
 
-def _parseAnn(text: str | None, ctx: _Context, loc: Loc | None) -> Annotations:
+def parseAnn(text: str | None, ctx: OntologyParseContext, loc: Loc | None) -> Annotations:
 	pairs: Annotations = []
 	for key, value in parseAnnotations(text, loc, ctx.diag):
 		if key in PATH_KEYS and isinstance(value, str):
-			value = _resolvePath(value, ctx, loc) or value
+			value = resolvePath(value, ctx, loc) or value
 		elif key in QUALIFIERS and isinstance(value, str) and value.startswith("?:"):
-			value = "?:" + (_resolvePath(value[2:], ctx, loc) or value[2:])
+			value = "?:" + (resolvePath(value[2:], ctx, loc) or value[2:])
 		pairs.append((key, value))
 	return pairs
 
 
-def _parseTypeExpr(text: str, ctx: _Context, loc: Loc | None, hierarchical: bool = False) -> TypeExpr | None:
+def parseTypeExpr(text: str, ctx: OntologyParseContext, loc: Loc | None, hierarchical: bool = False) -> TypeExpr | None:
 	value = re.sub(r"\s*\|\s*", "|", text.strip())
 	if not value:
 		return None
 	if value == "...":
 		return TypeExpr(unknown=True)
 	if value.startswith("Range<") and value.endswith(">"):
-		element = _parseTypeExpr(value[6:-1], ctx, loc)
+		element = parseTypeExpr(value[6:-1], ctx, loc)
 		if element and (element.builtin or element.path) and not element.range:
 			return TypeExpr(range=element)
 		ctx.diag.error("range", f"Range<T> takes a built-in or a named type: '{text}'", loc)
@@ -158,13 +158,13 @@ def _parseTypeExpr(text: str, ctx: _Context, loc: Loc | None, hierarchical: bool
 		if not RE_ATTR_PATH.fullmatch(attrPath):
 			ctx.diag.error("syntax", f"Invalid attribute reference '{value}'", loc)
 			return None
-		path = _resolvePath(owner, ctx, loc)
+		path = resolvePath(owner, ctx, loc)
 		return TypeExpr(path=path, attr=attrPath) if path else None
-	path = _resolvePath(value, ctx, loc)
+	path = resolvePath(value, ctx, loc)
 	return TypeExpr(path=path) if path else None
 
 
-def _parseDeps(text: str, ctx: _Context, loc: Loc | None) -> list[Dep]:
+def parseDeps(text: str, ctx: OntologyParseContext, loc: Loc | None) -> list[Dep]:
 	deps: list[Dep] = []
 	parts = [part.strip() for part in text.split(",")]
 	for index, part in enumerate(parts):
@@ -177,7 +177,7 @@ def _parseDeps(text: str, ctx: _Context, loc: Loc | None) -> list[Dep]:
 		elif isName(part):
 			deps.append(Dep(local=part))
 		else:
-			ref = _parseTypeExpr(part, ctx, loc)
+			ref = parseTypeExpr(part, ctx, loc)
 			if ref and ref.attr:
 				deps.append(Dep(path=ref.path, attr=ref.attr))
 			else:
@@ -187,10 +187,10 @@ def _parseDeps(text: str, ctx: _Context, loc: Loc | None) -> list[Dep]:
 	return deps
 
 
-def _parseAttribute(line: Line, ctx: _Context) -> Attr | None:
+def parseAttribute(line: Line, ctx: OntologyParseContext) -> Attr | None:
 	withAnnotations, doc = splitDoc(line.text)
 	text, annotationText = splitAnnotations(withAnnotations)
-	ann = _parseAnn(annotationText, ctx, line.loc)
+	ann = parseAnn(annotationText, ctx, line.loc)
 	match = RE_ATTRIBUTE.fullmatch(text)
 	if not match:
 		ctx.diag.error("syntax", f"Invalid attribute '{line.text}'", line.loc)
@@ -207,24 +207,24 @@ def _parseAttribute(line: Line, ctx: _Context) -> Attr | None:
 		name=name,
 		card=card,
 		derived=bool(derived),
-		type=_parseTypeExpr(typeText, ctx, line.loc, annotation(ann, "hierarchical") is True),
-		deps=None if depsText is None else _parseDeps(depsText, ctx, line.loc),
+		type=parseTypeExpr(typeText, ctx, line.loc, annotation(ann, "hierarchical") is True),
+		deps=None if depsText is None else parseDeps(depsText, ctx, line.loc),
 		ann=ann,
 		doc=doc,
 		loc=line.loc,
 	)
 
 
-def _parseViewLine(line: Line, ctx: _Context) -> ViewLine | None:
+def parseViewLine(line: Line, ctx: OntologyParseContext) -> ViewLine | None:
 	if match := RE_VIEW_ARROW.fullmatch(line.text):
-		subject = _resolvePath(match.group(1), ctx, line.loc)
-		obj = _resolvePath(match.group(3), ctx, line.loc)
+		subject = resolvePath(match.group(1), ctx, line.loc)
+		obj = resolvePath(match.group(3), ctx, line.loc)
 		return ViewLine(path=arrowPath(subject, match.group(2), obj), loc=line.loc) if subject and obj else None
 	match = RE_VIEW_LINE.fullmatch(line.text)
 	if not match:
 		ctx.diag.error("syntax", f"Invalid view line '{line.text}'", line.loc)
 		return None
-	path = _resolvePath(match.group(1), ctx, line.loc)
+	path = resolvePath(match.group(1), ctx, line.loc)
 	if not path:
 		return None
 	facets: str | list[str] | None = None
@@ -238,7 +238,7 @@ def _parseViewLine(line: Line, ctx: _Context) -> ViewLine | None:
 	return ViewLine(path=path, facets=facets, member=match.group(3), loc=line.loc)
 
 
-def _parseMapLine(line: Line, ctx: _Context) -> MapLine | None:
+def parseMapLine(line: Line, ctx: OntologyParseContext) -> MapLine | None:
 	text, doc = splitDoc(line.text)
 	match = RE_MAP_LINE.fullmatch(text)
 	if not match or match.group(2) not in MATCHES:
@@ -247,26 +247,26 @@ def _parseMapLine(line: Line, ctx: _Context) -> MapLine | None:
 	return MapLine(fromValue=match.group(1), match=match.group(2), toValue=match.group(3), doc=doc, loc=line.loc)
 
 
-def _parseDeclaration(line: Line, ctx: _Context) -> Decl | None:
+def parseDeclaration(line: Line, ctx: OntologyParseContext) -> Decl | None:
 	loc = line.loc
 	withAnnotations, doc = splitDoc(line.text)
 	text, annotationText = splitAnnotations(withAnnotations)
-	ann = _parseAnn(annotationText, ctx, loc)
+	ann = parseAnn(annotationText, ctx, loc)
 	if match := RE_TYPE_DECL.fullmatch(text):
-		path = _resolveDeclared(match.group(1), ctx, loc)
+		path = resolveDeclared(match.group(1), ctx, loc)
 		if not path:
 			return None
-		return Decl(kind="type", path=path, definition=_parseTypeExpr(match.group(2), ctx, loc, annotation(ann, "hierarchical") is True), ann=ann, doc=doc, loc=loc)
+		return Decl(kind="type", path=path, definition=parseTypeExpr(match.group(2), ctx, loc, annotation(ann, "hierarchical") is True), ann=ann, doc=doc, loc=loc)
 	if match := RE_FACET_DECL.fullmatch(text):
-		path = _resolveDeclared(match.group(1), ctx, loc)
-		subject = _resolvePath(match.group(2), ctx, loc)
+		path = resolveDeclared(match.group(1), ctx, loc)
+		subject = resolvePath(match.group(2), ctx, loc)
 		if not path or not subject:
 			return None
 		return Decl(kind="facet", path=path, subject=subject, ann=ann, doc=doc, loc=loc)
 	if match := RE_ARROW_DECL.fullmatch(text):
 		subjectName, verb, inverse, objectName, counts = match.groups()
-		subject = _resolvePath(subjectName, ctx, loc)
-		obj = _resolvePath(objectName, ctx, loc)
+		subject = resolvePath(subjectName, ctx, loc)
+		obj = resolvePath(objectName, ctx, loc)
 		if not subject or not obj:
 			return None
 		for name in (verb, inverse):
@@ -284,7 +284,7 @@ def _parseDeclaration(line: Line, ctx: _Context) -> Decl | None:
 			arrow=Arrow(verb, inverse, counts), ann=ann, doc=doc, loc=loc,
 		)
 	if match := RE_RELATION_DECL.fullmatch(text):
-		path = _resolveDeclared(match.group(1), ctx, loc)
+		path = resolveDeclared(match.group(1), ctx, loc)
 		if not path:
 			return None
 		participants: list[Participant] = []
@@ -293,13 +293,13 @@ def _parseDeclaration(line: Line, ctx: _Context) -> Decl | None:
 			if not found:
 				ctx.diag.error("syntax", f"Invalid participant '{part}'", loc)
 				continue
-			typePath = _resolvePath(found.group(3), ctx, loc)
+			typePath = resolvePath(found.group(3), ctx, loc)
 			if typePath:
 				participants.append(Participant(found.group(1) or lastSegment(typePath), found.group(2), typePath))
 		return Decl(kind="relation", path=path, participants=participants, ann=ann, doc=doc, loc=loc)
 	if match := RE_ENTITY_DECL.fullmatch(text):
-		path = _resolveDeclared(match.group(1), ctx, loc)
-		base = _resolvePath(match.group(2), ctx, loc) if match.group(2) else None
+		path = resolveDeclared(match.group(1), ctx, loc)
+		base = resolvePath(match.group(2), ctx, loc) if match.group(2) else None
 		if not path or (match.group(2) and not base):
 			return None
 		return Decl(kind="entity", path=path, base=base, ann=ann, doc=doc, loc=loc)
@@ -307,7 +307,7 @@ def _parseDeclaration(line: Line, ctx: _Context) -> Decl | None:
 	return None
 
 
-def _bodyParser(decl: Decl, ctx: _Context) -> Callable[[Line], None]:
+def bodyParser(decl: Decl, ctx: OntologyParseContext) -> Callable[[Line], None]:
 	tree = decl.kind == "type" and annotation(decl.ann, "hierarchical") is True and decl.definition is None
 	parents: list[str] = []
 	nodes: set[str] = set()
@@ -340,19 +340,19 @@ def _bodyParser(decl: Decl, ctx: _Context) -> Callable[[Line], None]:
 		if decl.definition is not None:
 			ctx.diag.error("syntax", "Only structures (`T =` with no right side) have a body", line.loc)
 			return
-		attr = _parseAttribute(line, ctx)
+		attr = parseAttribute(line, ctx)
 		if attr:
 			decl.fields = (decl.fields or []) + [attr]
 
 	def parseAttr(line: Line) -> None:
-		attr = _parseAttribute(line, ctx)
+		attr = parseAttribute(line, ctx)
 		if attr:
 			decl.attrs.append(attr)
 
 	return parseNode if tree else parseField if decl.kind == "type" else parseAttr
 
 
-def _parseDirective(line: Line, position: int, ctx: _Context, ontology: Ontology, seen: dict[str, Decl]) -> Callable[[Line], None] | None:
+def parseDirective(line: Line, position: int, ctx: OntologyParseContext, ontology: Ontology, seen: dict[str, Decl]) -> Callable[[Line], None] | None:
 	loc, diag = line.loc, ctx.diag
 	text, doc = splitDoc(line.text)
 
@@ -388,7 +388,7 @@ def _parseDirective(line: Line, position: int, ctx: _Context, ontology: Ontology
 			ontology.namespace, ontology.header = namespace, header
 		elif ontology.namespace != namespace or dict(header).get("rev") != dict(ontology.header).get("rev"):
 			diag.error("header", "All files of an ontology must have the same @ontology namespace and rev", loc)
-		elif _effectiveHeader(header) != _effectiveHeader(ontology.header):
+		elif effectiveHeader(header) != effectiveHeader(ontology.header):
 			# NOTE: Defaults are not per file: one normal form must print every declaration with one header.
 			diag.error("header", "All files of an ontology must have the same @ontology defaults", loc)
 		return None
@@ -408,7 +408,7 @@ def _parseDirective(line: Line, position: int, ctx: _Context, ontology: Ontology
 			ontology.uses.append((alias, namespace))
 		return None
 	if match := RE_VIEW.fullmatch(text):
-		path = _resolvePath(match.group(1), ctx, loc)
+		path = resolvePath(match.group(1), ctx, loc)
 		if not path:
 			return None
 		decl = Decl(kind="view", path=path, doc=doc, loc=loc)
@@ -416,7 +416,7 @@ def _parseDirective(line: Line, position: int, ctx: _Context, ontology: Ontology
 			return None
 
 		def parseView(body: Line) -> None:
-			viewLine = _parseViewLine(body, ctx)
+			viewLine = parseViewLine(body, ctx)
 			if viewLine:
 				decl.viewLines.append(viewLine)
 
@@ -433,15 +433,15 @@ def _parseDirective(line: Line, position: int, ctx: _Context, ontology: Ontology
 		if not match:
 			diag.error("syntax", f"Invalid @map '{text}'", loc)
 			return None
-		path, mapFrom, mapTo = (_resolvePath(name, ctx, loc) for name in match.groups())
+		path, mapFrom, mapTo = (resolvePath(name, ctx, loc) for name in match.groups())
 		if not path or not mapFrom or not mapTo:
 			return None
-		mapDecl = Decl(kind="map", path=path, mapFrom=mapFrom, mapTo=mapTo, ann=_parseAnn(annotationText, ctx, loc), doc=doc, loc=loc)
+		mapDecl = Decl(kind="map", path=path, mapFrom=mapFrom, mapTo=mapTo, ann=parseAnn(annotationText, ctx, loc), doc=doc, loc=loc)
 		if not declare(mapDecl):
 			return None
 
 		def parseMap(body: Line) -> None:
-			mapLine = _parseMapLine(body, ctx)
+			mapLine = parseMapLine(body, ctx)
 			if mapLine:
 				mapDecl.mapLines.append(mapLine)
 
@@ -450,8 +450,8 @@ def _parseDirective(line: Line, position: int, ctx: _Context, ontology: Ontology
 	return None
 
 
-def _parseFile(source: Source, ontology: Ontology, seen: dict[str, Decl], diag: Diagnostics) -> None:
-	ctx = _Context(diag)
+def parseFile(source: Source, ontology: Ontology, seen: dict[str, Decl], diag: Diagnostics) -> None:
+	ctx = OntologyParseContext(diag)
 	current = None
 	currentTree = False
 	if "\r" in source.text:
@@ -475,9 +475,9 @@ def _parseFile(source: Source, ontology: Ontology, seen: dict[str, Decl], diag: 
 			diag.error("indent", "Body lines are indented by exactly two spaces", line.loc)
 			continue
 		if line.text.startswith("@"):
-			current = _parseDirective(line, position, ctx, ontology, seen)
+			current = parseDirective(line, position, ctx, ontology, seen)
 			continue
-		decl = _parseDeclaration(line, ctx)
+		decl = parseDeclaration(line, ctx)
 		if not decl:
 			continue
 		if decl.path in seen:
@@ -485,7 +485,7 @@ def _parseFile(source: Source, ontology: Ontology, seen: dict[str, Decl], diag: 
 			continue
 		seen[decl.path] = decl
 		ontology.decls.append(decl)
-		current = _bodyParser(decl, ctx)
+		current = bodyParser(decl, ctx)
 		currentTree = decl.kind == "type" and annotation(decl.ann, "hierarchical") is True
 
 
@@ -496,173 +496,177 @@ def _parseFile(source: Source, ontology: Ontology, seen: dict[str, Decl], diag: 
 # -----------------------------------------------------------------------------
 
 
-def _members(value: Any, what: str, required: tuple[str, ...], optional: tuple[str, ...] = ()) -> dict[str, Any]:
+def readJsonMembers(value: Any, what: str, required: tuple[str, ...], optional: tuple[str, ...] | None = ()) -> dict[str, Any]:
 	if not isinstance(value, dict):
 		raise ValueError(f"{what} must be an object")
 	if missing := [key for key in required if key not in value]:
 		raise ValueError(f"{what} lacks {', '.join(missing)}")
-	if unknown := [key for key in value if key not in required and key not in optional]:
+	if optional is not None and (unknown := [key for key in value if key not in required and key not in optional]):
 		raise ValueError(f"{what} has unexpected {', '.join(unknown)}")
 	return value
 
 
-def _string(value: Any, what: str) -> str:
+def readJsonString(value: Any, what: str) -> str:
 	if not isinstance(value, str):
 		raise ValueError(f"{what} must be a string")
 	return value
 
 
-def _card(value: Any, what: str) -> str:
+def readJsonCardinality(value: Any, what: str) -> str:
 	if value not in CARDS:
 		raise ValueError(f"{what}: card must be one of {' '.join(CARDS)}")
 	return value
 
 
-def _flag(value: Any, what: str) -> bool:
+def readJsonFlag(value: Any, what: str) -> bool:
 	if value is not True:
 		raise ValueError(f"{what} must be true when present")
 	return True
 
 
-def _array(value: Any, what: str, nonEmpty: bool = False) -> list[Any]:
+def readJsonArray(value: Any, what: str, nonEmpty: bool = False) -> list[Any]:
 	if not isinstance(value, list) or (nonEmpty and not value):
 		raise ValueError(f"{what} must be a{' non-empty' if nonEmpty else 'n'} array")
 	return value
 
 
-def _strings(value: Any, what: str) -> list[tuple[str, str]]:
-	return [(key, _string(item, f"{what}.{key}")) for key, item in _members(value, what, (), tuple(value or ())).items()]
+def readJsonStringPairs(value: Any, what: str) -> list[tuple[str, str]]:
+	return [(key, readJsonString(item, f"{what}.{key}")) for key, item in readJsonMembers(value, what, (), None).items()]
 
 
-def _annFromJson(value: Any, what: str) -> Annotations:
-	pairs = _members(value, what, (), tuple(value or ())).items()
-	return [(key, True if item is True else _string(item, f"{what}.{key}")) for key, item in pairs]
+def annFromJson(value: Any, what: str) -> Annotations:
+	pairs = readJsonMembers(value, what, (), None).items()
+	return [(key, True if item is True else readJsonString(item, f"{what}.{key}")) for key, item in pairs]
 
 
-def _optional(data: dict[str, Any], key: str, read, what: str, default: Any = None) -> Any:
+def readOptionalMember(data: dict[str, Any], key: str, read, what: str, default: Any = None) -> Any:
 	return read(data[key], f"{what}.{key}") if key in data else default
 
 
-def _typeFromJson(value: Any, what: str) -> TypeExpr:
+def typeFromJson(value: Any, what: str) -> TypeExpr:
 	keys = set(value) if isinstance(value, dict) else None
 	if keys == {"builtin"}:
 		if value["builtin"] not in BUILTINS:
 			raise ValueError(f"{what}: unknown built-in type")
 		return TypeExpr(builtin=value["builtin"])
 	if keys == {"unknown"}:
-		return TypeExpr(unknown=_flag(value["unknown"], what))
+		return TypeExpr(unknown=readJsonFlag(value["unknown"], what))
 	if keys == {"values", "open"}:
 		if not isinstance(value["open"], bool):
 			raise ValueError(f"{what}.open must be a boolean")
-		values = [_string(item, f"{what}.values") for item in _array(value["values"], f"{what}.values", True)]
+		values = [readJsonString(item, f"{what}.values") for item in readJsonArray(value["values"], f"{what}.values", True)]
 		return TypeExpr(values=values, open=value["open"])
 	if keys == {"range"}:
-		element = _typeFromJson(value["range"], f"{what}.range")
+		element = typeFromJson(value["range"], f"{what}.range")
 		if not (element.builtin or element.path):
 			raise ValueError(f"{what}.range must be a built-in or a path")
 		return TypeExpr(range=element)
 	if keys in ({"path"}, {"path", "attr"}):
-		return TypeExpr(path=_string(value["path"], what), attr=_optional(value, "attr", _string, what))
+		return TypeExpr(path=readJsonString(value["path"], what), attr=readOptionalMember(value, "attr", readJsonString, what))
 	raise ValueError(f"{what} must be one type expression: builtin, path[+attr], values+open, unknown or range")
 
 
-def _depFromJson(value: Any, what: str) -> Dep:
+def depFromJson(value: Any, what: str) -> Dep:
 	keys = set(value) if isinstance(value, dict) else None
 	if keys == {"local"}:
-		return Dep(local=_string(value["local"], what))
+		return Dep(local=readJsonString(value["local"], what))
 	if keys == {"input"}:
-		return Dep(input=_string(value["input"], what))
+		return Dep(input=readJsonString(value["input"], what))
 	if keys == {"path", "attr"}:
-		return Dep(path=_string(value["path"], what), attr=_string(value["attr"], what))
+		return Dep(path=readJsonString(value["path"], what), attr=readJsonString(value["attr"], what))
 	if keys == {"ellipsis"}:
-		return Dep(ellipsis=_flag(value["ellipsis"], what))
+		return Dep(ellipsis=readJsonFlag(value["ellipsis"], what))
 	raise ValueError(f"{what} must be one dependency: local, input, path+attr or ellipsis")
 
 
-def _attrFromJson(value: Any, what: str) -> Attr:
-	data = _members(value, what, ("name", "card"), ("derived", "type", "deps", "ann", "doc"))
+def attrFromJson(value: Any, what: str) -> Attr:
+	data = readJsonMembers(value, what, ("name", "card"), ("derived", "type", "deps", "ann", "doc"))
 	return Attr(
-		name=_string(data["name"], what),
-		card=_card(data["card"], what),
-		derived=_optional(data, "derived", _flag, what, False),
-		type=_optional(data, "type", _typeFromJson, what),
-		deps=_optional(data, "deps", lambda items, at: [_depFromJson(item, at) for item in _array(items, at, True)], what),
-		ann=_optional(data, "ann", _annFromJson, what, []),
-		doc=_optional(data, "doc", _string, what),
+		name=readJsonString(data["name"], what),
+		card=readJsonCardinality(data["card"], what),
+		derived=readOptionalMember(data, "derived", readJsonFlag, what, False),
+		type=readOptionalMember(data, "type", typeFromJson, what),
+		deps=readOptionalMember(data, "deps", lambda items, at: [depFromJson(item, at) for item in readJsonArray(items, at, True)], what),
+		ann=readOptionalMember(data, "ann", annFromJson, what, []),
+		doc=readOptionalMember(data, "doc", readJsonString, what),
 	)
 
 
-def _attrsFromJson(value: Any, what: str) -> list[Attr]:
-	return [_attrFromJson(item, f"{what}[{index}]") for index, item in enumerate(_array(value, what, True))]
+def attrsFromJson(value: Any, what: str) -> list[Attr]:
+	return [attrFromJson(item, f"{what}[{index}]") for index, item in enumerate(readJsonArray(value, what, True))]
 
 
-def _participantFromJson(value: Any, what: str) -> Participant:
-	data = _members(value, what, ("role", "card", "type"))
-	return Participant(_string(data["role"], what), _card(data["card"], what), _string(data["type"], what))
+def participantFromJson(value: Any, what: str) -> Participant:
+	data = readJsonMembers(value, what, ("role", "card", "type"))
+	return Participant(readJsonString(data["role"], what), readJsonCardinality(data["card"], what), readJsonString(data["type"], what))
 
 
-def _arrowFromJson(value: Any, what: str) -> Arrow:
-	data = _members(value, what, ("verb", "counts"), ("inverse",))
-	if not RE_COUNTS.fullmatch(_string(data["counts"], what)):
+def arrowFromJson(value: Any, what: str) -> Arrow:
+	data = readJsonMembers(value, what, ("verb", "counts"), ("inverse",))
+	if not RE_COUNTS.fullmatch(readJsonString(data["counts"], what)):
 		raise ValueError(f"{what}: invalid counts")
-	return Arrow(_string(data["verb"], what), _optional(data, "inverse", _string, what), data["counts"])
+	return Arrow(readJsonString(data["verb"], what), readOptionalMember(data, "inverse", readJsonString, what), data["counts"])
 
 
-def _viewLineFromJson(value: Any, what: str) -> ViewLine:
-	data = _members(value, what, ("path",), ("facets", "member"))
+def viewLineFromJson(value: Any, what: str) -> ViewLine:
+	data = readJsonMembers(value, what, ("path",), ("facets", "member"))
 	facets = data.get("facets")
 	if "facets" in data and facets != "*":
-		facets = [_string(item, f"{what}.facets") for item in _array(facets, f"{what}.facets", True)]
-	return ViewLine(_string(data["path"], what), facets, _optional(data, "member", _string, what))
+		facets = [readJsonString(item, f"{what}.facets") for item in readJsonArray(facets, f"{what}.facets", True)]
+	return ViewLine(readJsonString(data["path"], what), facets, readOptionalMember(data, "member", readJsonString, what))
 
 
-def _mapLineFromJson(value: Any, what: str) -> MapLine:
-	data = _members(value, what, ("from", "match", "to"), ("doc",))
-	return MapLine(_string(data["from"], what), _string(data["match"], what), _string(data["to"], what), _optional(data, "doc", _string, what))
+def mapLineFromJson(value: Any, what: str) -> MapLine:
+	data = readJsonMembers(value, what, ("from", "match", "to"), ("doc",))
+	return MapLine(readJsonString(data["from"], what), readJsonString(data["match"], what), readJsonString(data["to"], what), readOptionalMember(data, "doc", readJsonString, what))
 
 
-def _declFromJson(value: Any, what: str) -> Decl:
+def declFromJson(value: Any, what: str) -> Decl:
 	kind = value.get("kind") if isinstance(value, dict) else None
-	if kind not in DECL_MEMBERS:
+	if not isinstance(kind, str) or kind not in DECL_MEMBERS:
 		raise ValueError(f"{what}: unknown declaration kind '{kind}'")
 	required, optional = DECL_MEMBERS[kind]
-	data = _members(value, what, ("kind", "path") + required, optional)
+	data = readJsonMembers(value, what, ("kind", "path") + required, optional)
 	what = f"{what} '{data['path']}'"
 	decl = Decl(
-		kind=kind, path=_string(data["path"], what),
-		ann=_optional(data, "ann", _annFromJson, what, []), doc=_optional(data, "doc", _string, what),
-		attrs=_optional(data, "attrs", _attrsFromJson, what, []),
+		kind=kind, path=readJsonString(data["path"], what),
+		ann=readOptionalMember(data, "ann", annFromJson, what, []), doc=readOptionalMember(data, "doc", readJsonString, what),
+		attrs=readOptionalMember(data, "attrs", attrsFromJson, what, []),
 	)
 	if kind == "type":
 		if "def" in data and "fields" in data:
 			raise ValueError(f"{what} has both def and fields")
-		decl.definition = _optional(data, "def", _typeFromJson, what)
-		decl.fields = _optional(data, "fields", _attrsFromJson, what)
+		decl.definition = readOptionalMember(data, "def", typeFromJson, what)
+		decl.fields = readOptionalMember(data, "fields", attrsFromJson, what)
 	elif kind == "entity":
-		decl.base = _optional(data, "base", _string, what)
+		decl.base = readOptionalMember(data, "base", readJsonString, what)
 	elif kind == "facet":
-		decl.subject = _string(data["subject"], what)
+		decl.subject = readJsonString(data["subject"], what)
 	elif kind == "relation":
-		decl.participants = [_participantFromJson(item, f"{what}.participants") for item in _array(data["participants"], what)]
-		decl.arrow = _optional(data, "arrow", _arrowFromJson, what)
+		decl.participants = [participantFromJson(item, f"{what}.participants") for item in readJsonArray(data["participants"], what)]
+		decl.arrow = readOptionalMember(data, "arrow", arrowFromJson, what)
+		if decl.arrow and len(decl.participants) != 2:
+			raise ValueError(f"{what}: a binary relation needs exactly two participants")
+		if len(decl.participants) < 2:
+			raise ValueError(f"{what}: a relation needs at least two participants")
 	elif kind == "map":
-		decl.mapFrom, decl.mapTo = _string(data["from"], what), _string(data["to"], what)
-		decl.mapLines = [_mapLineFromJson(item, f"{what}.lines") for item in _array(data["lines"], what)]
+		decl.mapFrom, decl.mapTo = readJsonString(data["from"], what), readJsonString(data["to"], what)
+		decl.mapLines = [mapLineFromJson(item, f"{what}.lines") for item in readJsonArray(data["lines"], what)]
 	elif kind == "view":
-		decl.viewLines = [_viewLineFromJson(item, f"{what}.lines") for item in _array(data["lines"], what)]
+		decl.viewLines = [viewLineFromJson(item, f"{what}.lines") for item in readJsonArray(data["lines"], what)]
 	return decl
 
 
-def _fromJson(value: Any) -> Ontology:
-	data = _members(value, "ontology", ("format", "namespace", "decls"), ("header", "uses", "ids"))
+def decodeOntology(value: Any) -> Ontology:
+	data = readJsonMembers(value, "ontology", ("format", "namespace", "decls"), ("header", "uses", "ids"))
 	if data["format"] != ONTOLOGY_FORMAT:
 		raise ValueError(f"format must be '{ONTOLOGY_FORMAT}'")
 	return Ontology(
-		namespace=_string(data["namespace"], "namespace"),
-		header=_optional(data, "header", _strings, "ontology", []),
-		uses=_optional(data, "uses", _strings, "ontology", []),
-		decls=[_declFromJson(item, f"decls[{index}]") for index, item in enumerate(_array(data["decls"], "decls"))],
-		ids=dict(_optional(data, "ids", _strings, "ontology", [])) or None,
+		namespace=readJsonString(data["namespace"], "namespace"),
+		header=readOptionalMember(data, "header", readJsonStringPairs, "ontology", []),
+		uses=readOptionalMember(data, "uses", readJsonStringPairs, "ontology", []),
+		decls=[declFromJson(item, f"decls[{index}]") for index, item in enumerate(readJsonArray(data["decls"], "decls"))],
+		ids=dict(readOptionalMember(data, "ids", readJsonStringPairs, "ontology", [])) or None,
 	)
 
 
@@ -679,7 +683,7 @@ def parseOntology(sources: list[Source]) -> Ontology:
 	ontology = Ontology()
 	seen: dict[str, Decl] = {}
 	for source in sources:
-		_parseFile(source, ontology, seen, diag)
+		parseFile(source, ontology, seen, diag)
 	if ontology.namespace is None:
 		diag.error("header", "Missing @ontology directive")
 	ontology.diagnostics = diag.check()

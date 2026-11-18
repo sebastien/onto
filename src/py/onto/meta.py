@@ -6,8 +6,9 @@ import re
 
 from .observations.formatter import printText
 from .ontology import BUILTINS, MULTI, Attr, Decl, Model, Ontology, TypeExpr
-from .observations.model import Observations, ObservationsDocument
-from .text import Diagnostic, Diagnostics, Loc
+from .ontology.model import RE_ATTR_PATH, arrowPath
+from .observations.model import Claim, Observations, ObservationsDocument
+from .text import Diagnostic, Diagnostics
 
 # -----------------------------------------------------------------------------
 #
@@ -70,6 +71,8 @@ class MetaWriter:
 		self.model = Model(ontology)
 		self.prefix = re.compile(rf"(^|\.){re.escape(ontology.namespace or '')}/")
 		self.dimensions: dict[str, list[str]] = {}
+		self.handles: dict[tuple[str, str], str] = {}
+		self.usedHandles: set[str] = set()
 		self.bases: list[tuple[str, str]] = []
 		self.extensions: list[tuple[str, str]] = []
 		self.concepts: list[str] = []
@@ -79,10 +82,19 @@ class MetaWriter:
 		"""`path` relative to the ontology namespace; a binary relation keeps its `S.verb.T` form."""
 		return self.prefix.sub(r"\1", path)
 
-	@staticmethod
-	def Handle(path: str) -> str:
-		"""The handle of the element at relative `path`: `/` becomes `_` and `.` becomes `__`."""
-		return path.replace("/", "_").replace(".", "__")
+	def handle(self, kind: str, path: str, suffix: str = "") -> str:
+		"""Allocate a unique handle while retaining the usual spelling when available."""
+		key = kind, path
+		if key not in self.handles:
+			base = path.replace("/", "_").replace(".", "__") + suffix
+			handle = base
+			index = 2
+			while handle in self.usedHandles:
+				handle = f"{base}__{index}"
+				index += 1
+			self.handles[key] = handle
+			self.usedHandles.add(handle)
+		return self.handles[key]
 
 	@staticmethod
 	def Record(handle: str, type: str, values: list[tuple[str, str | None]]) -> list[str]:
@@ -107,13 +119,14 @@ class MetaWriter:
 		if not type:
 			return None
 		if type.builtin:
-			if type.builtin not in self.dimensions:
-				self.dimensions[type.builtin] = self.Record(type.builtin, "Dimension", [("Path", type.builtin), ("Kind", "Builtin")])
-			return type.builtin
+			handle = self.handle("builtin", type.builtin)
+			if handle not in self.dimensions:
+				self.dimensions[handle] = self.Record(handle, "Dimension", [("Path", type.builtin), ("Kind", "Builtin")])
+			return handle
 		if type.range:
 			return self.range(type.range)
 		if type.values is not None or type.unknown:
-			handle = f"{self.Handle(owner)}__Values"
+			handle = self.handle("inline", owner, "__Values")
 			self.dimensions[handle] = self.Record(handle, "Dimension", [("Path", owner), *self.vocabulary(type)])
 			return handle
 		if type.attr:
@@ -128,7 +141,7 @@ class MetaWriter:
 		base = self.dimension(element, "")
 		if not base:
 			return None
-		handle = f"{base}__Range"
+		handle = self.handle("range", base, "__Range")
 		if handle not in self.dimensions:
 			name = element.builtin or self.path(element.path or "") + (f".{element.attr}" if element.attr else "")
 			self.dimensions[handle] = self.Record(handle, "Dimension", [("Path", f"Range<{name}>"), ("Kind", "Range")])
@@ -138,7 +151,7 @@ class MetaWriter:
 	def named(self, decl: Decl) -> str:
 		"""The handle of the dimension of type declaration `decl`, recording it."""
 		path = self.path(decl.path)
-		handle = self.Handle(path)
+		handle = self.handle("type", path)
 		if handle in self.dimensions:
 			return handle
 		# NOTE: Recorded before its base is resolved, so that an alias cycle ends.
@@ -167,14 +180,14 @@ class MetaWriter:
 	def concept(self, decl: Decl) -> None:
 		"""Record concept `decl` and its own attributes."""
 		path = self.path(decl.path)
-		handle = self.Handle(path)
+		handle = self.handle("concept", path)
 		self.concepts += self.Record(handle, "Concept", [("Path", path), ("Kind", CONCEPT_KINDS[decl.kind]), ("Description", self.Text(decl.doc))])
 		for attr in decl.attrs:
 			self.attribute(handle, path, attr)
 
 	def attribute(self, concept: str, conceptPath: str, attr: Attr) -> None:
 		path = f"{conceptPath}.{attr.name}"
-		handle = self.Handle(path)
+		handle = self.handle("attribute", path)
 		card = attr.card or self.model.defaultCard
 		self.concepts += self.Record(handle, "Attribute", [
 			("Path", path), ("IsRequired", self.Flag(card in ("1", "+"))), ("IsMultiple", self.Flag(card in MULTI)), ("Description", self.Text(attr.doc)),
@@ -249,45 +262,70 @@ def resolvesMetaPath(model: Model, value: str, paths: set[str] | None = None) ->
 	or an attribute, facet attribute, role or structure field under a declaration."""
 	if value in (metaPaths(model.ontology) if paths is None else paths) or value in BUILTINS or model.get(value):
 		return True
+	if not value or value.endswith("."):
+		return False
 	namespace = model.ontology.namespace or ""
-	if model.get(f"{namespace}/{value}"):
-		return True
-	head, _, rest = value.partition(".")
-	return bool(rest) and model.get(f"{namespace}/{head}") is not None and model.lookup(f"{namespace}/{head}", rest) is not None
+	parts = value.split(".")
+	owners = (parts[0], f"{namespace}/{parts[0]}")
+	candidates = [(owner, ".".join(parts[1:])) for owner in owners]
+	if len(parts) >= 3:
+		candidates += [(arrowPath(owner, parts[1], obj), ".".join(parts[3:]))
+			for owner in owners for obj in (parts[2], f"{namespace}/{parts[2]}")]
+	return any(model.get(owner) is not None and
+		(not rest or RE_ATTR_PATH.fullmatch(rest) and model.lookup(owner, rest)) for owner, rest in candidates)
 
 
-def checkMetaReferences(ontology: Ontology, observations: Observations, doc: ObservationsDocument) -> list[Diagnostic]:
-	"""Errors for `Meta` instances that `onto meta` does not generate and `Meta/Path` values naming no element.
+def referencedHandles(claim: Claim) -> set[str]:
+	handles = {claim[key] for key in ("s", "ctx") if key in claim}
+	for key in ("same", "distinct"):
+		handles.update(claim.get(key, []))
+	handles.update(claim.get("roles", {}).values())
+	value = claim.get("v")
+	members = value.get("set", [value]) if isinstance(value, dict) else []
+	handles.update(member["ref"] for member in members if isinstance(member, dict) and "ref" in member)
+	return handles
 
-	Applies only when `ontology` declares the `Meta` domain; `doc` gives the locations of the statements."""
+
+def metaReferenceErrors(ontology: Ontology, observations: Observations, doc: ObservationsDocument) -> tuple[list[Diagnostic], set[str]]:
+	"""Return invalid Meta references and the handles that do not belong in the instance registry."""
 	model = Model(ontology)
 	namespace = ontology.namespace or ""
 	if not model.get(f"{namespace}/{META_DOMAIN}"):
-		return []
+		return [], set()
 	diag = Diagnostics()
 	instances, statements = observations.instances, {statement.n: statement for statement in doc.statements}
-
-	def located(handle: str) -> Loc | None:
-		token = re.compile(rf"(?<![\w]){re.escape(handle)}(?![\w])")
-		return next((statement.loc for statement in doc.statements if token.search(statement.rawLine or statement.text)), None)
-
 	records = {f"{namespace}/{META_DOMAIN}/{name}": name for name in META_RECORDS}
 	text = metaObservations(ontology)
 	generated, paths = metaHandles(ontology, text), metaPaths(ontology, text)
+	unresolved = {}
 	for handle, instance in sorted(instances.items()):
 		record = records.get(str(instance.get("type")))
 		if record and (handle, record) not in generated:
-			diag.error("meta.unresolved", f"'{handle}' is not a {META_DOMAIN}/{record} of this ontology", located(handle))
+			unresolved[handle] = f"'{handle}' is not a {META_DOMAIN}/{record} of this ontology"
+	for declaration in doc.declarations:
+		if declaration.handle in unresolved:
+			diag.error("meta.unresolved", unresolved[declaration.handle], declaration.loc)
 	pathType = f"{namespace}/{META_DOMAIN}/Path"
-	for claim in observations.claims:
+	for claim in observations.claims + observations.retractions:
+		statement = statements.get(claim["n"])
+		loc = statement.loc if statement else None
+		for handle in sorted(referencedHandles(claim) & unresolved.keys()):
+			diag.error("meta.unresolved", unresolved[handle], loc)
 		value, owner = claim.get("v"), instances.get(claim.get("s", ""), {}).get("type")
-		if not isinstance(value, str) or "p" not in claim or not isinstance(owner, str):
+		if "p" not in claim or not isinstance(owner, str):
 			continue
 		attr = model.lookup(owner, claim["p"])
 		final = model.typeDecl(attr.type) if attr else None
-		if final and final.path == pathType and not resolvesMetaPath(model, value, paths):
-			diag.error("meta.path", f"'{value}' names no element of this ontology", statements[claim["n"]].loc if claim["n"] in statements else None)
-	return diag.items
+		if final and final.path == pathType:
+			for member in value.get("set", []) if isinstance(value, dict) else [value]:
+				if isinstance(member, str) and not resolvesMetaPath(model, member, paths):
+					diag.error("meta.path", f"'{member}' names no element of this ontology", loc)
+	return list(dict.fromkeys(diag.items)), set(unresolved)
+
+
+def checkMetaReferences(ontology: Ontology, observations: Observations, doc: ObservationsDocument) -> list[Diagnostic]:
+	"""Errors for `Meta` instances or `Meta/Path` values naming no generated record or ontology element."""
+	return metaReferenceErrors(ontology, observations, doc)[0]
 
 
 __all__ = ["META_DOMAIN", "checkMetaReferences", "metaDeclarations", "metaHandles", "metaObservations", "metaPaths", "resolvesMetaPath"]

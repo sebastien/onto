@@ -10,7 +10,7 @@ import pytest
 
 from onto.ontology import loadOntology
 from onto.text import FormatError, Source
-from tests._helpers import ROOT
+from tests.helpers import ROOT
 
 # -----------------------------------------------------------------------------
 #

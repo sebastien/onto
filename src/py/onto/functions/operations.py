@@ -7,12 +7,12 @@ from collections.abc import Callable
 from typing import Any, TYPE_CHECKING
 
 from ..observations.model import ObservationsDocument, Statement
-from ..observations.parser import _Resolver
+from ..observations.parser import ObservationResolver
 from ..ontology.model import Attr, Decl, Model, Ontology, ResolvedType, TypeExpr, isAssociation
 from ..text import Diagnostics, FormatError, Loc, Source, annotation
 from .formatter import functionsToJson, printFunctions
 from .model import Function, FunctionExample, FunctionLibrary, FunctionsDocument, SignatureType
-from .parser import _readFunctionsJson, parseFunctions
+from .parser import readFunctionsJson, parseFunctions
 
 if TYPE_CHECKING:
 	from .runtime import FunctionEvaluator
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 # -----------------------------------------------------------------------------
 
 
-def _resolveSignature(model: Model, signature: SignatureType) -> ResolvedType:
+def resolveSignature(model: Model, signature: SignatureType) -> ResolvedType:
 	if signature.path:
 		decl = model.get(signature.path)
 		if not decl or decl.kind not in ("entity", "type") and not isAssociation(decl):
@@ -32,7 +32,7 @@ def _resolveSignature(model: Model, signature: SignatureType) -> ResolvedType:
 	return model.resolveType(signature.typeExpr())
 
 
-def _exampleValue(resolver: _Resolver, signature: SignatureType, raw: str, loc: Loc) -> Any:
+def exampleValue(resolver: ObservationResolver, signature: SignatureType, raw: str, loc: Loc) -> Any:
 	attr = Attr("Example", card="*" if signature.collection else "?", type=signature.typeExpr())
 	return resolver.value(raw, attr, Statement(1, "value", "", None, loc, {}))
 
@@ -40,7 +40,7 @@ def _exampleValue(resolver: _Resolver, signature: SignatureType, raw: str, loc: 
 NUMERIC = ("Integer", "Number", "Amount", "Percent")
 
 
-def _compatible(model: Model, expected: ResolvedType, actual: ResolvedType) -> bool:
+def ruleTypesCompatible(model: Model, expected: ResolvedType, actual: ResolvedType) -> bool:
 	"""Whether a value of `actual` type is accepted where `expected` is: same type, a specialisation, or numbers."""
 	if "unspecified" in (expected.kind, actual.kind):
 		return True
@@ -50,15 +50,19 @@ def _compatible(model: Model, expected: ResolvedType, actual: ResolvedType) -> b
 		return bool(actual.path and expected.path and model.isA(actual.path, expected.path))
 	if expected.kind == actual.kind == "vocab" and not (expected.path and actual.path):
 		return expected.values == actual.values
+	if expected.kind == actual.kind == "range":
+		return expected.element is not None and actual.element is not None and ruleTypesCompatible(model, expected.element, actual.element)
 	return expected.kind == actual.kind and expected.path == actual.path
 
 
-def _checkRules(ontologies: list[Ontology], doc: FunctionsDocument, model: Model, resolved: dict[str, tuple[list[ResolvedType], ResolvedType]], diag: Diagnostics) -> None:
+def checkRules(ontologies: list[Ontology], doc: FunctionsDocument, model: Model, resolved: dict[str, tuple[list[ResolvedType], ResolvedType]], diag: Diagnostics) -> None:
 	"""Check derived attributes whose `rule` names a function of this library (spec-01 "Attributes", `rule`).
 
 	The function must exist, take one argument per input (at least as many when the inputs end with `...`),
 	and its argument and result types must match the inputs' and the attribute's types."""
+	declarations = {function.name: function for function in doc.functions}
 	for ontology in ontologies:
+		defaultCard = dict(ontology.header).get("card", "?")
 		aliases = dict(ontology.uses)
 		owners = [decl for decl in ontology.decls if decl.kind in ("entity", "facet", "relation", "type")]
 		for owner in owners:
@@ -74,6 +78,7 @@ def _checkRules(ontologies: list[Ontology], doc: FunctionsDocument, model: Model
 					diag.error("rule", f"{where} names unknown function '{doc.namespace}/{name}'", attr.loc)
 					continue
 				args, result = resolved[name]
+				declaration = declarations[name]
 				deps = [dep for dep in attr.deps or [] if not dep.ellipsis]
 				incomplete = any(dep.ellipsis for dep in attr.deps or [])
 				if len(args) < len(deps) or (len(args) > len(deps) and not incomplete):
@@ -83,9 +88,12 @@ def _checkRules(ontologies: list[Ontology], doc: FunctionsDocument, model: Model
 					if dep.input:
 						continue
 					source = model.lookup(owner.path, dep.local) if dep.local else model.lookup(dep.path, dep.attr) if dep.path and dep.attr else Attr("Input", type=TypeExpr(path=dep.path))
-					if source and not _compatible(model, args[index], model.resolveType(source.type, source.ann)):
+					if source and (
+						declaration.args[index].collection != ((source.card or defaultCard) in ("*", "+"))
+						or not ruleTypesCompatible(model, args[index], model.resolveType(source.type, source.ann))
+					):
 						diag.error("rule", f"{where}: input {index + 1} does not match the argument type of '{doc.namespace}/{name}'", attr.loc)
-				if not _compatible(model, model.resolveType(attr.type, attr.ann), result):
+				if declaration.result.collection != ((attr.card or defaultCard) in ("*", "+")) or not ruleTypesCompatible(model, model.resolveType(attr.type, attr.ann), result):
 					diag.error("rule", f"{where}: the result of '{doc.namespace}/{name}' does not match its type", attr.loc)
 
 
@@ -163,7 +171,7 @@ def resolveFunctions(ontologies: list[Ontology], doc: FunctionsDocument) -> Func
 	resolved: dict[str, tuple[list[ResolvedType], ResolvedType]] = {}
 	for function in doc.functions:
 		try:
-			resolved[function.name] = ([_resolveSignature(model, arg) for arg in function.args], _resolveSignature(model, function.result))
+			resolved[function.name] = ([resolveSignature(model, arg) for arg in function.args], resolveSignature(model, function.result))
 		except ValueError as error:
 			diag.error("signature", str(error), function.loc)
 	for function in doc.functions:
@@ -178,19 +186,19 @@ def resolveFunctions(ontologies: list[Ontology], doc: FunctionsDocument) -> Func
 			other = next(item for item in doc.functions if item.name == inverse)
 			if len(args) != 1 or len(otherArgs) != 1 or args[0] != otherResult or result != otherArgs[0] or function.args[0].collection != other.result.collection or function.result.collection != other.args[0].collection:
 				diag.error("inverse", f"Inverse '{inverse}' does not have the reversed signature of '{function.name}'", function.loc)
-	_checkRules(ontologies, doc, model, resolved, diag)
+	checkRules(ontologies, doc, model, resolved, diag)
 	diag.check()
 	functions = []
 	for function in doc.functions:
 		examples = []
 		for source in function.examples:
 			# Examples are independent fixtures, not one shared observation document/handle registry.
-			resolver = _Resolver(ontology, ObservationsDocument())
+			resolver = ObservationResolver(ontology, ObservationsDocument())
 			try:
 				if len(source.args) != len(function.args):
 					raise ValueError(f"Function '{function.name}' expects {len(function.args)} arguments")
-				args = [_exampleValue(resolver, signature, value, source.loc) for signature, value in zip(function.args, source.args)]
-				result = _exampleValue(resolver, function.result, source.result, source.loc)
+				args = [exampleValue(resolver, signature, value, source.loc) for signature, value in zip(function.args, source.args)]
+				result = exampleValue(resolver, function.result, source.result, source.loc)
 				examples.append(FunctionExample(args, result, source.loc))
 			except ValueError as error:
 				diag.error("example", str(error), source.loc)
@@ -216,7 +224,7 @@ def formatFunctions(ontologies: list[Ontology], sources: list[Source]) -> str:
 def functionsFromJson(ontologies: list[Ontology], data: Any, name: str = "functions.json") -> FunctionLibrary:
 	"""Validate exact JSON members, signature types and lossless text replay."""
 	try:
-		read = _readFunctionsJson(data)
+		read = readFunctionsJson(data)
 		loaded = loadFunctions(ontologies, [Source(name, printFunctions(read))])
 		if functionsToJson(read) != functionsToJson(loaded):
 			raise ValueError("Function-library JSON does not survive its text round trip")

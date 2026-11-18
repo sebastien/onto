@@ -10,7 +10,7 @@ import pytest
 import onto.functions as functions
 from onto import FormatError, Source, loadOntology, FunctionsOperator, formatFunctions, functionsFromJson, functionsToJson, loadFunctions, parseFunctions, printFunctions, resolveFunctions
 from onto.functions.operations import Operator
-from tests._helpers import _schemaValidator, _specExample
+from tests.helpers import schemaValidator, specExample
 
 # -----------------------------------------------------------------------------
 #
@@ -41,13 +41,13 @@ def load(text: str):
 
 
 def testCompleteMarketsLibraryFromTheSpecification():
-	text = _specExample("spec-04-mapping", 3)
+	text = specExample("spec-04-mapping", 3)
 	doc = parseFunctions([Source("markets.fn", text)])
 	assert doc.functions[0].loc.file == "markets.fn"
 	assert doc.functions[0].result.path == "Dimensions/InterestFrequency"
 	library = resolveFunctions(ONTOLOGIES, doc)
 	data = functionsToJson(library)
-	_schemaValidator("mapping").validate(data)
+	schemaValidator("mapping").validate(data)
 	assert data["format"] == "onto.functions/1"
 	assert data["functions"][0]["examples"] == [
 		{"args": ["1"], "result": "Monthly"}, {"args": ["12"], "result": "Yearly"},
@@ -60,9 +60,9 @@ def testCompleteMarketsLibraryFromTheSpecification():
 
 def testJsonExcerptFromSpecificationRequiresItsOmittedInverse():
 	# This structurally valid excerpt is not a complete executable library.
-	data = _specExample("spec-04-mapping", 2, "json")
+	data = specExample("spec-04-mapping", 2, "json")
 	value = json.loads(data)
-	_schemaValidator("mapping").validate(value)
+	schemaValidator("mapping").validate(value)
 	with pytest.raises(FormatError, match="inverse"):
 		functionsFromJson(ONTOLOGIES, value)
 
@@ -105,7 +105,7 @@ def testTypedExampleValuesRoundTrip(signature: str, example: str, expected: dict
 	library = load(f"@functions Markets\n@use Dimensions as D\n@fn Convert {signature} {{nulls}}\n  {example}\n")
 	data = functionsToJson(library)
 	assert data["functions"][0]["examples"] == [expected]
-	_schemaValidator("mapping").validate(data)
+	schemaValidator("mapping").validate(data)
 	assert functionsToJson(functionsFromJson(ONTOLOGIES, data)) == data
 	printed = printFunctions(library)
 	assert formatFunctions(ONTOLOGIES, [Source("t", printed)]) == printed
@@ -130,7 +130,7 @@ def testExampleDelimitersRemainLiteralText(value: str):
 
 def testOperatorRetainsOntologyContextAndOperationsArePure():
 	ops = FunctionsOperator(ONTOLOGIES)
-	library = ops.load([Source("markets.fn", _specExample("spec-04-mapping", 3))])
+	library = ops.load([Source("markets.fn", specExample("spec-04-mapping", 3))])
 	before = deepcopy(library)
 	data = ops.toJson(library)
 	assert ops.print(library) == ops.format([Source("t", ops.print(library))])
@@ -140,7 +140,7 @@ def testOperatorRetainsOntologyContextAndOperationsArePure():
 	data["functions"][0]["examples"][0]["args"][0] = "changed"
 	assert library == before
 	with pytest.raises(FormatError, match="Dimensions"):
-		FunctionsOperator([]).load([Source("t", _specExample("spec-04-mapping", 3))])
+		FunctionsOperator([]).load([Source("t", specExample("spec-04-mapping", 3))])
 
 
 def testFeatureFacadeAndModuleApiAreCompatible():
@@ -210,7 +210,7 @@ def testExampleReferenceTypingIsCheckedWithoutSharingRegistriesBetweenFixtures()
 
 def testDuplicateOntologyContextsDoNotSilentlyResolveAmbiguousTypes():
 	with pytest.raises(FormatError, match="distinct namespaces"):
-		loadFunctions([DIMENSIONS, DIMENSIONS], [Source("t", _specExample("spec-04-mapping", 3))])
+		loadFunctions([DIMENSIONS, DIMENSIONS], [Source("t", specExample("spec-04-mapping", 3))])
 
 
 @pytest.mark.parametrize("signature", ["any -> Text", "Text -> any", "any* -> Text", "Text -> any*"])
