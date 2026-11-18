@@ -165,7 +165,7 @@ To load a file, the CLI first loads its context from the workspace:
 
 | Kind | Context |
 | --- | --- |
-| `ontology` | None. An ontology declares what it uses of other namespaces itself (spec-01) |
+| `ontology` | A rooted view's external source-key ontology, found by the longest owning namespace. Other `@use` lines are file-local aliases (spec-01). |
 | `observations` | The `@obs` ontology |
 | `functions` | The `@use` ontologies (a library does not load other libraries) |
 | `binding` | The `@binding` ontology; the `@use` ontologies and libraries |
@@ -362,8 +362,10 @@ Print a coverage table, tab-separated:
   sidecar, or `--inventory`); `uninventoried` rows for fields read but not
   inventoried; `unassigned` rows for the ontology elements no line assigns.
   Without an inventory, only the ontology side.
-- **Observations**: the coverage of `--view VIEW` (required), with columns
+- **Observations**: the coverage of a flat `--view VIEW` (required), with columns
   `path`, `subject`, `ctx`, `status` and `note` (`conflict`, `partial`).
+  For seeded coverage of a rooted view, use
+  [`HexaViewOperator.report`](spec-06-hexa.md#rooted-retrieval).
 
 #### `onto reverse FILE.map [--referential NAME]`
 

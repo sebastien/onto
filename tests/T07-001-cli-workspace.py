@@ -113,6 +113,21 @@ def test_mapping_context_comes_from_the_workspace(workspace):
 	assert status == 0 and err == "no problems in 1 file (5 read)\n"
 
 
+def test_workspace_loads_the_namespace_of_an_external_view_key(workspace):
+	path = workspace / "finance/view.onto"
+	header = (workspace / "finance/finance.onto").read_text().splitlines()[0]
+	path.write_text(header + "\n@use Exchange as E\n@view IssuerSummary(id: E/Issuer.Id)\n  issuer: Company\n  issuer.Code\n")
+	status, text, err = onto("json", str(path))
+	assert status == 0, err
+	view = next(d for d in json.loads(text)["decls"] if "input" in d)
+	assert view["input"] == {"name": "id", "path": "Exchange/Issuer", "attr": "Id"}
+	status, text, err = onto("coverage", "finance/statement.obs", "--view", "IssuerSummary")
+	assert status == 1 and not text and "requires a seed" in err and "HexaViewOperator.report" in err
+	path.write_text(path.read_text().replace("Issuer.Id", "Issuer.Code"))
+	status, _, err = onto("check", str(path))
+	assert status == 1 and "Exchange/Issuer.Code must be marked {key}" in err
+
+
 def test_mapping_index_recognizes_tab_separated_uses(workspace):
 	mapping = workspace / "finance/exchange-finance.map"
 	mapping.write_text(mapping.read_text().replace("@use ", "@use\t"))

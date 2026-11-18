@@ -186,6 +186,52 @@ def claimContent(claims: list[Claim]) -> list[str]:
 	return sorted(valueKey(content(claim)) for claim in claims)
 
 
+def mergeObservationLogs(ontology: Ontology, logs: list[Observations], *, locations: list[Loc] | None = None) -> dict[str, Any]:
+	"""Combine mapping input statements as observation JSON. Inert gaps remain in each input's report."""
+	model = Model(ontology)
+	bareSources = {
+		token for log in logs for group in (log.claims, log.retractions) for claim in group
+		for key in ("src", "of") if (token := claim.get(key)) is not None and token not in log.sources
+	}
+	out = None
+	offset, sourceNumber = 0, 0
+	for i, log in enumerate(logs):
+		loc = locations[i] if locations is not None else None
+		data = observationsToJson(log)
+		scope = log.obs.get("scope")
+		if log.obs["ontology"] != ontology.namespace:
+			raise FormatError([Diagnostic("error", "run.ontology", f"expected observations of {ontology.namespace}", loc)])
+		if out is None:
+			out = {**data, "sources": {}, "instances": {}, "claims": [], "retractions": []}
+			out.pop("gaps", None)
+			out["obs"] = {key: value for key, value in log.obs.items() if key in ("ontology", "rev", "scope")}
+		elif scope != (shared := out["obs"].get("scope")):
+			raise FormatError([Diagnostic("error", "run.scope", f"@scope {scope!r} does not match the first input's @scope {shared!r}", loc)])
+		aliases = {}
+		for alias, token in data["sources"].items():
+			sourceNumber += 1
+			while f"d{sourceNumber}" in bareSources:
+				sourceNumber += 1
+			aliases[alias] = f"d{sourceNumber}"
+			out["sources"][aliases[alias]] = token
+		for handle, item in data["instances"].items():
+			existing = out["instances"].get(handle)
+			if existing and scope is None:
+				raise FormatError([Diagnostic("error", "run.scope", f"handle '{handle}' appears in multiple inputs without a shared @scope", loc)])
+			if not existing or model.isA(item["type"], existing["type"]):
+				out["instances"][handle] = item
+			elif item["type"] != existing["type"] and not model.isA(existing["type"], item["type"]):
+				raise FormatError([Diagnostic("error", "run.type", f"handle '{handle}' has incompatible types '{existing['type']}' and '{item['type']}'", loc)])
+		last = 0
+		for key in ("claims", "retractions"):
+			for claim in data[key]:
+				renamed = {name: aliases.get(value, value) if name in ("src", "of") else value for name, value in claim.items()}
+				out[key].append({**renamed, "n": offset + claim["n"]})
+				last = max(last, claim["n"])
+		offset += last
+	return out or observationsToJson(Observations({"ontology": ontology.namespace, "scope": None}, {}, {}, [], []))
+
+
 # -----------------------------------------------------------------------------
 #
 # OPERATIONS

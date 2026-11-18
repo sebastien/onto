@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
-from .observations import Claim, Observations, reconcileObservations
+from .observations import Observations, reconcileObservations
+from .observations.model import activeHandles, observationStatus
 from .ontology import Decl, Model, Ontology, viewRelations
 from .ontology.model import unkeyed
+from .ontology.rooted import RootedView
 from .text import Diagnostics, annotation, lastSegment
 
 # -----------------------------------------------------------------------------
@@ -70,6 +71,7 @@ class ViewSelection:
 
 
 def viewSelections(model: Model, view: Decl) -> set[ViewSelection]:
+	"""Collect schema selections, not instances. A rooted view contributes its projected fields."""
 	selected: set[ViewSelection] = set()
 	visited: set[str] = set()
 
@@ -104,6 +106,14 @@ def viewSelections(model: Model, view: Decl) -> set[ViewSelection]:
 		if current.path in visited:
 			return
 		visited.add(current.path)
+		if current.viewInput:
+			rooted = RootedView(model, current)
+			for _, f in rooted.selections.values():
+				if f.relation:
+					whole(model.get(f.relation))
+				else:
+					attribute(f.owner, f.member)
+			return
 		for line in current.viewLines:
 			relations = viewRelations(model, line)
 			if relations is not None:
@@ -275,30 +285,6 @@ def printCoverageTable(rows: list[CoverageRow]) -> str:
 	return "\n".join(lines) + "\n"
 
 
-def activeHandles(claims: list[Claim]) -> set[str]:
-	handles: set[str] = set()
-	for claim in claims:
-		if "s" in claim:
-			handles.add(claim["s"])
-		if "ctx" in claim:
-			handles.add(claim["ctx"])
-		handles.update(handle for handle in claim.get("roles", {}).values() if handle != "?")
-		value = claim.get("v")
-		members = value.get("set", []) if isinstance(value, dict) and "set" in value else [value]
-		handles.update(member["ref"] for member in members if isinstance(member, dict) and "ref" in member)
-	return handles
-
-
-def observationStatus(value: Any) -> str:
-	if value is None:
-		return "absent"
-	if isinstance(value, dict):
-		if "unknown" in value:
-			return "unknown"
-		if "set" in value and not value["set"]:
-			return "unknown" if value.get("partial") else "absent"
-	return "supplied"
-
 # -----------------------------------------------------------------------------
 #
 # HIGH-LEVEL API
@@ -307,13 +293,15 @@ def observationStatus(value: Any) -> str:
 
 
 def observationsCoverage(ontology: Ontology, observations: Observations, view: str, mode: str = "strict") -> list[CoverageItem]:
-	"""Report reconciled per-instance coverage of `view` (full or namespace-relative path)."""
+	"""Report reconciled per-instance coverage of a flat `view` (full or namespace-relative path)."""
 	model = Model(ontology)
 	target = model.get(view) or model.get(f"{ontology.namespace}/{view}")
+	diag = Diagnostics()
 	if target is None or target.kind != "view":
-		diag = Diagnostics()
 		diag.error("reference", f"Unknown view '{view}'")
-		diag.check()
+	elif target.viewInput:
+		diag.error("view", f"Rooted view '{target.path}' requires a seed; use HexaViewOperator.report for rooted coverage")
+	diag.check()
 	state = reconcileObservations(ontology, observations, mode)
 	handles = activeHandles(state.claims)
 	claims = []

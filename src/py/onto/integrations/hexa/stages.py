@@ -17,6 +17,7 @@ from hexa.shapes import Failure
 from ...binding.model import bindingBy
 from ...expressions import printExpression
 from ...inventory.operations import documentFields
+from ...observations.model import referenceHandles
 from ...ontology.model import Model
 from ...text import annotation
 from .model import ScopeProgram
@@ -129,14 +130,6 @@ def cleanValue(value: AnyValue, types: dict[str, str]) -> AnyValue:
 	if isinstance(value, dict) and "set" in value:
 		return {**value, "set": [cleanValue(item, types) for item in value["set"]]}
 	return value
-
-
-def refs(value: AnyValue) -> list[str]:
-	if isinstance(value, dict) and "ref" in value:
-		return [value["ref"]]
-	if isinstance(value, dict) and "set" in value:
-		return [item["ref"] for item in value["set"] if isinstance(item, dict) and "ref" in item]
-	return []
 
 
 def handleOf(value: AnyValue) -> str | None:
@@ -275,7 +268,7 @@ class ClaimsBuilder:
 				continue
 			decl, inverse = found[0]
 			first, second = decl.participants[0].role, decl.participants[1].role
-			for other in refs(value):
+			for other in referenceHandles(value):
 				roles = {first: other, second: handle} if inverse else {first: handle, second: other}
 				self.add({"rel": decl.path, "roles": roles, **meta})
 

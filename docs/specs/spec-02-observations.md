@@ -389,8 +389,10 @@ reports warnings and holds back only what could erase data. The
 [run modes](spec-04-mapping.md#run-modes) of bindings and mappings and the
 identity conflicts of [spec-05](spec-05-identities.md#resolution) use the same
 two modes.
-- With a view: report which selected attributes, facets and relations are
-  supplied, unknown, absent or missing (coverage).
+
+With a flat view, coverage reports which selected attributes, facets and
+relations are supplied, unknown, absent or missing. Rooted views require a
+seed; use [rooted retrieval](spec-06-hexa.md#rooted-retrieval) for their coverage.
 
 Lenient observation loading retains semantically invalid statements as **gaps**,
 with their raw source, location, effective metadata defaults and diagnostics.

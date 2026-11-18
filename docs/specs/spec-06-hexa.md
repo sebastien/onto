@@ -41,6 +41,53 @@ builds on them.
 
 ## Integration
 
+### Rooted retrieval
+
+`HexaViewOperator(mapper, mapping, reads, access)` discovers
+[rooted views](spec-01-ontology.md#rooted-views) in `mapper.toOntology`.
+It traces each selected population back through the mapping's typed source
+references, then chooses the first admitted read whose bindings supply the
+source row, guards, value and qualifiers. A binding on a specialisation supplies
+the inherited source slots too. Onto submits the ordered proof obligations
+for each projection up to its first static gap. Hexa's `SelectionRequest`
+deduplicates their read steps and adds prerequisite reads before any I/O.
+Reads and their input providers are shared across views.
+
+The adapter configures `ViewRead(input, bindings, provides=None)` per step.
+Both `input` and `provides` are `ViewInput(name, path, attr)` values, for
+example `ViewInput("id", "Exchange/Issuer", "Id")`. Steps match on the full
+source attribute, not `name`: a view may call this argument `issuerId`.
+The operator checks `{key}` and the declared value type against the source
+ontology, and checks the mapping's instance correspondence to the root before
+exposing the view. Starting from that source key, `provides` determines the
+reachable reads. Providers precede consumers; ties use catalogue order. A
+discovered key needs one provider.
+`rootHandle(input, value, targetType)` translates the source identity into a target handle;
+`describe(step, value)` describes a read without performing it;
+`fetch(step, value)` returns a `ViewDocument` with the response and its source;
+`discover(boundState, provides)` validates the bound response and returns
+the concrete key values for the next read. `ViewDocument.emptyInputs` names
+fully qualified source keys whose result is known to be empty. The adapter may raise `ViewReadError` with a
+source-specific reason. No adapter method takes a view name.
+
+- `await operator.retrieve(view, seed, fields=None)` returns an **Onto
+  `Observations`** document. Its claims are the selected leaves and the
+  original link and filter witnesses for successful paths, deduplicated
+  across fields. Handles, source identities and qualifiers are retained.
+  Use `printObservationsLog(target, result)` for compact `.obs` text;
+  no proven leaves means a document with no claims.
+- Explicit `fields` select projections by `population.member`. A type-based
+  spelling such as `Instrument.Name` also works if it does not match a
+  population selector and identifies exactly one projection.
+- `plan(...)` returns diagnostic JSON `onto.view-plan/1` (root, selected
+  paths, suppliers, steps, static gaps). `report(...)` executes the plan and
+  returns `onto.view-report/1`, adding calls, population-labelled answers and
+  coverage with the first unproved link. An empty or unavailable read is
+  attributed to its input; it cannot hide facts for a sibling. A failed read
+  is a diagnostic, never a negative fact in the observation document.
+
+### Binding and mapping operators
+
 The integration lives in `src/py/onto/integrations/hexa/` and is optional:
 
 - Nothing else in onto imports hexa. `import onto` works without hexa installed.
@@ -129,6 +176,7 @@ log, report = ops.result(program, result)
 | `stages.py` | `DocumentRecordsCollect`, `DocumentFieldsDiscover`, `ClaimsEmit`, the stage namespace |
 | `runs.py` | Previous output, stale slots, retractions, safeguards, approval |
 | `operations.py` | `HexaBindingOperator`, `HexaMappingOperator` and their functional forms |
+| `views.py` | `HexaViewOperator`, read catalogue, supplier planning and rooted view reports |
 
 Tests follow the onto convention, `tests/T06-<n>-hexa-<name>.py`, and are skipped
 when hexa is not installed. Each `Onto` vocabulary entry is also checked by

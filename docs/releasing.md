@@ -42,7 +42,12 @@ new project, create an account-wide token on PyPI; after the first upload,
 replace it with a token scoped to `onto-lang`.
 
 `make release` uploads only the two artifacts for the current version, not
-older versions left in `dist/`. It does not commit, tag, or push Git changes.
+older versions left in `dist/`. It refuses to run tests or build if the checkout
+has staged, unstaged or non-ignored untracked changes, or the release tag already exists.
+After a successful upload it tags the release commit `v<version>` and pushes
+the commit and tag together (`GIT_REMOTE` and `GIT_BRANCH` default to `origin`
+and `main`). If the push fails after upload, fix the Git error and push the
+existing tag and commit; do not upload the same version again.
 
 See the [uv publishing guide](https://docs.astral.sh/uv/guides/package/)
 for token authentication and trusted publishing.

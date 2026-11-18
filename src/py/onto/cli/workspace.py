@@ -455,6 +455,20 @@ class Workspace:
 		except FormatError as error:
 			raise self.located(owner, "cli.context", f"{kind} {namespace} has errors") from error
 
+	def viewSources(self, ontology: Ontology) -> list[Ontology]:
+		"""Load only namespaces owning external view keys. An ordinary @use is just a file-local alias."""
+		owners = {d.viewInput.path for d in ontology.decls if d.viewInput}
+		sources = {}
+		for path in sorted(owners - {d.path for d in ontology.decls}):
+			while "/" in path:
+				path = path.rpartition("/")[0]
+				if path == ontology.namespace:
+					break
+				if entry := self.find("ontology", path):
+					sources[path] = self.load(entry)
+					break
+		return list(sources.values())
+
 	def optional(self, namespaces: list[str], owner: Entry, kinds: tuple[str, ...], exclude: set[str]) -> tuple[list[Ontology], list[FunctionLibrary]]:
 		"""Ontologies and libraries of `kinds` for `namespaces`, else the ontologies carrying a namespace."""
 		loaded: dict[tuple[str, str], Any] = {}
@@ -524,7 +538,7 @@ class Workspace:
 		if kind in GROUPED and kind != "mapping":
 			sources = [self.source(item) for item in self.group(entry)]
 			if kind == "ontology":
-				return loadOntology(sources)
+				return loadOntology(sources, self.viewSources)
 			if kind == "functions":
 				return loadFunctions(context.ontologies, sources)
 			return loadReferential(context.ontologies, sources)
@@ -551,7 +565,7 @@ class Workspace:
 			raise self.headerless(entry)
 		match entry.kind:
 			case "ontology":
-				return ontologyFromJson(data, name)
+				return ontologyFromJson(data, name, self.viewSources)
 			case "observations":
 				return observationsFromJson(context.ontology, data, name, self.mode)
 			case "functions":

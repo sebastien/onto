@@ -136,7 +136,7 @@ Trade(Account, Counterparty: * Party, Instrument, Trader: + Person) {kind=event}
 @use <Namespace> as <Alias>
 @domain <Name> [-- doc]
 @map <Name> <From> -> <To> [{annotations}] [-- doc]
-@view <Name> [-- doc]
+@view <Name>[(<argument>: <Entity>.<Attribute>)] [-- doc]
 ```
 
 `@ontology` is required and comes first. Its arguments are `key=value` pairs
@@ -712,12 +712,70 @@ Body lines select:
 | `R` | A relation, its participants' entities (identity only) and its attributes |
 | `R[F]` / `R.F.Attr` | An association with the listed facets / one facet attribute |
 | `S.verb` / `S.verb.T` | All binary relations from `S` with that verb / the one to `T` |
-| `V` (another view) | Everything that view selects |
+| `V` (another flat view) | Everything that view selects |
 
 Types used by selected elements, and the `ctx` of selected facets, are included
 implicitly. Views are used to slice
 the ontology for agents, to check whether observations cover a profile, and to
 express extraction requests.
+
+### Rooted views
+
+A view with an input selects instance populations relative to one seed.
+A flat view cannot include a rooted view because it provides no seed.
+
+```text
+@use Directory as D
+@view BranchDirectory(branchId: D/Registers/Branch.Number)
+  branch: Branch
+  patrons: Person = branch -> hasPatron through visits
+  staff: Person = branch -> employs
+  branch.Name
+  patrons.Name
+  staff.Name
+  ? visits.Active
+```
+
+- `argument: Entity.Attribute` names the key the caller supplies. The owner is
+  resolved using this file's `@use` aliases. Its attribute must be marked
+  `{key}` and single-valued, with a text, numeric (`Integer` or `Number`) or
+  vocabulary type. The parameter inherits that type, including through type
+  aliases. Neither a bare argument name nor a scalar type identifies a key.
+  Here `branchId` is a `Directory/Registers/Branch.Number`.
+- The first population declares the **target** of the seed. It need not have
+  the source key attribute: a mapping must establish a correspondence from
+  the source owner to that target (or a specialization) before execution.
+  Subsequent `alias: Type = parent -> member` lines
+  traverse a binary verb or reference-valued attribute/association role.
+  `<-` follows it backwards: `notes: Note = person <- concerns` follows
+  `Note.concerns`. Both ends must be type-compatible; the reached type can
+  narrow a supertype or disambiguate an overloaded verb. Parents precede
+  children; aliases are distinct and local to the view.
+- `through alias` uses the binary relation's `context`, `subjectRole` and
+  `objectRole`. Both endpoints must be proved by the **same** association
+  handle. Its alias can be used in projections or further traversals.
+- Append `where member=value` to filter the reached handle. `true`/`false`,
+  vocabulary values and single-token text test a scalar. `@ancestor` tests a
+  reference against an already-bound ancestor on **this** path. Missing or
+  conflicting evidence cannot satisfy a filter.
+- `alias.member` projects an attribute, structured field or directed link;
+  `alias.verb: TargetType` disambiguates a projected link. A leading `?`
+  makes a projection selectable but off by default. The view needs at least
+  one default projection. Selecting a link that has a forward filtered
+  population under its subject also requires that population's object test.
+- A file can name its target modules with ordinary `@use` aliases, e.g.
+  `@use Library/People as People` for `People/Person`. An external source
+  ontology used to validate a parameter stays separate from the target
+  declarations. The CLI discovers it; `loadOntology(..., ontologies=[source])`
+  and `ontologyFromJson(..., ontologies=[source])` accept it explicitly.
+- Text and `onto.ontology/1` JSON preserve declaration order. The JSON form
+  adds `input` (here `{"name":"branchId","path":"Directory/Registers/Branch","attr":"Number"}`),
+  ordered `populations` (`name`, `type`, and optional traversal
+  members), and projected `lines` (`population`, `member`, optional `target`
+  and `optional: true`). Plain `@view Name` keeps its existing meaning.
+
+See [rooted retrieval](spec-06-hexa.md#rooted-retrieval) for evaluation against
+mapped observations and the output contract.
 
 ## Normal form
 
@@ -738,7 +796,8 @@ Within declarations:
 - Sorting uses fully resolved paths (`Dimensions/...` before `Finance/Years`),
   while names are written in their shortest form: relative to `@ontology` when
   possible, otherwise through a `@use` alias, otherwise fully qualified.
-- Attributes and view lines are sorted by name. Flat vocabulary values are sorted
+- Attributes and flat view lines are sorted by name. Rooted views retain
+  population and projection order. Flat vocabulary values are sorted
   unless `{ordered}` (on the type, or on the attribute for an inline vocabulary).
   Dependencies are sorted as written, `$Inputs` first and `...` last. Relation
   association participants sort by role name (their order is non-semantic);

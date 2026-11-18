@@ -88,6 +88,8 @@ def changeValue(value: Any) -> str:
 	if isinstance(value, dict):
 		if "builtin" in value:
 			return value["builtin"]
+		if set(value) == {"name", "path", "attr"}:
+			return f"{value['name']}: {value['path']}.{value['attr']}"
 		if "path" in value:
 			return value["path"] + (f".{value['attr']}" if "attr" in value else "")
 	return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

@@ -178,7 +178,8 @@ class Printer:
 		if decl.kind == "facet":
 			return self.AnnotationJoin([f"{self.typeName(decl.path)} of {short(decl.subject)}"] + self.tail(decl.ann))
 		if decl.kind == "view":
-			return self.AnnotationJoin([f"@view {short(decl.path)}"] + [])
+			param = decl.viewInput
+			return f"@view {short(decl.path)}" + (f"({param.name}: {short(param.path)}.{param.attr})" if param else "")
 		if decl.kind == "domain":
 			return self.AnnotationJoin([f"@domain {short(decl.path)}"] + [])
 		if decl.kind == "map":
@@ -211,7 +212,20 @@ class Printer:
 
 	def block(self, decl: Decl) -> list[str]:
 		"""A declaration and its body lines."""
-		if decl.kind == "view":
+		if decl.kind == "view" and decl.viewInput:
+			body = []
+			for population in decl.viewPopulations:
+				line = f"  {population.name}: {self.short(population.type)}"
+				if population.parent:
+					line += f" = {population.parent} {'<-' if population.reverse else '->'} {population.via}"
+				if population.through:
+					line += f" through {population.through}"
+				if population.where:
+					value = str(population.equals).lower() if isinstance(population.equals, bool) else population.equals
+					line += f" where {population.where}={value}"
+				body.append(line)
+			body += [f"  {'? ' if l.optional else ''}{l.path}.{l.member}" + (f": {self.short(l.target)}" if l.target else "") for l in decl.viewLines]
+		elif decl.kind == "view":
 			body = [f"  {self.viewLine(line)}" for line in decl.viewLines]
 		elif decl.kind == "map":
 			body = [self.mapLine(line, indent="  ") for line in decl.mapLines]
@@ -294,6 +308,12 @@ def encodeOntology(ontology: Ontology, ids: dict[str, str] | None) -> dict[str, 
 		if item.kind == "facet":
 			return compact({**common, "subject": item.subject, "attrs": attrs(item.attrs), **tail})
 		if item.kind == "view":
+			if item.viewInput:
+				populations = [compact({"name": p.name, "type": p.type, "parent": p.parent or None, "via": p.via or None,
+					"reverse": p.reverse or None, "through": p.through or None, "where": p.where or None, "equals": p.equals}) for p in item.viewPopulations]
+				lines = [compact({"population": l.path, "member": l.member, "target": l.target, "optional": l.optional or None}) for l in item.viewLines]
+				p = item.viewInput
+				return compact({**common, "input": {"name": p.name, "path": p.path, "attr": p.attr}, "populations": populations, "lines": lines, "doc": item.doc})
 			lines = [compact({"path": line.path, "facets": line.facets, "member": line.member}) for line in item.viewLines]
 			return compact({**common, "lines": lines, "doc": item.doc})
 		if item.kind == "domain":
@@ -388,6 +408,8 @@ def normaliseOntology(ontology: Ontology) -> Ontology:
 				fields=normaliseAttrs(decl.fields) if decl.fields is not None else None,
 			)
 		if decl.kind == "view":
+			if decl.viewInput:
+				return base  # Population dependency and projected output order are significant.
 			lines = [
 				replace(line, facets=sorted(line.facets) if isinstance(line.facets, list) else line.facets)
 				for line in decl.viewLines

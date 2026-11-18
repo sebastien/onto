@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import (
 	Any,
 )
@@ -49,6 +49,10 @@ from .parser import (
 	decodeOntology,
 	parseOntology,
 )
+from .rooted import RootedView
+
+# Extra source ontologies for view keys, supplied directly or discovered from the parsed view declarations.
+type KeyOntologies = Sequence[Ontology] | Callable[[Ontology], Sequence[Ontology]]
 
 # -----------------------------------------------------------------------------
 #
@@ -295,8 +299,11 @@ def validateViewLine(model: Model, line: ViewLine, diag: Diagnostics) -> None:
 	if not decl:
 		diag.error("reference", f"View selects unknown '{line.path}'", line.loc)
 		return
-	if decl.kind == "view" and (line.facets is not None or line.member):
-		diag.error("reference", f"View '{line.path}' is selected whole: no facets or members", line.loc)
+	if decl.kind == "view":
+		if decl.viewInput:
+			diag.error("view", f"Rooted view '{line.path}' requires a seed and cannot be included by a flat view", line.loc)
+		elif line.facets is not None or line.member:
+			diag.error("reference", f"View '{line.path}' is selected whole: no facets or members", line.loc)
 		return
 	if line.facets:
 		if decl.kind != "entity" and not isAssociation(decl):
@@ -347,6 +354,8 @@ def validateRelation(model: Model, decl: Decl, diag: Diagnostics) -> None:
 def checkViewCycles(model: Model, diag: Diagnostics) -> None:
 	# NOTE: A view including itself, directly or through other views, selects nothing definite: an error.
 	def includes(view: Decl) -> list[str]:
+		if view.viewInput:
+			return []
 		return [line.path for line in view.viewLines if (target := model.get(line.path)) and target.kind == "view"]
 
 	for view in (decl for decl in model.ontology.decls if decl.kind == "view"):
@@ -449,7 +458,7 @@ def checkLayering(model: Model, diag: Diagnostics) -> None:
 				)
 
 
-def checkOntology(model: Model, diag: Diagnostics) -> None:
+def checkOntology(model: Model, diag: Diagnostics, keyModels: Sequence[Model] = ()) -> None:
 	ontology = model.ontology
 	for decl in ontology.decls:
 		checkAnnotations(model, decl.ann, placesOf(decl), decl.loc, diag)
@@ -501,8 +510,16 @@ def checkOntology(model: Model, diag: Diagnostics) -> None:
 		elif decl.kind == "relation":
 			validateRelation(model, decl, diag)
 		elif decl.kind == "view":
-			for line in decl.viewLines:
-				validateViewLine(model, line, diag)
+			if decl.viewInput is not None:
+				try:
+					RootedView(model, decl)
+					param = decl.viewInput
+					param.resolve(next((m for m in (model, *keyModels) if m.get(param.path)), model))
+				except ValueError as error:
+					diag.error("view", f"{decl.path}: {error}", decl.loc)
+			else:
+				for line in decl.viewLines:
+					validateViewLine(model, line, diag)
 		elif decl.kind == "map":
 			validateMap(model, decl, diag)
 	validateExtensions(model, diag)
@@ -545,9 +562,9 @@ class Operator:
 	def __init__(self, ontology: Ontology):
 		self.ontology = ontology
 
-	def validate(self) -> Ontology:
+	def validate(self, ontologies: KeyOntologies = ()) -> Ontology:
 		"""Validate the current ontology, rebuilding lookups if the AST changed."""
-		return validateOntology(self.ontology)
+		return validateOntology(self.ontology, ontologies)
 
 	def normalise(self) -> Ontology:
 		"""Return the canonical AST without replacing the context's ontology."""
@@ -649,23 +666,24 @@ def expandHistory(ontology: Ontology, diag: Diagnostics) -> None:
 	ontology.decls += generated
 
 
-def validateOntology(ontology: Ontology) -> Ontology:
+def validateOntology(ontology: Ontology, ontologies: KeyOntologies = ()) -> Ontology:
 	"""Validate references and structure of `ontology`, updating diagnostics or raising `FormatError`."""
 	diag = Diagnostics(list(ontology.diagnostics))
 	expandHistory(ontology, diag)
-	checkOntology(Model(ontology), diag)
+	context = ontologies(ontology) if callable(ontologies) else ontologies
+	checkOntology(Model(ontology), diag, [Model(o) for o in context])
 	ontology.diagnostics = list(dict.fromkeys(diag.check()))
 	return ontology
 
 
-def loadOntology(sources: list[Source]) -> Ontology:
-	"""Parse and validate `sources` as one ontology."""
-	return validateOntology(parseOntology(sources))
+def loadOntology(sources: list[Source], ontologies: KeyOntologies = ()) -> Ontology:
+	"""Parse and validate `sources` as one ontology; resolve external view keys against `ontologies`."""
+	return validateOntology(parseOntology(sources), ontologies)
 
 
-def formatOntology(sources: list[Source]) -> str:
+def formatOntology(sources: list[Source], ontologies: KeyOntologies = ()) -> str:
 	"""Parse, validate and render `sources` in normal form."""
-	return printOntology(normaliseOntology(loadOntology(sources)))
+	return printOntology(normaliseOntology(loadOntology(sources, ontologies)))
 
 
 def ontologyToJson(ontology: Ontology, ids: dict[str, str] | None = None) -> dict[str, Any]:
@@ -673,7 +691,7 @@ def ontologyToJson(ontology: Ontology, ids: dict[str, str] | None = None) -> dic
 	return encodeOntology(normaliseOntology(ontology), ids if ids is not None else ontology.ids)
 
 
-def ontologyFromJson(data: Any, name: str = "ontology.json") -> Ontology:
+def ontologyFromJson(data: Any, name: str = "ontology.json", ontologies: KeyOntologies = ()) -> Ontology:
 	"""Load `data` through validated normal-form text, rejecting lossy JSON with location `name`."""
 	loc = Loc(name, 0)
 
@@ -684,13 +702,14 @@ def ontologyFromJson(data: Any, name: str = "ontology.json") -> Ontology:
 
 	try:
 		read = decodeOntology(data)
-		validateOntology(read)
+		context = ontologies(read) if callable(ontologies) else ontologies
+		validateOntology(read, context)
 		normal = normaliseOntology(read)
 		text = printOntology(normal)
 		expected = encodeOntology(normal, None)
 	except ValueError as error:
 		raise fail(f"Invalid ontology JSON: {error}") from error
-	ontology = loadOntology([Source(name, text)])
+	ontology = loadOntology([Source(name, text)], context)
 	if encodeOntology(normaliseOntology(ontology), None) != expected:
 		raise fail("Ontology JSON does not round-trip through its text form")
 	ontology.ids = read.ids

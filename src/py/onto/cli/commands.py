@@ -23,8 +23,8 @@ from ..functions import FunctionEvaluator, FunctionLibrary, functionsToJson, pri
 from ..inventory import Inventory, defaultBinding, inventoryFromDocuments, printInventory
 from ..meta import META_DOMAIN, metaDeclarations, metaObservations
 from ..mapping import Mapping, mappingCoverage, mappingReverse, mappingToJson, printMapping
-from ..observations import Observations, observationsFromJson, observationsToJson, printObservationsLog, printObservationsState, reconcileObservations
-from ..ontology import Model, Ontology, loadOntology, normaliseOntology, ontologyDiff, ontologyFromJson, ontologyToJson, printOntology, printOntologyDiff
+from ..observations import Observations, mergeObservationLogs, observationsFromJson, observationsToJson, printObservationsLog, printObservationsState, reconcileObservations
+from ..ontology import Ontology, loadOntology, normaliseOntology, ontologyDiff, ontologyFromJson, ontologyToJson, printOntology, printOntologyDiff
 from ..referential import Referential, printReferential, referentialToJson
 from ..text import Diagnostic, FormatError, Loc, Source, annotation, layoutText
 from .usage import UsageError
@@ -107,51 +107,7 @@ def sourceToken(template: str | None, path: str) -> str:
 
 
 def mergedLogs(ontology: Ontology, logs: list[tuple[Entry, Observations]]) -> dict[str, Any]:
-	"""Merge compatible handle registries and preserve each file's effective statement metadata."""
-	model = Model(ontology)
-	bareSources = {
-		token for _, log in logs for group in (log.claims, log.retractions) for claim in group
-		for key in ("src", "of") if (token := claim.get(key)) is not None and token not in log.sources
-	}
-	out: dict[str, Any] | None = None
-	offset, sourceNumber = 0, 0
-	for entry, log in logs:
-		data = observationsToJson(log)
-		scope = log.obs.get("scope")
-		loc = Loc(entry.path, entry.line)
-		if log.obs["ontology"] != ontology.namespace:
-			raise FormatError([Diagnostic("error", "run.ontology", f"expected observations of {ontology.namespace}", loc)])
-		if out is None:
-			out = {**data, "sources": {}, "instances": {}, "claims": [], "retractions": []}
-			out.pop("gaps", None)
-			# Claims already hold their effective defaults; a merged default could fill a missing value.
-			out["obs"] = {key: value for key, value in log.obs.items() if key in ("ontology", "rev", "scope")}
-		elif scope != (shared := out["obs"].get("scope")):
-			raise FormatError([Diagnostic("error", "run.scope", f"@scope {scope!r} does not match the first input's @scope {shared!r}", loc)])
-		aliases = {}
-		for alias, token in data["sources"].items():
-			sourceNumber += 1
-			while f"d{sourceNumber}" in bareSources:
-				sourceNumber += 1
-			aliases[alias] = f"d{sourceNumber}"
-			out["sources"][aliases[alias]] = token
-		for handle, item in data["instances"].items():
-			existing = out["instances"].get(handle)
-			if existing and scope is None:
-				raise FormatError([Diagnostic("error", "run.scope", f"handle '{handle}' appears in multiple inputs without a shared @scope", loc)])
-			if not existing or model.isA(item["type"], existing["type"]):
-				out["instances"][handle] = item
-			elif item["type"] != existing["type"] and not model.isA(existing["type"], item["type"]):
-				raise FormatError([Diagnostic("error", "run.type", f"handle '{handle}' has incompatible types '{existing['type']}' and '{item['type']}'", loc)])
-		last = 0
-		for key in ("claims", "retractions"):
-			for claim in data[key]:
-				renamed = {name: aliases.get(value, value) if name in ("src", "of") else value for name, value in claim.items()}
-				# NOTE: Ordinals order claims and retractions at equal timestamps and group claims from one statement.
-				out[key].append({**renamed, "n": offset + claim["n"]})
-				last = max(last, claim["n"])
-		offset += last
-	return out or {}
+	return mergeObservationLogs(ontology, [log for _, log in logs], locations=[Loc(e.path, e.line) for e, _ in logs])
 
 
 def load(ws: Workspace, entry: Entry) -> Any:
@@ -205,7 +161,7 @@ def snapshotModel(ws: Workspace, files: list[str]) -> Ontology | None:
 			return None
 		if Path(file).suffix == ".json" or text.lstrip().startswith("{"):
 			try:
-				model = ontologyFromJson(json.loads(text), name)
+				model = ontologyFromJson(json.loads(text), name, ws.viewSources)
 			except FormatError as error:
 				ws.report(error.diagnostics)
 				return None
@@ -219,7 +175,7 @@ def snapshotModel(ws: Workspace, files: list[str]) -> Ontology | None:
 				textPaths.append(Path(file))
 		sources.append(Source(name, text))
 	try:
-		model = loadOntology(sources)
+		model = loadOntology(sources, ws.viewSources)
 	except FormatError as error:
 		ws.report(error.diagnostics)
 		return None

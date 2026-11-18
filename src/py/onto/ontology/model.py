@@ -79,13 +79,13 @@ DECL_MEMBERS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
 	"relation": (("participants",), ("arrow", "attrs", "ann", "doc")),
 	"domain": ((), ("doc",)),
 	"map": (("from", "to", "lines"), ("ann", "doc")),
-	"view": (("lines",), ("doc",)),
+	"view": (("lines",), ("doc", "input", "populations")),
 }
 
 RE_COUNTS = re.compile(r"[?1*+]:[?1*+]")
 RE_ONTOLOGY = re.compile(r"@ontology\s+(\S+)(.*)")
 RE_USE = re.compile(r"@use\s+(\S+)\s+as\s+(\S+)")
-RE_VIEW = re.compile(r"@view\s+(\S+)")
+RE_VIEW = re.compile(r"@view\s+([^\s()]+)(?:\(([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^\s().]+)\.([A-Za-z_][A-Za-z0-9_]*)\))?")
 RE_DOMAIN = re.compile(r"@domain\s+(\S+)")
 RE_MAP = re.compile(r"@map\s+(\S+)\s+(\S+)\s+->\s+(\S+)")
 RE_MAP_LINE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*)\s+([a-z]+)\s+([A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*)")
@@ -167,12 +167,55 @@ class Arrow:
 
 @dataclass(slots=True)
 class ViewLine:
-	"""A view body line: path, selected facets (`*` or names) and member."""
+	"""A flat selection by ontology path, or a rooted projection by population and member."""
 
 	path: str
 	facets: str | list[str] | None = None
 	member: str | None = None
 	loc: Loc | None = None
+	optional: bool = False
+	target: str | None = None  # Explicit endpoint of an overloaded verb in a rooted selection.
+
+
+@dataclass(slots=True, frozen=True)
+class ViewInput:
+	"""A caller's argument name and the source key it denotes, independent of the target identity."""
+
+	name: str
+	path: str
+	attr: str
+
+	@property
+	def key(self) -> str:
+		return f"{self.path}.{self.attr}"
+
+	def resolve(self, model: Model) -> ResolvedType:
+		owner = model.get(self.path)
+		if not owner or not (owner.kind == "entity" or isAssociation(owner)):
+			raise ValueError(f"unknown source entity or association for {self.key}")
+		attr = model.entityAttrs(self.path).get(self.attr)
+		if not attr:
+			raise ValueError(f"unknown source key attribute {self.key}")
+		if annotation(attr.ann, "key") is not True:
+			raise ValueError(f"source attribute {self.key} must be marked {{key}}")
+		kind = model.resolveType(attr.type, attr.ann)
+		if (attr.card or model.defaultCard) in MULTI or not (kind.kind == "vocab" or kind.builtin in ("Text", "Integer", "Number")):
+			raise ValueError(f"{self.key} must be a single text, numeric or vocabulary key")
+		return kind
+
+
+@dataclass(slots=True, frozen=True)
+class ViewPopulation:
+	"""A named population with an instance type; only the root has no parent."""
+
+	name: str
+	type: str
+	parent: str = ""
+	via: str = ""
+	reverse: bool = False
+	through: str = ""
+	where: str = ""
+	equals: str | bool | None = None
 
 
 @dataclass(slots=True)
@@ -203,6 +246,8 @@ class Decl:
 	participants: list[Participant] = field(default_factory=list)
 	arrow: Arrow | None = None
 	viewLines: list[ViewLine] = field(default_factory=list)
+	viewInput: ViewInput | None = None
+	viewPopulations: list[ViewPopulation] = field(default_factory=list)
 	mapLines: list[MapLine] = field(default_factory=list)
 	mapFrom: str | None = None
 	mapTo: str | None = None
@@ -303,6 +348,15 @@ class Model:
 	def get(self, path: str | None) -> Decl | None:
 		"""Find declaration `path`, or return None when absent."""
 		return self.index.get(path) if path else None
+
+	def moduleOf(self, path: str) -> str:
+		"""The declared domain containing `path`, or its namespace for ungrouped declarations."""
+		parent = path
+		while "/" in parent:
+			parent = parent.rsplit("/", 1)[0]
+			if (decl := self.get(parent)) and decl.kind == "domain":
+				return parent
+		return self.ontology.namespace if path.startswith(f"{self.ontology.namespace}/") else path.rpartition("/")[0]
 
 	def namespaces(self) -> set[str]:
 		"""Known namespace prefixes, including imported declarations carried by this ontology."""

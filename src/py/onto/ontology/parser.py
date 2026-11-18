@@ -63,9 +63,11 @@ from .model import (
 	RE_VIEW,
 	RE_VIEW_ARROW,
 	RE_VIEW_LINE,
+	ViewInput,
 	STATUSES,
 	TypeExpr,
 	ViewLine,
+	ViewPopulation,
 	arrowPath,
 )
 
@@ -236,6 +238,27 @@ def parseViewLine(line: Line, ctx: OntologyParseContext) -> ViewLine | None:
 			if not all(isName(name) for name in facets) or len(set(facets)) != len(facets):
 				ctx.diag.error("syntax", f"Invalid facet list in '{line.text}'", line.loc)
 	return ViewLine(path=path, facets=facets, member=match.group(3), loc=line.loc)
+
+
+def parseRootedLine(decl: Decl, line: Line, ctx: OntologyParseContext) -> None:
+	"""Parse a typed population or a projection on one. Names are local to this view."""
+	name = r"[A-Za-z_][A-Za-z0-9_]*"
+	member = rf"{name}(?:\.{name})*"
+	if found := re.fullmatch(rf"({name}):\s*(\S+)(?:\s*=\s*({name})\s+(->|<-)\s+({member})"
+		rf"(?:\s+through\s+({name}))?(?:\s+where\s+({member})=(@?[\w/]+))?)?", line.text, re.ASCII):
+		alias, typeName, parent, direction, via, through, where, value = found.groups()
+		if path := resolvePath(typeName, ctx, line.loc):
+			decl.viewPopulations.append(ViewPopulation(alias, path, parent or "", via or "", direction == "<-", through or "",
+				where or "", {"true": True, "false": False}.get(value, value)))
+	elif found := re.fullmatch(rf"(\?\s+)?({name})\.({member})(?:\s*:\s*(\S+))?", line.text):
+		if not decl.viewPopulations:
+			ctx.diag.error("view", "The first body line of a rooted view must declare its target root", line.loc)
+			return
+		optional, alias, key, target = found.groups()
+		decl.viewLines.append(ViewLine(alias, member=key, optional=bool(optional), loc=line.loc,
+			target=resolvePath(target, ctx, line.loc) if target else None))
+	else:
+		ctx.diag.error("syntax", f"Invalid rooted view line '{line.text}'", line.loc)
 
 
 def parseMapLine(line: Line, ctx: OntologyParseContext) -> MapLine | None:
@@ -411,16 +434,28 @@ def parseDirective(line: Line, position: int, ctx: OntologyParseContext, ontolog
 		path = resolvePath(match.group(1), ctx, loc)
 		if not path:
 			return None
-		decl = Decl(kind="view", path=path, doc=doc, loc=loc)
+		param = None
+		if match.group(2):
+			owner = resolvePath(match.group(3), ctx, loc)
+			if not owner:
+				return None
+			param = ViewInput(match.group(2), owner, match.group(4))
+		decl = Decl(kind="view", path=path, doc=doc, loc=loc, viewInput=param)
 		if not declare(decl):
 			return None
 
 		def parseView(body: Line) -> None:
+			if decl.viewInput:
+				parseRootedLine(decl, body, ctx)
+				return
 			viewLine = parseViewLine(body, ctx)
 			if viewLine:
 				decl.viewLines.append(viewLine)
 
 		return parseView
+	if text.split(maxsplit=1)[0] == "@view":
+		diag.error("view", "Expected @view Name or @view Name(argument: Entity.Attribute) naming a source {key}", loc)
+		return None
 	if match := RE_DOMAIN.fullmatch(text):
 		if not isName(match.group(1)):
 			diag.error("name", f"Invalid domain name '{match.group(1)}'", loc)
@@ -616,6 +651,23 @@ def viewLineFromJson(value: Any, what: str) -> ViewLine:
 	return ViewLine(readJsonString(data["path"], what), facets, readOptionalMember(data, "member", readJsonString, what))
 
 
+def viewPopulationFromJson(value: Any, what: str) -> ViewPopulation:
+	data = readJsonMembers(value, what, ("name", "type"), ("parent", "via", "reverse", "through", "where", "equals"))
+	strings = {k: readJsonString(data[k], what) for k in ("name", "type", "parent", "via", "through", "where") if k in data}
+	if any(not isName(strings[k]) for k in ("name", "parent", "through") if k in strings) or any(
+		not RE_ATTR_PATH.fullmatch(strings[k]) for k in ("via", "where") if k in strings):
+		raise ValueError(f"{what}: invalid population or member name")
+	if ("where" in data) != ("equals" in data) or "equals" in data and type(data["equals"]) not in (str, bool):
+		raise ValueError(f"{what}: a filter needs where and a literal or ancestor in equals")
+	test = data.get("equals")
+	if isinstance(test, str) and (not re.fullmatch(r"@?[\w/]+", test, re.ASCII) or test in ("true", "false")):
+		raise ValueError(f"{what}: expected a filter token or boolean")
+	if ("parent" in data) != ("via" in data) or "parent" not in data and data.keys() - {"name", "type"}:
+		raise ValueError(f"{what}: a root has only name and type; a traversal needs parent and via")
+	return ViewPopulation(strings.pop("name"), strings.pop("type"), reverse=readOptionalMember(data, "reverse", readJsonFlag, what, False),
+		equals=data.get("equals"), **strings)
+
+
 def mapLineFromJson(value: Any, what: str) -> MapLine:
 	data = readJsonMembers(value, what, ("from", "match", "to"), ("doc",))
 	return MapLine(readJsonString(data["from"], what), readJsonString(data["match"], what), readJsonString(data["to"], what), readOptionalMember(data, "doc", readJsonString, what))
@@ -653,7 +705,18 @@ def declFromJson(value: Any, what: str) -> Decl:
 		decl.mapFrom, decl.mapTo = readJsonString(data["from"], what), readJsonString(data["to"], what)
 		decl.mapLines = [mapLineFromJson(item, f"{what}.lines") for item in readJsonArray(data["lines"], what)]
 	elif kind == "view":
-		decl.viewLines = [viewLineFromJson(item, f"{what}.lines") for item in readJsonArray(data["lines"], what)]
+		lines = readJsonArray(data["lines"], what)
+		if "input" in data or "populations" in data:
+			readJsonMembers(data, what, ("input", "populations"), None)
+			param = readJsonMembers(data["input"], f"{what}.input", ("name", "path", "attr"))
+			decl.viewInput = ViewInput(*(readJsonString(param[k], f"{what}.input.{k}") for k in ("name", "path", "attr")))
+			decl.viewPopulations = [viewPopulationFromJson(v, what) for v in readJsonArray(data["populations"], what, True)]
+			for item in lines:
+				v = readJsonMembers(item, what, ("population", "member"), ("optional", "target"))
+				decl.viewLines.append(ViewLine(readJsonString(v["population"], what), member=readJsonString(v["member"], what),
+					optional=readOptionalMember(v, "optional", readJsonFlag, what, False), target=readOptionalMember(v, "target", readJsonString, what)))
+		else:
+			decl.viewLines = [viewLineFromJson(item, f"{what}.lines") for item in lines]
 	return decl
 
 

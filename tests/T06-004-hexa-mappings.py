@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,8 +16,10 @@ from onto import (  # noqa: E402
 	Source, loadBinding, loadFunctions, loadMapping, loadOntology, observationsToJson, printObservationsState, reconcileObservations,
 )
 from onto.integrations.hexa.compiler import CompileError  # noqa: E402
+from onto.integrations.hexa import HexaViewOperator, ViewDocument, ViewRead  # noqa: E402
 from onto.integrations.hexa.operations import HexaBindingOperator, HexaMappingOperator, mappingCompile, mappingResult  # noqa: E402
 from onto.integrations.hexa.unfold import StateIndex, Unfolder, intersect  # noqa: E402
+from onto.ontology import ViewInput  # noqa: E402
 from onto.referential import loadReferential  # noqa: E402
 from tests.helpers import specExample  # noqa: E402
 
@@ -124,6 +127,124 @@ def test_exchange_to_finance_gives_the_spec04_claims():
 	assert {(claim["at"], claim["by"], data["sources"][claim["src"]]) for claim in data["claims"]} == {("2026-11-11", "map:Exchange->Finance", SRC)}
 	assert values(log, "Dividend_Exchange_2FDividend_2FUS0000000001_2F2026_2D09_2D01")["Payer"] == {"ref": "Company_ACME"}
 	assert report.gaps == [] and report.mixed == []
+
+
+@pytest.mark.parametrize("catalogue,steps", [("single", ["Feed"]), ("split", ["Link", "Class", "Name"]), ("missingLink", [])])
+def test_rooted_view_selects_only_the_issuers_bonds_from_the_exchange_feed(catalogue, steps):
+	target = loadOntology([Source("finance.onto", specExample("spec-01-ontology") + """
+@use Exchange as E
+@view IssuerBonds(issuerId: E/Issuer.Id)
+  issuer: Company
+  bonds: Instrument = issuer -> issues where AssetClass=Bond
+  issuer.issues: Instrument
+  bonds.Name
+""")], [EXCHANGE])
+	mapper = HexaMappingOperator(EXCHANGE, target, REFERENTIAL, libraries=[MARKETS], implementations=IMPLEMENTATIONS)
+	codes = {row["id"]: row["code"] for row in FEED["issuers"]}
+	calls = []
+
+	def fetch(step, value):
+		calls.append(step)
+		return ViewDocument(FEED, SRC)
+
+	access = SimpleNamespace(describe=lambda step, value: {},
+		rootHandle=lambda key, value, kind: "Company_" + codes[value], discover=lambda state, key: (),
+		fetch=fetch)
+	key = ViewInput("id", "Exchange/Issuer", "Id")
+	reads = {"Wrong": ViewRead(ViewInput("issuerId", "Exchange/Instrument", "Isin"), [BINDING])}
+	fields = None
+	if catalogue == "single":
+		reads["Feed"] = ViewRead(key, [BINDING])
+	else:
+		fields = ["bonds.Name"]
+		if catalogue == "split":
+			links = specExample("spec-04-mapping", 2).replace("  Name <- trim(name)\n", "").replace("  Class <- class\n", "")
+			reads["Link"] = ViewRead(key, [loadBinding(EXCHANGE, Source("link.bind", links))])
+			reads["Class"] = ViewRead(key, [loadBinding(EXCHANGE, Source("class.bind", """@binding Exchange format=json
+@at <- asOf
+Instrument <- instruments[*] {id=isin}
+  Class <- class
+"""))])
+		reads["Name"] = ViewRead(key, [loadBinding(EXCHANGE, Source("name.bind", """@binding Exchange format=json
+@at <- asOf
+Instrument <- instruments[*] {id=isin}
+  Name <- trim(name)
+"""))])
+	engine = HexaViewOperator(mapper, MAPPING, reads, access)
+	with pytest.raises(ValueError, match="issuerId requires Text for Exchange/Issuer.Id"):
+		asyncio.run(engine.plan("IssuerBonds", {"issuerId": 17}))
+	seed = {"issuerId": "C-17"}
+	plan = asyncio.run(engine.plan("IssuerBonds", seed, fields))
+	assert [s["step"] for s in plan["steps"]] == steps
+	assert not calls
+	obs = asyncio.run(engine.retrieve("IssuerBonds", seed, fields))
+	assert calls == steps
+	if catalogue == "missingLink":
+		assert plan["gaps"] == [{"field": "bonds.Name", "reason": "SelectionRequest.NotSupplied", "stoppedAt": "Company.issues"}]
+		assert not obs.claims
+		return
+	assert [(c["p"], c["v"]) for c in obs.claims if "p" in c] == [("AssetClass", "Bond"), ("Name", "Acme 5.25% 2030")]
+	link, = (c for c in obs.claims if "rel" in c)
+	assert set(link["roles"].values()) == set(obs.instances) == {"Company_ACME", BOND}
+	assert len(obs.claims) == 3 and set(obs.sources.values()) == {SRC}
+	if catalogue == "split":
+		report = asyncio.run(engine.report("IssuerBonds", seed, fields))
+		fact, = json.loads(json.dumps(report))["facts"]
+		assert fact["path"] == [
+			{"from": "Company_ACME", "via": "Company.issues", "to": BOND, "source": SRC},
+			{"from": BOND, "where": "Instrument.AssetClass", "value": "Bond", "source": SRC},
+		]
+
+
+def test_rooted_view_read_of_a_subtype_supplies_its_inherited_mapping_slots():
+	source = loadOntology([Source("source.onto", """@ontology Source
+Record
+  Id Text {key}
+  Name Text
+Special < Record
+""")])
+	target = loadOntology([Source("target.onto", """@ontology Target
+@use Source as S
+Entry
+  Id Text {key}
+  Name Text
+@view Summary(id: S/Special.Id)
+  entry: Entry
+  entry.Name
+""")], [source])
+	binding = loadBinding(source, Source("source.bind", """@binding Source format=json
+Special <- rows[*] {id=id}
+  Id <- id
+  Name <- name
+"""))
+	referential = loadReferential([target], [Source("keys.ref", """@referential Keys
+@use Target as T
+T/Entry key=Id
+""")])
+	mapping = loadMapping(source, target, Source("source.map", """@mapping Source -> Target referential=Keys
+Record -> Entry
+  Id <- Id
+  Name <- Name
+"""), referentials=[referential])
+	access = SimpleNamespace(describe=lambda step, value: {},
+		rootHandle=lambda key, value, kind: "Entry_" + value, discover=lambda state, key: (),
+		fetch=lambda step, value: ViewDocument({"rows": [{"id": value, "name": "Special record"}]}, SRC))
+	engine = HexaViewOperator(HexaMappingOperator(source, target, referential), mapping, {
+		"Feed": ViewRead(ViewInput("id", "Source/Special", "Id"), [binding])}, access)
+	obs = asyncio.run(engine.retrieve("Summary", {"id": "r1"}))
+	assert [(c["s"], c["p"], c["v"]) for c in obs.claims] == [("Entry_r1", "Name", "Special record")]
+
+
+def testRootRejectsAnUnrelatedSourceKeyBeforePlanning():
+	target = loadOntology([Source("finance.onto", specExample("spec-01-ontology") + """
+@use Exchange as E
+@view IssuerSummary(issuerId: E/Instrument.Isin)
+  issuer: Company
+  issuer.RegisteredName
+""")], [EXCHANGE])
+	mapper = HexaMappingOperator(EXCHANGE, target, REFERENTIAL, libraries=[MARKETS], implementations=IMPLEMENTATIONS)
+	with pytest.raises(ValueError, match="no root correspondence from Exchange/Instrument.Isin to Finance/Company"):
+		HexaViewOperator(mapper, MAPPING, {}, None)
 
 
 def test_conditions_qualifiers_and_existence_validity():

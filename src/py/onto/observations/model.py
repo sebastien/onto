@@ -206,6 +206,38 @@ def withNamedRelationRoles(claim: Claim, previous: list[Claim]) -> Claim:
 	return claim
 
 
+def referenceHandles(value: Any) -> list[str]:
+	"""The handles in a reference value or in the members of a set."""
+	if not isinstance(value, dict):
+		return []
+	return [item["ref"] for item in value.get("set", [value]) if isinstance(item, dict) and "ref" in item]
+
+
+def activeHandles(claims: list[Claim]) -> set[str]:
+	"""The subjects, contexts and referenced instances appearing in active claims."""
+	handles: set[str] = set()
+	for claim in claims:
+		if "s" in claim:
+			handles.add(claim["s"])
+		if "ctx" in claim:
+			handles.add(claim["ctx"])
+		handles.update(handle for handle in claim.get("roles", {}).values() if handle != "?")
+		handles.update(referenceHandles(claim.get("v")))
+	return handles
+
+
+def observationStatus(value: Any) -> str:
+	"""The evidence status of an observed value (not of a missing claim)."""
+	if value is None:
+		return "absent"
+	if isinstance(value, dict):
+		if "unknown" in value:
+			return "unknown"
+		if "set" in value and not value["set"]:
+			return "unknown" if value.get("partial") else "absent"
+	return "supplied"
+
+
 def markImplicit(instances: dict[str, dict[str, str | bool]], claims: list[Claim]) -> dict[str, dict[str, str | bool]]:
 	explicit = {claim["s"] for claim in claims if claim.get("exists") or "rel" in claim and "s" in claim}
 	referenced = set()
@@ -213,10 +245,7 @@ def markImplicit(instances: dict[str, dict[str, str | bool]], claims: list[Claim
 		if "ctx" in claim:
 			referenced.add(claim["ctx"])
 		referenced.update(handle for handle in claim.get("roles", {}).values() if handle != "?")
-		value = claim.get("v")
-		for member in value.get("set", []) if isinstance(value, dict) and "set" in value else [value]:
-			if isinstance(member, dict) and "ref" in member:
-				referenced.add(member["ref"])
+		referenced.update(referenceHandles(claim.get("v")))
 	implicit = referenced - explicit
 	return {handle: {"type": instance["type"], **({"implicit": True} if handle in implicit else {})} for handle, instance in instances.items()}
 

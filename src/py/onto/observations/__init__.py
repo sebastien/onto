@@ -39,6 +39,7 @@ from .operations import (
 	reconcileObservations,
 	resolveObservations,
 	loadObservations,
+	mergeObservationLogs,
 	formatObservations,
 	observationsFromJson,
 )
@@ -76,6 +77,7 @@ __all__ = [
 	"reconcileObservations",
 	"resolveObservations",
 	"loadObservations",
+	"mergeObservationLogs",
 	"formatObservations",
 	"observationsFromJson",
 ]
