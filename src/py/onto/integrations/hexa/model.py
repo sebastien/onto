@@ -56,6 +56,7 @@ class ScopeProgram:
 	outer: tuple[Any, ...] = ()
 	levels: list[str] = field(default_factory=list)
 	parent: str | None = None
+	picks: list[int | None] = field(default_factory=list)  # per level, the one position an index step keeps
 	source: str | None = None
 
 

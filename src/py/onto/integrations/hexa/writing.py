@@ -397,11 +397,28 @@ class Writer:
 					parentScope = next(item for item in self.program.scopes if item.name == scope.parent)
 					steps = [step for step in scope.steps[len(parentScope.steps):] if step != EACH]
 				else:
-					container, steps = document, [step for step in scope.steps[:eaches[-1] if eaches else len(scope.steps)] if isinstance(step, str)]
+					# Fields and list positions (`groups[0].items[*]`) above the last `[*]`
+					container, steps = document, [step for step in scope.steps[:eaches[-1] if eaches else len(scope.steps)] if isinstance(step, str) or "index" in step]
 				node = container
-				for step in steps[:-1]:
-					node = node.setdefault(step, {})
-				node.setdefault(steps[-1], []).append(fields)
+				for step, following in zip(steps[:-1], steps[1:]):
+					empty = [] if isinstance(following, dict) else {}
+					if isinstance(step, dict):
+						while len(node) <= step["index"]:
+							node.append(None)
+						if node[step["index"]] is None:
+							node[step["index"]] = empty
+						node = node[step["index"]]
+					else:
+						node = node.setdefault(step, empty)
+				if isinstance(steps[-1], dict):
+					# `pairs[0][*]`: the list at that position
+					while len(node) <= steps[-1]["index"]:
+						node.append(None)
+					if node[steps[-1]["index"]] is None:
+						node[steps[-1]["index"]] = []
+					node[steps[-1]["index"]].append(fields)
+				else:
+					node.setdefault(steps[-1], []).append(fields)
 				elements[(scope.name, fragment.get("handle"))] = fields
 		return {"document": document, "parentless": parentless}
 

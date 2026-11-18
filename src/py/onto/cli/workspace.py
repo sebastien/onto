@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .ignore import Ignores
 from ..binding import bindingFromJson, loadBinding
 from ..formats import parseFormats
 from ..functions import FunctionLibrary, functionsFromJson, loadFunctions
@@ -57,7 +58,8 @@ JSON_FORMATS = {
 	"onto.referential/1": "referential",
 }
 # NOTE: Kinds whose files sharing a namespace are loaded together, as one model.
-GROUPED = ("ontology", "functions", "referential")
+# NOTE: Files of one key load as one model: an ontology's namespace, a mapping's `From->To`.
+GROUPED = ("ontology", "functions", "referential", "mapping")
 # NOTE: What `@use` (and `from=`) namespaces may name, per kind; libraries ignore other libraries.
 CONTEXT_KINDS = {
 	"functions": ("ontology",),
@@ -307,14 +309,18 @@ class Workspace:
 		return self
 
 	def walk(self, root: str) -> None:
-		"""Index the onto files below `root`, skipping hidden directories; JSON files are not indexed."""
+		"""Index the onto files below `root`, skipping hidden directories and what `.gitignore` and
+		`.ontoignore` files exclude; JSON files are not indexed."""
 		if not os.path.isdir(root):
 			self.indexer.error("cli.read", f"search path entry is not a directory: {self.indexer.display(root)}", level="warning")
 			return
+		ignores = Ignores(root)
 		for directory, names, files in os.walk(root):
-			names[:] = sorted(name for name in names if not name.startswith("."))
+			names[:] = sorted(name for name in names if not name.startswith(".") and not ignores.ignored(os.path.join(directory, name), True))
 			for name in sorted(files):
 				path = os.path.join(directory, name)
+				if Path(name).suffix in EXTENSIONS and ignores.ignored(path, False):
+					continue
 				if Path(name).suffix in EXTENSIONS and self.indexer.display(path) not in self.entries:
 					entry = self.indexer.entry(path)
 					if entry:
@@ -505,7 +511,7 @@ class Workspace:
 		if entry.isJson:
 			return self.buildJson(entry, context)
 		kind = entry.kind
-		if kind in GROUPED:
+		if kind in GROUPED and kind != "mapping":
 			sources = [self.source(item) for item in self.group(entry)]
 			if kind == "ontology":
 				return loadOntology(sources)
@@ -523,7 +529,9 @@ class Workspace:
 			return loadObservations(context.ontology, source, self.mode)
 		if kind == "binding":
 			return loadBinding(context.ontology, source, context.libraries, context.ontologies)
-		return loadMapping(context.ontology, context.toOntology, source, context.libraries, context.ontologies, context.referentials)
+		# Every file of the mapping (same `@mapping From -> To`), parsed before anything is resolved
+		sources = [self.source(item) for item in self.group(entry)]
+		return loadMapping(context.ontology, context.toOntology, sources, context.libraries, context.ontologies, context.referentials)
 
 	def buildJson(self, entry: Entry, context: Context) -> Any:
 		"""Call the format's JSON reader for `entry`."""

@@ -31,6 +31,49 @@ def test_ls_filters_kinds_and_skips_hidden_directories(workspace):
 	assert {line.split("\t")[1] for line in out.splitlines()} == {"Exchange", "Finance", "Sheet"}
 
 
+def test_ignore_files_keep_generated_copies_out_of_the_workspace(workspace):
+	"""`.gitignore` and `.ontoignore` exclude files and directories; `.ontoignore` may re-include; named files are still read."""
+	(workspace / "build").mkdir()
+	(workspace / "build/finance.onto").write_text("@ontology Finance\nCopy\n")
+	(workspace / "drafts").mkdir()
+	(workspace / "drafts/a.onto").write_text("@ontology DraftA\nThing\n")
+	(workspace / "drafts/keep.onto").write_text("@ontology DraftKeep\nThing\n")
+	(workspace / ".gitignore").write_text("# generated\n/build/\ndrafts/*.onto\n")
+	(workspace / "drafts/.ontoignore").write_text("!keep.onto\n")
+	status, out, err = onto("ls", "ontology")
+	assert status == 0 and not err
+	assert {line.split("\t")[1] for line in out.splitlines()} == {"DraftKeep", "Exchange", "Finance", "Sheet"}
+	assert "build/finance.onto" not in out
+	status, out, _ = onto("fmt", "drafts/a.onto")
+	assert status == 0 and out.startswith("@ontology DraftA")
+
+
+def test_patterns_follow_gitignore():
+	from onto.cli.ignore import parseRule
+	def matches(pattern, path):
+		rule = parseRule(pattern)
+		return bool(rule.pattern.match(path))
+	assert matches("*.onto", "a/b/c.onto") and not matches("/*.onto", "a/c.onto") and matches("/*.onto", "c.onto")
+	assert matches("a/**/z.onto", "a/z.onto") and matches("a/**/z.onto", "a/b/c/z.onto") and matches("build/**", "build/x/y")
+	assert matches("x?.onto", "x1.onto") and not matches("x?.onto", "x/.onto") and matches("[ab].onto", "b.onto")
+	assert parseRule("# comment") is None and parseRule("   ") is None and parseRule("!keep").negated and parseRule("dir/").directoryOnly
+
+
+def test_files_sharing_a_mapping_header_form_one_mapping(workspace):
+	"""Split mappings load as one: a reference resolves through a scope line of another file."""
+	text = (workspace / "finance/exchange-finance.map").read_text()
+	header, _, body = text.partition("\n")
+	scopes = body.split("\n\n")
+	issuers = [block for block in scopes if block.lstrip().startswith("Issuer ->")]
+	assert issuers, "the spec mapping maps issuers"
+	(workspace / "finance/exchange-finance.map").write_text(header + "\n" + "\n\n".join(block for block in scopes if block not in issuers))
+	(workspace / "finance/exchange-issuers.map").write_text(header + "\n\n" + "\n\n".join(issuers) + "\n")
+	_, out, _ = onto("ls", "mapping")
+	assert "finance/exchange-finance.map finance/exchange-issuers.map" in out
+	status, _, err = onto("check", "finance/exchange-finance.map")
+	assert status == 0 and "reference" not in err, err
+
+
 def test_files_sharing_a_namespace_form_one_ontology(workspace):
 	(workspace / "finance/exchange-extra.onto").write_text("@ontology Exchange rev=2026-11-10 src=feed card=? cards=assumed\n\nExtra\n  Code Text\n")
 	_, out, _ = onto("ls", "ontology")

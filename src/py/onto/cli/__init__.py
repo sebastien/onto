@@ -21,6 +21,7 @@ from .workspace import Workspace, projectRoot
 
 CLI_FORMAT = "onto.cli/1"
 EXIT_OK, EXIT_ERRORS, EXIT_USAGE = 0, 1, 2
+EXIT_TROUBLE = 2  # `onto diff`: an input could not be read
 # NOTE: The shell convention for a process ended by SIGINT: 128 + 2.
 EXIT_INTERRUPTED = 130
 
@@ -67,8 +68,10 @@ class Output:
 	def write(self, command: str, result: Result, ws: Workspace) -> int:
 		"""Write `result` with the workspace's diagnostics and return the exit status."""
 		diagnostics = sorted(ws.diagnostics(), key=Render.SortKey)
-		failed = result.failed or any(item.level == "error" for item in diagnostics)
-		status = EXIT_ERRORS if failed else EXIT_OK
+		errors = any(item.level == "error" for item in diagnostics)
+		status = EXIT_ERRORS if result.failed or errors else EXIT_OK
+		if command == "diff" and errors:
+			status = EXIT_TROUBLE  # diff(1): 0 same, 1 different, 2 trouble
 		if self.asJson:
 			document = {
 				"format": CLI_FORMAT,

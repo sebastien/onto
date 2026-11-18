@@ -104,10 +104,26 @@ def test_scope_index_steps_select_the_list_and_read_the_position_by_a_tuple():
 	assert client["$tuple"][0] == "$Any"
 
 
-def test_index_steps_before_a_list_are_unsupported():
-	binding = BINDING + "\nClient <- clients[0][*] {id=id}\n  Id <- id\n"
-	with pytest.raises(CompileError, match="before"):
-		read(binding, GROUP)
+# Groups of a CRM export, each a list of [member, client] pairs: `pairs[0][*]` is the first group's pairs
+PAIRS = {"pairs": [
+	[[{"id": 11}, {"id": 9}], [{"id": 12}, {"id": 10}]],
+	[[{"id": 13}, {"id": 14}]],
+	{"noList": True},
+]}
+
+
+def test_an_index_before_a_list_selects_only_that_position():
+	program, log, report = read("@binding Crm\n\nMember <- pairs[0][*][0] {id=id}\n  Id <- id\n", PAIRS)
+	assert program.scopes[0].selector == "pairs/*/*" and program.scopes[0].picks == [0, None]
+	assert not report.gaps
+	assert sorted(claim["s"] for claim in log.claims if claim.get("p") == "Id") == ["Member_11", "Member_12"]
+
+
+def test_an_index_before_a_list_ignores_the_shape_of_other_positions():
+	"""The third group is not a list: only the selected position must hold one."""
+	_, log, report = read("@binding Crm\n\nMember <- pairs[1][*][0] {id=id}\n  Id <- id\n", PAIRS)
+	assert not report.gaps
+	assert [claim["s"] for claim in log.claims if claim.get("p") == "Id"] == ["Member_13"]
 
 
 def test_a_value_read_as_a_position_and_a_field_is_unsupported():
@@ -157,3 +173,21 @@ def test_a_missing_body_position_is_absent():
 	assert "Group_1.Name Smith Family" in text and "FirstClientName" not in text
 
 # EOF
+
+
+ITEMS = loadOntology([Source("items.onto", "@ontology Items\nItem\n  Id Text {key}\n  Name Text\n")])
+
+
+@pytest.mark.parametrize(("path", "expected"), [
+	("groups[1].items[*]", {"groups": [None, {"items": [{"id": "1", "name": "a"}]}]}),
+	("pairs[0][*]", {"pairs": [[{"id": "1", "name": "a"}]]}),
+])
+def test_writing_places_records_at_the_indexed_position(path: str, expected: dict):
+	from onto import loadObservations, observationsToJson, reconcileObservations
+	binding = loadBinding(ITEMS, Source("b.bind", f"@binding Items\nItem <- {path} {{id=id}}\n  Id <- id\n  Name <- name\n"))
+	state = observationsToJson(reconcileObservations(ITEMS, loadObservations(ITEMS, Source("s.obs", "@obs Items\n@src f=feed:x\n@src f\nItem_1:Item\n  Id 1\n  Name a\n"))))
+	ops = HexaBindingOperator(ITEMS)
+	program = ops.compileWrite(binding)
+	env = CLOCK | {"DocumentPreviousRead": lambda request, context: None}
+	documents, report = ops.written(asyncio.run(run(env, program.stages.BindingWrite, {"src": "feed:x", "state": state})))
+	assert not report.lossy and documents[0]["document"] == expected

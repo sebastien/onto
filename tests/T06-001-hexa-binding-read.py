@@ -92,12 +92,11 @@ def test_compiling_is_pure_and_repeatable():
 	assert programEncoding(bindingCompile(EXCHANGE, bindingToJson(BINDING))) == first
 
 
-def test_index_steps_before_a_list_are_unsupported():
-	# Index steps elsewhere are read by tuple shapes (T06-007); a selector cannot go below one
+def test_index_steps_before_a_list_select_one_position():
+	# Index steps elsewhere are read by tuple shapes (T06-007); before a list, a selector level keeps one position
 	binding = loadBinding(EXCHANGE, Source("b", "@binding Exchange\n\nDividend <- instruments[0].dividends[*] {id=exDate}\n  Amount <- amount\n"))
-	with pytest.raises(CompileError) as error:
-		bindingCompile(EXCHANGE, binding)
-	assert str(error.value.code) == "Binding.PathUnsupported"
+	program = bindingCompile(EXCHANGE, binding)
+	assert [(scope.levels, scope.picks) for scope in program.scopes] == [(["instruments/*", "dividends/*"], [0, None])]
 
 
 # -----------------------------------------------------------------------------

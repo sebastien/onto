@@ -478,6 +478,13 @@ function names resolve as described in [Functions](#resolution). In a file's
 `@map`, `From` resolves against the `From` ontology and `To` against the `To`
 ontology.
 
+A mapping may span several files, like an ontology: the files with the same
+`@mapping From -> To` header form one mapping, parsed as a whole before it is
+resolved. A reference translates through the scope lines of every file, and
+coverage counts every file's lines and exclusions. Each file resolves its own
+`@use` aliases; the files must agree on header keys and on an alias they share,
+and must not declare a local function or map, or exclude an element, twice.
+
 | Key | Meaning | Default |
 | --- | --- | --- |
 | `from`, `to` | Ontology revisions the mapping was written against | none |

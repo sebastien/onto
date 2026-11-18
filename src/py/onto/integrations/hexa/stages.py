@@ -88,7 +88,8 @@ def selectStage(scope: ScopeProgram) -> AnyValue:
 
 	def run(env, document):
 		occurrences = [{"value": document, "location": ""}]
-		for level in levels:
+		picks = scope.picks or [None] * len(levels)
+		for level, pick in zip(levels, picks):
 			following = []
 			for parent in occurrences:
 				try:
@@ -101,7 +102,8 @@ def selectStage(scope: ScopeProgram) -> AnyValue:
 						fields["path"] = failure.path
 					yield report(Ledger.Gap, target=owner[0], reason=failure.code, **fields)
 					continue
-				following += [combine(parent, child) for child in found]
+				# An index step before `[*]` is selected as `*`: keep the element at its position only
+				following += [combine(parent, child) for child in found if pick is None or child["location"].rsplit("/", 1)[-1] == str(pick)]
 			occurrences = following
 		# spec-04: a null value is not present, so a null record makes no instance and no gap
 		return [occurrence for occurrence in occurrences if occurrence["value"] is not None]

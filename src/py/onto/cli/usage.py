@@ -204,6 +204,26 @@ COMMANDS = (
 		("onto reverse exchange-finance.map",),
 	),
 	Command(
+		"run", "Mappings", "FILE.bind DOCUMENT... | FILE.map STATE.obs... [--src TOKEN] [--impl MODULE] [--strict]",
+		"Run a binding over documents, or a mapping over observations, once",
+		"Run a binding over source documents (JSON, or CSV for a format=csv binding), or a mapping over the "
+		"observations of its From ontology (several files form one state), and print the observations log it "
+		"produces. Each run is one-shot: it compares with no previous output, so it retracts nothing; re-running "
+		"against a store belongs to the host (spec-06). Values that could not be produced are reported as run.gap "
+		"warnings; --strict makes them errors. --impl names the Python modules implementing the functions the file "
+		"calls, as for 'fn test'.",
+		(Argument("file"), Argument("inputs", "+")),
+		(
+			Option(("--src",), "Source token of the documents (default: each document's path)", "TOKEN"),
+			Option(("--impl",), "Python module providing IMPLEMENTATIONS (repeatable)", "MODULE", repeat=True, default=[]),
+			Option(("--at",), "Run time recorded on the claims (default: now)", "TIME"),
+			Option(("--strict",), "Report values that could not be produced as errors (exit 1)"),
+			LENIENT,
+		),
+		("onto run exchange.bind feed.json", "onto run exchange.bind feed.json --src feed:instruments > exchange.obs",
+			"onto run exchange-finance.map exchange.obs --impl markets_impl"),
+	),
+	Command(
 		"inventory", "Mappings", "DOCUMENT... [--csv] [--binding NAMESPACE]",
 		"Derive an inventory or a default binding from documents",
 		"Print the inventory of sample documents: their field paths and JSON types, sorted by path. With --binding, "

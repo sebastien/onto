@@ -1,4 +1,7 @@
 #!/bin/sh
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit
+# The optional hexa integration (`onto run`) uses a sibling hexa checkout when present, as the tests do.
+HEXA="$ROOT/../hexa/src/py"
+[ -d "$HEXA" ] && PYTHONPATH="$HEXA${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONPATH="$ROOT/src/py${PYTHONPATH:+:$PYTHONPATH}"
 exec python3 -m onto.main "$@"

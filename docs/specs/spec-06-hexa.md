@@ -229,10 +229,15 @@ The scope path becomes a hexa selector: `.` and `[*]` become `/` and `/*`, and
   program's encoding.
 - Index steps (`a[0]`) are read by shapes, since hexa selectors have no index
   access (hexa spec-004 matches a fixed position with `Tuple` and `rest`). The
-  selector stops before a scope path's first index step, and the rest of the
-  path prefixes every path the scope's lines read: `rows[*][0]` selects
-  `rows/*`, and `id` reads position 0's `id`. An index step followed by `[*]`
-  cannot be selected: compiling it fails with `Binding.PathUnsupported`.
+  selector stops before the first index step after a scope path's last `[*]`,
+  and the rest of the path prefixes every path the scope's lines read:
+  `rows[*][0]` selects `rows/*`, and `id` reads position 0's `id`.
+- An index step followed by `[*]` is a selector level of its own, written `*`,
+  that keeps only the occurrence at that position, by its location (as hexa
+  spec-004 suggests): `groups[0].items[*]` selects `groups/*` then `items/*`
+  below position 0 only, so the other groups' shapes say nothing. It is a record
+  level for `^`. Writing places the records at that position, padding the list
+  with `null`.
 - A selected record that is JSON `null` is not present (spec-04), so it makes no
   instance and no gap. A missing path is still a gap below its parent.
 

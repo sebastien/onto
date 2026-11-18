@@ -470,9 +470,59 @@ def resolveMapping(fromOntology: Ontology, toOntology: Ontology, doc: MappingDoc
 	return mapping
 
 
-def loadMapping(fromOntology: Ontology, toOntology: Ontology, source: Source, libraries: list[FunctionLibrary] | None = None, ontologies: list[Ontology] | None = None, referentials: list[Referential] | None = None) -> Mapping:
-	"""Parse and statically resolve a mapping; this does not execute its declarations."""
-	return resolveMapping(fromOntology, toOntology, parseMapping(source), libraries, ontologies, referentials)
+def parseMappings(sources: list[Source]) -> MappingDocument:
+	"""Parse the files of one mapping (the same `@mapping From -> To` header) into one document.
+
+	Each file resolves its own `@use` aliases; their declarations are then merged: header keys and aliases
+	must agree, local functions, maps and exclusions must not repeat, and scopes are checked when resolved.
+	"""
+	docs = [parseMapping(source) for source in sources]
+	if not docs:
+		raise ValueError("A mapping needs at least one file")
+	merged = MappingDocument(docs[0].fromNamespace, docs[0].toNamespace, loc=docs[0].loc)
+	diag = Diagnostics()
+	functions: set[str] = set()
+	maps: set[str] = set()
+	exclusions: set[str] = set()
+	for doc in docs:
+		merged.diagnostics += doc.diagnostics
+		if (doc.fromNamespace, doc.toNamespace) != (merged.fromNamespace, merged.toNamespace):
+			diag.error("header", f"Files of one mapping name {merged.fromNamespace} -> {merged.toNamespace}, not {doc.fromNamespace} -> {doc.toNamespace}", doc.loc)
+			continue
+		for key, value in doc.header.items():
+			if merged.header.setdefault(key, value) != value:
+				diag.error("header", f"Mapping header '{key}' differs between files: {merged.header[key]} and {value}", doc.loc)
+		for alias, namespace in doc.uses.items():
+			if merged.uses.setdefault(alias, namespace) != namespace:
+				diag.error("mapping", f"Alias '{alias}' names {merged.uses[alias]} and {namespace} in files of one mapping", doc.loc)
+		for function in doc.functions:
+			if function.name in functions or function.name in maps:
+				diag.error("mapping", f"Duplicate local function/map '{function.name}' across the mapping's files", function.loc)
+			functions.add(function.name)
+			merged.functions.append(function)
+		for decl in doc.maps:
+			if decl.path in maps or decl.path in functions:
+				diag.error("mapping", f"Duplicate local function/map '{decl.path}' across the mapping's files", decl.loc)
+			maps.add(decl.path)
+			merged.maps.append(decl)
+		for exclusion in doc.exclusions:
+			if exclusion.path in exclusions:
+				diag.error("mapping", f"'{exclusion.path}' is excluded twice", exclusion.loc)
+			exclusions.add(exclusion.path)
+			merged.exclusions.append(exclusion)
+		merged.scopes += doc.scopes
+	merged.diagnostics += diag.check()
+	return merged
+
+
+def loadMapping(fromOntology: Ontology, toOntology: Ontology, source: Source | list[Source], libraries: list[FunctionLibrary] | None = None, ontologies: list[Ontology] | None = None, referentials: list[Referential] | None = None) -> Mapping:
+	"""Parse and statically resolve a mapping, from one file or all the files of one mapping; this does not execute it.
+
+	The whole mapping is parsed before anything is resolved: a reference translates through the scope lines
+	of every file, wherever they are declared.
+	"""
+	doc = parseMappings(source if isinstance(source, list) else [source])
+	return resolveMapping(fromOntology, toOntology, doc, libraries, ontologies, referentials)
 
 
 def formatMapping(fromOntology: Ontology, toOntology: Ontology, source: Source, libraries: list[FunctionLibrary] | None = None, ontologies: list[Ontology] | None = None, referentials: list[Referential] | None = None) -> str:
@@ -494,6 +544,6 @@ def mappingFromJson(fromOntology: Ontology, toOntology: Ontology, data: Any, nam
 	return loaded
 
 
-__all__ = ["Operator", "resolveMapping", "loadMapping", "formatMapping", "mappingFromJson"]
+__all__ = ["Operator", "parseMappings", "resolveMapping", "loadMapping", "formatMapping", "mappingFromJson"]
 
 # EOF

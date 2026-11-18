@@ -335,3 +335,33 @@ def testStrictJsonRejectsMalformedOrNonRoundTrippableMappings(change):
 
 
 # EOF
+
+
+# -----------------------------------------------------------------------------
+#
+# MAPPINGS OVER SEVERAL FILES
+#
+# -----------------------------------------------------------------------------
+
+
+def testFilesOfOneMappingAreParsedBeforeResolving():
+	"""A reference translates through a scope line of another file of the mapping."""
+	people = Source("people.map", "@mapping S -> T\n\nPerson -> Human\n  Code <- Code\n")
+	owners = Source("owners.map", "@mapping S -> T\n\nEvent -> Occurrence\n  Who <- Who\n- Person.Currency {reason=ignore}\n")
+	mapping = loadMapping(SOURCE, TARGET, [owners, people])
+	assert [scope.source for scope in mapping.scopes] == ["S/Event", "S/Person"]
+	assert not [item for item in mapping.diagnostics if item.code == "reference"]
+	alone = loadMapping(SOURCE, TARGET, owners)
+	assert any(item.level == "warning" and item.code == "reference" for item in alone.diagnostics)
+
+
+@pytest.mark.parametrize("second", [
+	"@mapping S -> T from=other\nPerson -> Human\n",
+	"@mapping S -> T\n- Person.Currency {reason=ignore}\n",
+	"@mapping S -> T\n@map Copy2 Code -> Label\n  X exact X\n@map Copy2 Code -> Label\n  X exact X\n",
+	"@mapping S -> T\nPerson -> Human\n",
+])
+def testFilesOfOneMappingMustAgree(second: str):
+	first = Source("a.map", "@mapping S -> T from=v1\n@map Copy2 Code -> Label\n  X exact X\nPerson -> Human\n- Person.Currency {reason=ignore}\n")
+	with pytest.raises(FormatError):
+		loadMapping(SOURCE, TARGET, [first, Source("b.map", second)])

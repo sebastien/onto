@@ -141,8 +141,13 @@ def fieldName(steps: list[AnyValue]) -> str:
 	return "".join("All" if step == EACH else f"At{step}" if isinstance(step, int) else pascalCase(step) for step in steps) or "Value"
 
 
+def isLevel(step: AnyValue) -> bool:
+	"""A selector level boundary: `[*]`, or an index step before one (selected as `*`, then picked)."""
+	return step == EACH or isIndex(step)
+
+
 def selectorSegment(step: AnyValue) -> str:
-	if step == EACH:
+	if isLevel(step):
 		return "*"
 	return step.replace("~", "~0").replace("/", "~1")
 
@@ -233,12 +238,12 @@ class ScopeCompiler:
 		self.scope = scope
 		self.name = name
 		self.short = lastSegment(scope.type)
-		# A selector has no index form: from its first index step, a scope path is read by the record's
-		# shape instead (`rows[*][0]` selects `rows/*`, and every line reads below position 0).
+		# A selector has no index form (hexa spec-004). Index steps after the last `[*]` are read by the
+		# record's shape (`rows[*][0]` selects `rows/*`, and every line reads below position 0); an index
+		# before a `[*]` is a selector level of its own, `*`, keeping only that position (`levelPicks`).
 		steps = list(scope.path["path"])
-		first = next((index for index, step in enumerate(steps) if isIndex(step)), len(steps))
-		if EACH in steps[first:]:
-			raise CompileError(V.BindingCodes.PathUnsupported, "Index steps are not supported before '[*]' in a scope path")
+		last = max((index for index, step in enumerate(steps) if step == EACH), default=-1)
+		first = next((index for index, step in enumerate(steps) if isIndex(step) and index > last), len(steps))
 		self.steps = steps[:first]
 		self.prefix = tuple(relativeStep(step) for step in steps[first:])
 		self.positions: dict[tuple, Position] = {}
@@ -455,12 +460,12 @@ class ScopeCompiler:
 			steps = steps[1:]
 			if 0 in self.blocks:
 				raise CompileError(V.BindingCodes.PathUnsupported, "A root list has no fields to capture")
-		eaches = sum(1 for step in steps if step == EACH)
+		eaches = sum(1 for step in steps if isLevel(step))
 		levels: list[list[str]] = [[blockText(self.blocks[0])] if 0 in self.blocks else []]
 		seen = 0
 		for step in steps:
 			levels[-1].append(selectorSegment(step))
-			if step == EACH:
+			if isLevel(step):
 				seen += 1
 				level = eaches - seen
 				if level and level in self.blocks:
@@ -469,6 +474,12 @@ class ScopeCompiler:
 		if not levels[-1] and len(levels) > 1:
 			levels.pop()
 		return ["/".join(level) for level in levels]
+
+	def levelPicks(self) -> list[int | None]:
+		"""Per selector level, the position its `*` keeps (an index step), or None to keep every element."""
+		steps = self.steps[1:] if self.steps and isinstance(self.steps[0], dict) and "root" in self.steps[0] else self.steps
+		picks = [step["index"] if isIndex(step) else None for step in steps if isLevel(step)]
+		return picks + [None] * (len(self.levels()) - len(picks))
 
 	def selector(self) -> str:
 		"""The scope's whole selector, as spec-06 writes it."""
@@ -492,7 +503,7 @@ class ScopeCompiler:
 	def pathValue(self, steps: list[AnyValue]) -> AnyValue:
 		first = steps[0]
 		if isinstance(first, dict) and ("root" in first or "up" in first):
-			eaches = sum(1 for step in self.steps if step == EACH)
+			eaches = sum(1 for step in self.steps if isLevel(step))
 			level = 0 if "root" in first else first["up"]
 			if level >= eaches and "up" in first:
 				raise CompileError(V.BindingCodes.PathUnsupported, "'^' climbs above the document root")
@@ -660,7 +671,9 @@ class BindingCompiler:
 
 	def enclosing(self, scope: BindingScope, up: int) -> BindingScope | None:
 		steps = scope.path["path"]
-		eaches = [index for index, step in enumerate(steps) if step == EACH]
+		# Record levels: `[*]`, and index steps before the last one (selector levels of their own)
+		last = max((index for index, step in enumerate(steps) if step == EACH), default=-1)
+		eaches = [index for index, step in enumerate(steps) if step == EACH or isIndex(step) and index < last]
 		if len(eaches) <= up:
 			return None
 		prefix = steps[:eaches[-1 - up] + 1]

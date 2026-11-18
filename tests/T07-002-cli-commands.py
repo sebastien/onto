@@ -271,3 +271,41 @@ def test_meta_without_the_domain_hints_at_the_declarations(workspace):
 	status, out, err = onto("meta", "finance/finance.onto")
 	assert status == 0 and out.startswith("@obs Finance")
 	assert err == "Finance has no Meta domain; add it with 'onto meta --decl finance/finance.onto > meta.onto'\n"
+
+
+# -----------------------------------------------------------------------------
+#
+# RUN
+#
+# -----------------------------------------------------------------------------
+
+
+def test_run_binds_documents_and_maps_their_observations(workspace, implementation):
+	pytest.importorskip("hexa.shapes")
+	(workspace / "feed.json").write_text(_specExample("spec-04-mapping", 0, "json"))
+	status, out, err = onto("run", "finance/exchange.bind", "feed.json", "--src", "feed:instruments", "--at", "2026-11-18T00:00:00Z")
+	# The spec's feed has a bond without dividends: one gap below it, reported as a warning
+	assert status == 0 and err.count("run.gap") == 1 and "Exchange/Dividend: Issue.Missing" in err
+	assert "@src d1=feed:instruments" in out and "{by=bind:Exchange}" in out
+	(workspace / "exchange.obs").write_text(out)
+	status, out, err = onto("run", "finance/exchange-finance.map", "exchange.obs", "--impl", implementation("markets_run", "Yearly"), "--at", "2026-11-18T00:00:00Z")
+	assert status == 0, err
+	assert "@obs Finance" in out and "by=map:Exchange->Finance" in out
+	status, data, _ = onto("run", "finance/exchange.bind", "feed.json", "--json", "--at", "2026-11-18T00:00:00Z")
+	assert status == 0 and json.loads(data)["result"]["format"] == "onto.observations/1"
+
+
+def test_run_reports_gaps_as_warnings_or_with_strict_errors(workspace):
+	pytest.importorskip("hexa.shapes")
+	feed = json.loads(_specExample("spec-04-mapping", 0, "json"))
+	del feed["instruments"][0]["isin"]
+	(workspace / "feed.json").write_text(json.dumps(feed))
+	status, out, err = onto("run", "finance/exchange.bind", "feed.json")
+	assert status == 0 and "warning run.gap: Exchange/Instrument" in err
+	status, _, err = onto("run", "finance/exchange.bind", "feed.json", "--strict")
+	assert status == 1
+
+
+def test_run_needs_a_binding_or_mapping(workspace):
+	status, _, err = onto("run", "finance/finance.onto", "x.json")
+	assert status == 1 and "expected binding or mapping" in err

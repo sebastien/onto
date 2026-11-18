@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import csv
 import difflib
 import importlib
@@ -11,6 +12,7 @@ import json
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +23,7 @@ from ..functions import FunctionEvaluator, FunctionLibrary, functionsToJson, pri
 from ..inventory import Inventory, defaultBinding, inventoryFromDocuments, printInventory
 from ..meta import META_DOMAIN, metaDeclarations, metaObservations
 from ..mapping import Mapping, mappingCoverage, mappingReverse, mappingToJson, printMapping
-from ..observations import Observations, observationsToJson, printObservationsLog, printObservationsState, reconcileObservations
+from ..observations import Observations, observationsFromJson, observationsToJson, printObservationsLog, printObservationsState, reconcileObservations
 from ..ontology import Ontology, loadOntology, normaliseOntology, ontologyDiff, ontologyFromJson, ontologyToJson, printOntology, printOntologyDiff
 from ..referential import Referential, printReferential, referentialToJson
 from ..text import Diagnostic, FormatError, Loc, Source, annotation, layoutText
@@ -93,6 +95,27 @@ def one(ws: Workspace, args: argparse.Namespace, kinds: tuple[str, ...] | None =
 		ws.error("cli.kind", f"expected {' or '.join(kinds)}, not {entry.kind}", entry.path, 0)
 		return None
 	return entry
+
+
+def mergedLogs(logs: list[Observations]) -> dict[str, Any]:
+	"""One observations document from several: statements renumbered, source aliases made distinct."""
+	out: dict[str, Any] | None = None
+	for log in logs:
+		data = observationsToJson(log)
+		if out is None:
+			out = {**data, "sources": {}, "instances": {}, "claims": [], "retractions": []}
+			out.pop("gaps", None)
+		aliases = {}
+		for alias, token in data["sources"].items():
+			aliases[alias] = f"d{len(out['sources']) + 1}"
+			out["sources"][aliases[alias]] = token
+		for handle, item in data["instances"].items():
+			out["instances"].setdefault(handle, item)
+		for key in ("claims", "retractions"):
+			for claim in data[key]:
+				renamed = {name: aliases.get(value, value) if name in ("src", "of") else value for name, value in claim.items()}
+				out[key].append({**renamed, "n": len(out["claims"]) + len(out["retractions"]) + 1})
+	return out or {}
 
 
 def load(ws: Workspace, entry: Entry) -> Any:
@@ -452,6 +475,61 @@ class Commands:
 		])
 		return Result(text=printMapping(reverse), checked=1)
 
+	def cmdRun(self) -> Result:
+		"""One-shot run of a binding over documents or a mapping over observations: the observations log it produces."""
+		entry = one(self.ws, self.args, ("binding", "mapping"))
+		model = load(self.ws, entry) if entry else None
+		if model is None:
+			return Result(checked=1)
+		try:
+			from hexa.runtime import run
+			from ..integrations.hexa.operations import HexaBindingOperator, HexaMappingOperator
+		except ImportError as error:
+			raise UsageError(f"running needs the hexa package: {error}", "run") from error
+		context = self.ws.context(entry)
+		mode = "strict" if self.args.strict else "lenient"
+		at = self.args.at or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+		clock = {"ClockRead": lambda _context: at}
+		implementations = self.implementations()
+		if entry.kind == "binding":
+			items = []
+			for path in self.args.inputs:
+				try:
+					text = sys.stdin.read() if path == STDIN else Path(path).read_text(encoding="utf-8")
+					document = list(csv.DictReader(io.StringIO(text))) if model.header.get("format") == "csv" else json.loads(text)
+				except (OSError, UnicodeError, ValueError, csv.Error) as error:
+					self.ws.error("cli.read", f"cannot read document: {error}", self.ws.indexer.display(path))
+					continue
+				items.append({"src": self.args.src or self.ws.indexer.display(path), "document": document})
+			if len(items) != len(self.args.inputs):
+				return Result(checked=1)
+			ops = HexaBindingOperator(context.ontology, mode, context.libraries, implementations, context.ontologies)
+			program = ops.compile(model)
+			log, report = ops.result(program, asyncio.run(run(clock, program.stages.BindingRead, items)))
+			ontology = context.ontology
+		else:
+			logs = []
+			for path in self.args.inputs:
+				found = self.ws.add(path, "observations")
+				observations = load(self.ws, found) if found else None
+				if observations is None:
+					return Result(checked=1)
+				logs.append(observations)
+			try:
+				state = observationsToJson(reconcileObservations(context.ontology, observationsFromJson(context.ontology, mergedLogs(logs), "inputs", self.ws.mode), self.ws.mode))
+			except FormatError as error:
+				self.ws.report(error.diagnostics)
+				return Result(checked=1)
+			referential = context.referentials[0] if context.referentials else None
+			ops = HexaMappingOperator(context.ontology, context.toOntology, referential, mode, context.libraries, implementations, context.ontologies)
+			program = ops.compile(model)
+			log, report = ops.result(program, asyncio.run(run(clock, program.stages.MappingRead, state)))
+			ontology = context.toOntology
+		level = "error" if self.args.strict else "warning"
+		self.ws.report([Diagnostic(level, "run.gap", f"{gap.target}: {gap.reason}" + (f" ({gap.handle})" if gap.handle else "") + (f" in {gap.src}" if gap.src else "") + (f" at {gap.location}" if gap.location else ""),
+			Loc(entry.path, entry.line)) for gap in report.gaps])
+		return Result(text=printObservationsLog(ontology, log), data=observationsToJson(log), checked=1)
+
 	def cmdInventory(self) -> Result:
 		"""Inventory, or default binding, of sample documents."""
 		documents = []
@@ -496,12 +574,12 @@ class Commands:
 			try:
 				module = importlib.import_module(name)
 			except Exception as error:
-				raise UsageError(f"cannot import --impl {name}: {type(error).__name__}: {error}", "fn") from error
+				raise UsageError(f"cannot import --impl {name}: {type(error).__name__}: {error}", self.args.command) from error
 			finally:
 				sys.path[:] = path
 			table = getattr(module, "IMPLEMENTATIONS", None)
 			if not isinstance(table, dict):
-				raise UsageError(f"--impl {name} has no IMPLEMENTATIONS mapping", "fn")
+				raise UsageError(f"--impl {name} has no IMPLEMENTATIONS mapping", self.args.command)
 			merged.update(table)
 		return merged
 

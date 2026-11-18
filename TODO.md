@@ -1047,6 +1047,25 @@ Found mapping the AdviceLink CRM to AdviceOS (adviceos-data `TODO_ONTO.md`):
   Generated reverses keep `ref(T, Key)` over target types. A line whose `when`
   is false (or a default whose sibling matched) reports no projection gaps
   (`lineApplies`). Tests: `T06-014`.
+- **Chosen targets.** `{as=T}` on a mapping line translates its reference to the
+  target of type `T` (`chosenTarget`, `Onto.CorrespondEmitted`): a target the
+  scope's `when` skips is a gap (`HandlesResolve` records `skipped`), an
+  instance known only by reference takes `T`. Tests: `T06-014`.
+- **Mappings over several files** (spec-04, spec-07): files with one `@mapping
+  From -> To` header are one mapping (`parseMappings`, then one `resolveMapping`;
+  `loadMapping` takes a source or a list). The CLI groups them like ontologies.
+  Tests: `T04-004`, `T07-001`.
+- **`onto run`** (spec-07): one-shot binding and mapping runs through the hexa
+  integration (`Commands.cmdRun`, `mergedLogs`); gaps are `run.gap` warnings,
+  errors with `--strict`. `bin/onto` adds a sibling `../hexa/src/py` to the path.
+  Tests: `T07-002`.
+- **Workspace exclusions.** `cli/ignore.py`: `.gitignore` then `.ontoignore` per
+  directory, gitignore patterns (no global excludes), excluded directories
+  pruned; named files still read (spec-07 Indexing). Tests: `T07-001`.
+- **Index steps before `[*]`** in binding scope paths (`groups[0].items[*]`): a
+  selector level `*` filtered by position (`ScopeProgram.picks`, `selectStage`),
+  counted as a record level; writing pads the list. hexa is unchanged (its
+  spec-004 has no index access by design). Tests: `T06-001`, `T06-007`.
 - **Conditional facets.** `{when=Attr:Value}` on a facet (spec-01): checked on
   declaration (`_checkFacetCondition`: a single-valued, observed scalar attribute
   of the subject and a value of its type) and in observations

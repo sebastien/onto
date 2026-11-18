@@ -133,6 +133,15 @@ and parses only the header and `@use` lines of each file. It is built for each
 command, when the command first needs it, and is never cached on disk. A search
 path entry that is not a directory is a warning.
 
+- The scan skips what `.gitignore` and `.ontoignore` files exclude, from the
+  scanned directory down. They share gitignore's pattern syntax (`#` comments,
+  `!` negation, a trailing `/` for directories, a leading or inner `/` anchoring
+  to the file's directory, `*`, `?`, `[...]`, `**`); in each directory
+  `.ontoignore` is read after `.gitignore`, so it can exclude more or re-include
+  (`!`). As in git, nothing below an excluded directory is re-included. Git's
+  global and `.git/info/exclude` files are not read. A file named on the command
+  line is read even when excluded: exclusions keep generated copies out of the
+  workspace, not out of reach.
 - The search path is the project root of the working directory, then the `-I`
   directories, then `ONTO_PATH`. A file named on the command line adds its own
   project root, so `onto check ../other/x.map` sees `../other`'s files.
@@ -140,8 +149,11 @@ path entry that is not a directory is a warning.
 - Files of an ontology, a library or a referential sharing a namespace are
   loaded together as one model (spec-01: "An ontology may span several files").
   Their parsers check that the files agree (`rev`, duplicate declarations).
-- Bindings, mappings and observations are loaded file by file; several may share
-  a namespace key.
+- Files of a mapping sharing its `@mapping From -> To` header are one mapping
+  ([spec-04](spec-04-mapping.md#mappings)): all are parsed before any is
+  resolved, so a check, run or coverage of one file covers the whole mapping.
+- Bindings and observations are loaded file by file; several may share a
+  namespace key.
 - Indexing problems (`cli.kind`, `cli.read`) are reported for the files a
   command names or reads; `ls` reports them all. A broken file elsewhere in the
   project does not fail `onto state statement.obs`.
@@ -303,9 +315,9 @@ With `--json`, `result` is an `onto.diff/1` object containing `changes`:
 - `move`: old `path`, new `to`.
 - `change`: `path`, `field`, `before`, `after`; missing properties are `null`.
 
-Exit status is `0` for no changes, `1` for changes or input errors (the existing
-CLI convention), and `2` for invalid usage. JSON diagnostics distinguish a
-successful comparison with changes from invalid input.
+Exit status follows `diff(1)`: `0` for no changes, `1` for changes, and `2` for
+trouble: an input could not be read (errors were reported), or invalid usage.
+Warnings do not change it. JSON diagnostics give the details.
 
 #### `onto ls [KIND...]`
 
@@ -358,6 +370,26 @@ Print the reversed mapping (`To -> From`). Lines that cannot be reversed are
 omitted and reported as warnings at their own line (`LossyLine.loc`): `exchange-finance.map:19:
 warning map.lossy: Exchange/Instrument -> Finance/Instrument: 'AssetClass' is
 not reversed: @map 'AssetClassFromCode' is not exact and one-to-one`.
+
+#### `onto run FILE.bind DOCUMENT... | FILE.map STATE.obs... [--src TOKEN] [--impl MODULE]... [--at TIME] [--strict]`
+
+Runs a binding over source documents, or a mapping over observations of its
+`From` ontology, through the hexa integration ([spec-06](spec-06-hexa.md)), and
+prints the observations log it produces (`--json`: its JSON form).
+
+- A binding reads JSON documents, or CSV ones when its header says
+  `format=csv`. Each document's source token is `--src`, else its path.
+- A mapping reads observations files; several form one state (their source
+  aliases are kept apart), reconciled before the run.
+- `--impl` names the modules implementing the functions the file calls, as
+  for `fn test`. `--at` sets the run time recorded on the claims (default: now).
+- The run is one-shot: it compares with no previous output, so it retracts
+  nothing; re-running against a store belongs to the host.
+- What a run could not produce is reported as `run.gap` warnings on the file:
+  target, reason, source and location. With `--strict` they are errors, and
+  the run is strict (spec-06).
+- Running needs the `hexa` package (a sibling checkout is found by `bin/onto`);
+  without it the command is a usage error.
 
 #### `onto inventory DOCUMENT... [--csv] [--binding NAMESPACE]`
 
@@ -540,16 +572,16 @@ Help is written for someone who does not know the formats yet:
 | --- | --- |
 | `0` | Success; warnings may have been reported |
 | `1` | Errors were reported, `fmt --check` or `--diff` found files to format, `fn test` failed, or an internal error |
-| `2` | Usage error: unknown command or option, missing or conflicting arguments |
+| `2` | Usage error: unknown command or option, missing or conflicting arguments; for `diff`, also an input that could not be read |
 
 An internal error prints `onto: internal error: <message>` and a hint to rerun
 with `ONTO_DEBUG=1`, which shows the traceback.
 
 ## Deferred
 
-- `onto bind` and `onto map`: running bindings and mappings, with run modes,
-  approval and re-running, belong to the hexa integration
-  ([spec-06](spec-06-hexa.md#run)), and come with it.
+- Re-running bindings and mappings against a store (retractions, held
+  retractions, approval): they need the host's store
+  ([spec-06](spec-06-hexa.md#run)); `onto run` is one-shot.
 - `onto diff OLD NEW`: the semantic diff of spec-01 [Changes](spec-01-ontology.md#changes).
 - `onto overlay`: overlays (spec-03).
 - `onto formats update`: learning value formats from documents (spec-04,

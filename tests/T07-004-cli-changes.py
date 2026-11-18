@@ -50,6 +50,17 @@ def test_diff_ignores_file_placement_order_and_comments(files):
 	assert onto("diff", "--before", b, a, "--after", c, d) == (0, "", "")
 
 
+def test_diff_exit_status_follows_diff1(files):
+	"""0 same, 1 different, 2 an input that could not be read; warnings change nothing."""
+	same = files("same.onto", "Person\n  * Phones Phone\nPhone =\n  Number Text\n")
+	assert onto("diff", same, same)[0] == 0
+	other = files("other.onto", "Person\n  * Phones Phone\n  Name Text\nPhone =\n  Number Text\n")
+	assert onto("diff", same, other)[0] == 1
+	broken = files("broken.onto", "Person\n  Name Missing\n")
+	status, _, err = onto("diff", same, broken)
+	assert status == 2 and "Missing" in err
+
+
 def test_snapshots_text_and_mixed_sets_compare(files, tmp_path):
 	a = files("a.onto", "Person\n  Name Text\n")
 	b = files("b.onto", "Account\n")
