@@ -88,6 +88,7 @@ def elementPath(text: str, namespace: str, uses: dict[str, str]) -> str:
 
 
 def readMappingJson(data: Any) -> Mapping:
+	"""Decode and validate mapping JSON data."""
 	value = jsonObject(data, ("format", "from", "to", "scopes"), ("header", "uses", "functions", "maps", "exclusions"))
 	if value["format"] != MAPPING_FORMAT:
 		raise ValueError("Unknown mapping JSON format")
@@ -256,6 +257,6 @@ def parseMapping(source: Source) -> MappingDocument:
 	return doc
 
 
-__all__ = ["parseMapping"]
+__all__ = ["parseMapping", "readMappingJson"]
 
 # EOF

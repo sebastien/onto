@@ -6,8 +6,7 @@ import re
 
 from .observations.formatter import printText
 from .ontology import BUILTINS, MULTI, Attr, Decl, Model, Ontology, TypeExpr
-from .ontology.model import Participant
-from .ontology.model import RE_ATTR_PATH, arrowPath
+from .ontology.model import RE_ATTR_PATH, Participant, arrowPath
 from .observations.model import Claim, Observations, ObservationsDocument
 from .text import Diagnostic, Diagnostics
 

@@ -18,11 +18,10 @@ import inspect
 import json
 from math import isfinite
 import re
-from string.templatelib import Interpolation, Template
 
 from hexa.combinators import parallel, pipe, plan, validate
 from hexa.core import REGISTRY, member
-from hexa.runtime import p, run
+from hexa.runtime import run
 from hexa.shapes import Failure, SelectionRequest, codes, profile
 from ...binding.model import Binding
 from ...mapping.model import Mapping, MappingLine, MappingScope
@@ -35,6 +34,7 @@ from ...ontology.rooted import Field, Hop, RootedView, memberMatches
 from ...text import FormatError, isName, isPath
 from .compiler import MappingCompiler
 from .operations import HexaBindingOperator, HexaMappingOperator
+from .requests import checkRequest, requestFor, requestSource, requestTemplate
 
 # -----------------------------------------------------------------------------
 #
@@ -47,10 +47,8 @@ from .operations import HexaBindingOperator, HexaMappingOperator
 class ViewRead:
 	"""A catalogue step: typed input key, admitted bindings, any key discovered in their output, and its request.
 
-	`request` is a `RequestSend` template, `{method?, path, api?, query?, headers?, body?}`. In `path`, `{name}` (the
-	input's name) is the input value as one encoded path segment; elsewhere a string `"{name}"` is the value itself,
-	and `{name}` within a longer string its text. `source` spells the response's provenance token the same way.
-	Without `request`, the host's `fetch` reads the step.
+	`request` is a `RequestSend` template and `source` the response's provenance token, both filled with the input
+	value as `requests` describes. Without `request`, the host's `fetch` reads the step.
 	"""
 
 	input: ViewInput
@@ -81,8 +79,6 @@ class ViewReadError(ValueError):
 
 
 RE_REASON = re.compile(r"[A-Za-z][A-Za-z0-9]*")
-REQUEST_KEYS = ("method", "path", "api", "query", "headers", "body")
-METHODS = ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE")
 codes("ViewRead", "UnreadableResponse")
 
 
@@ -156,63 +152,6 @@ def documentFetch(fetch):
 	return DocumentFetch
 
 
-def valueText(value: object) -> str:
-	"""A key value as text, spelled as JavaScript's `String` spells it."""
-	if isinstance(value, bool):
-		return "true" if value else "false"
-	if isinstance(value, float) and value.is_integer():
-		return str(int(value))
-	return str(value)
-
-
-def templateFill(item: object, name: str, value: object) -> object:
-	"""A request template part with the input value: `"{name}"` is the value, `{name}` in a longer string its text."""
-	token = "{" + name + "}"
-	if isinstance(item, str):
-		return value if item == token else item.replace(token, valueText(value))
-	if isinstance(item, dict):
-		return {key: templateFill(entry, name, value) for key, entry in item.items()}
-	if isinstance(item, list):
-		return [templateFill(entry, name, value) for entry in item]
-	return item
-
-
-def requestTemplate(read: ViewRead) -> dict:
-	"""A read's request template in its canonical member order, the method spelled out."""
-	return {"method": read.request.get("method", "GET"), **{key: read.request[key] for key in REQUEST_KEYS[1:] if key in read.request}}
-
-
-def requestFor(read: ViewRead, value: object) -> dict:
-	"""A read's `RequestSend` request for an input value; hexa's `p` encodes the path segment."""
-	request, literals = requestTemplate(read), read.request["path"].split("{" + read.input.name + "}")
-	parts = [literals[0]]
-	for literal in literals[1:]:
-		parts += [Interpolation(value, read.input.name), literal]
-	return {key: p(Template(*parts)) if key == "path" else item if key in ("method", "api") else templateFill(item, read.input.name, value)
-		for key, item in request.items()}
-
-
-def requestSource(read: ViewRead, request: dict, value: object) -> str:
-	"""A response's provenance token: the read's `source` template, else the request's API and path."""
-	if read.source is not None:
-		return read.source.replace("{" + read.input.name + "}", valueText(value))
-	return (request["api"] + ":" if "api" in request else "") + request["path"]
-
-
-def checkRequest(step: str, read: ViewRead) -> None:
-	"""Reject a request template that `requestFor` could not fill into a request."""
-	template = read.request
-	if template is None:
-		if read.source is not None:
-			raise ValueError(f"{step}: a source template needs a request template")
-		return
-	path = template.get("path") if isinstance(template, dict) else None
-	if (not isinstance(path, str) or not path.startswith("/") or re.search(r"[{}]", path.replace("{" + read.input.name + "}", ""))
-		or set(template) - set(REQUEST_KEYS) or template.get("method", "GET") not in METHODS or not isinstance(template.get("api", ""), str)
-		or not isinstance(read.source if read.source is not None else "", str)):
-		raise ValueError(f"{step}: a request is {{method?, path, api?, query?, headers?, body?}}, its path starting with / and naming only {{{read.input.name}}}")
-
-
 def keyValue(value: object, builtin: str | None) -> object:
 	"""A claim value as a key value: canonical decimal text is a JSON number for numeric keys."""
 	if isinstance(value, str) and builtin in ("Integer", "Number"):
@@ -224,12 +163,20 @@ def keyValue(value: object, builtin: str | None) -> object:
 	return value
 
 
-def readWaves(steps: list[str], reads: dict[str, ViewRead], seedKey: str) -> dict[str, int]:
-	"""Each planned read's wave: 0 for the seed's reads, one more than its key's provider for the others."""
-	waves = {}
+def readProviders(steps: list[str], reads: dict[str, ViewRead], seedKey: str) -> dict[str, str | None]:
+	"""Each planned read's provider: the earlier read that discovers its key; none for the seed's reads."""
+	providers = {}
 	for index, name in enumerate(steps):
 		key = reads[name].key
-		provider = None if key == seedKey else next((other for other in steps[:index] if (p := reads[other].provides) and p.key == key), None)
+		providers[name] = None if key == seedKey else next((other for other in steps[:index] if (p := reads[other].provides) and p.key == key), None)
+	return providers
+
+
+def readWaves(steps: list[str], providers: dict[str, str | None]) -> dict[str, int]:
+	"""Each planned read's wave: 0 without a provider, one more than its provider's otherwise."""
+	waves = {}
+	for name in steps:
+		provider = providers[name]
 		waves[name] = waves[provider] + 1 if provider else 0
 	return waves
 
@@ -466,7 +413,8 @@ class HexaViewOperator:
 		result = await self.plan(view, seed, fields)
 		param = self.views[view].input
 		steps = [step["step"] for step in result["steps"]]
-		waves = readWaves(steps, self.reads, param.key)
+		providers = readProviders(steps, self.reads, param.key)
+		waves = readWaves(steps, providers)
 		# NOTE: A replayed journal may name host reasons this process has not declared yet.
 		for entry in replay or ():
 			code = entry.get("failure", {}).get("code") if isinstance(entry, dict) else None
@@ -494,7 +442,7 @@ class HexaViewOperator:
 				names = [name for name in steps if waves[name] == wave]
 				items, effects = [], {}
 				for name in names:
-					values[name] = operator.readValues(name, steps, param, seed, outputs)
+					values[name] = operator.readValues(name, providers[name], param, seed, outputs)
 					for value in values[name]:
 						item = operator.readEffect(name, value)
 						items.append((name, value, item))
@@ -547,12 +495,10 @@ class HexaViewOperator:
 			return {}
 		return requestTemplate(read) if value == "{" + read.input.name + "}" else requestFor(read, value)
 
-	def readValues(self, name: str, steps: list[str], param: ViewInput, seed: dict, outputs: dict) -> list:
-		"""A read's input values: the seed, or what its key's provider (an earlier wave) discovered, in order."""
-		key = self.reads[name].key
-		if key == param.key:
+	def readValues(self, name: str, provider: str | None, param: ViewInput, seed: dict, outputs: dict) -> list:
+		"""A read's input values: the seed, or what its `provider` (an earlier wave) discovered, in order."""
+		if self.reads[name].key == param.key:
 			return [seed[param.name]]
-		provider = next((other for other in steps[:steps.index(name)] if (p := self.reads[other].provides) and p.key == key), None)
 		return list(dict.fromkeys(item for output in outputs.get(provider, ()) if output["status"] == "ok" for item in output["discovered"]))
 
 	def readEffect(self, name: str, value: object) -> dict:
@@ -617,6 +563,7 @@ class HexaViewOperator:
 		return {"status": "ok", "logs": logs, "gaps": gaps, "discovered": discovered, "emptyTypes": response["emptyTypes"], "emptyInputs": response["emptyInputs"]}
 
 	def sourceState(self, logs: list) -> dict:
+		"""Merge and reconcile bound source logs into a JSON state."""
 		mode = self.mapper.mode
 		data = mergeObservationLogs(self.source, logs)
 		return observationsToJson(reconcileObservations(self.source, observationsFromJson(self.source, data, mode=mode), mode=mode))

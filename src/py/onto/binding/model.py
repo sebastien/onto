@@ -100,6 +100,6 @@ def bindingBy(binding: "Binding") -> str:
 	return f"bind:{binding.ontology}/{name}" if name else f"bind:{binding.ontology}"
 
 
-__all__ = ["bindingBy", "Condition", "BindingLine", "BindingScope", "BindingExclusion", "BindingDocument", "Binding"]
+__all__ = ["bindingBy", "Condition", "BindingLine", "BindingScope", "BindingExclusion", "BindingDocument", "Binding", "ANNOTATION_KEYS", "BINDING_FORMAT", "HEADER_KEYS"]
 
 # EOF

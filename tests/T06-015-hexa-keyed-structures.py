@@ -251,3 +251,6 @@ def test_a_binding_writes_elements_back_to_their_fields():
 	env = {"ClockRead": lambda context: "2026-11-18", "DocumentPreviousRead": lambda request, context: None}
 	documents, report = ops.written(asyncio.run(run(env, program.stages.BindingWrite, {"src": "feed:x", "state": observationsToJson(reconcileObservations(TARGET, state))})))
 	assert not report.lossy and documents[0]["document"] == {"people": [{"home": "09"}]}
+
+
+# EOF

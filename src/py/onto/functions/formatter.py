@@ -30,6 +30,7 @@ def valueToJson(value: Any) -> Any:
 
 
 def valueText(value: Any) -> str:
+	"""Render a function example value as text."""
 	if value is None:
 		return "null"
 	if isinstance(value, bool):
@@ -96,6 +97,6 @@ def functionsToJson(library: FunctionLibrary) -> dict[str, Any]:
 		**({"header": library.header} if library.header else {}), **({"uses": library.uses} if library.uses else {}), "functions": functions})
 
 
-__all__ = ["printFunctions", "functionsToJson"]
+__all__ = ["printFunctions", "functionsToJson", "valueText", "functionBlock"]
 
 # EOF

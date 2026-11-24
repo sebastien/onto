@@ -112,3 +112,6 @@ def testLenientModeHoldsContradictoryFacetStatementsButKeepsTheDiscriminator():
 	assert [claim.get("p") for claim in state.claims] == ["Kind", "HouseholdSection.Size"]
 	data = observationsToJson(state)
 	assert observationsToJson(observationsFromJson(load(), data, mode="lenient")) == data
+
+
+# EOF

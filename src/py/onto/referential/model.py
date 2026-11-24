@@ -41,6 +41,6 @@ class Referential:
 	loc: Loc | None = None
 
 
-__all__ = ["Policy", "Referential"]
+__all__ = ["Policy", "Referential", "REFERENTIAL_FORMAT"]
 
 # EOF

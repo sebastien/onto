@@ -841,8 +841,10 @@ known members.
 Every inverse in the table satisfies the round trip of [Declarations](#declarations)
 within these limits, which reversal reports as gaps when they are not met:
 
-- `join` writes a member containing the separator, or an empty member, only as
-  a gap, since `split` could not read it back.
+- `split` and `join` require a nonempty separator. `join` gives a gap unless
+  splitting its result yields the original set of members. This excludes empty
+  members, members containing the separator, and separator matches spanning
+  member boundaries.
 - `format` is an inverse of `date` and `datetime` only with a format holding
   every part they read (`YYYY`, `MM` and `DD`; and `hh`, `mm`, `ss` for
   date-times). Other formats make the line lossy.

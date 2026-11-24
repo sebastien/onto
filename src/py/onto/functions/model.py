@@ -130,4 +130,11 @@ class FunctionResult:
 	partial: bool = False
 
 
+__all__ = [
+	"FUNCTIONS_FORMAT", "BUILTIN_SIGNATURES", "BUILTIN_ARITIES", "BUILTIN_RESULTS",
+	"SignatureType", "ExampleSource", "FunctionExample", "FunctionDeclaration", "Function",
+	"FunctionsDocument", "FunctionLibrary", "FunctionResult",
+]
+
+
 # EOF

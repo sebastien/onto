@@ -22,7 +22,7 @@ from ...ontology.model import Attr, Model, ResolvedType, TypeExpr, ViewInput, is
 from ...ontology.rooted import Field, Hop, RootedView
 from ...text import annotation, lastSegment
 from .compiler import BindingCompiler, MappingCompiler
-from .views import requestTemplate
+from .requests import requestTemplate
 
 # -----------------------------------------------------------------------------
 #
@@ -35,6 +35,8 @@ BUNDLE_FORMAT = "onto.view-bundle/1"
 RE_SELECTOR_SLOT = re.compile(r":\$([A-Za-z][A-Za-z0-9.]*)")
 # Standard slots every hexa runtime declares itself.
 STANDARD_SLOTS = ("Location", "Origin")
+# NOTE: Wider than the binding and compiler NUMERIC: value identity compares Durations by number too, as
+# `observations.model` does, so the runtime's `valueIdentity` needs them flagged numeric.
 NUMERIC = ("Integer", "Number", "Amount", "Percent", "Duration")
 
 

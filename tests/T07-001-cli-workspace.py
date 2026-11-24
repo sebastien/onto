@@ -206,7 +206,6 @@ def test_json_files_are_read_with_their_context(workspace):
 	assert json.loads(data)["format"] == "onto.mapping/1"
 
 
-# EOF
 
 
 # -----------------------------------------------------------------------------
@@ -269,3 +268,6 @@ def test_indexing_errors_of_named_files_are_reported(workspace, monkeypatch):
 	(workspace / "notes.txt").write_text("x")
 	status, _, err = onto("check", "notes.txt")
 	assert status == 1 and "notes.txt: error cli.kind: unknown file kind '.txt'" in err
+
+
+# EOF

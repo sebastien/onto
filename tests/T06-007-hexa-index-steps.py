@@ -186,7 +186,6 @@ def test_a_missing_body_position_is_absent():
 	text = printObservationsLog(CRM, log)
 	assert "Group_1.Name Smith Family" in text and "FirstClientName" not in text
 
-# EOF
 
 
 ITEMS = loadOntology([Source("items.onto", "@ontology Items\nItem\n  Id Text {key}\n  Name Text\n")])
@@ -205,3 +204,6 @@ def test_writing_places_records_at_the_indexed_position(path: str, expected: dic
 	env = CLOCK | {"DocumentPreviousRead": lambda request, context: None}
 	documents, report = ops.written(asyncio.run(run(env, program.stages.BindingWrite, {"src": "feed:x", "state": state})))
 	assert not report.lossy and documents[0]["document"] == expected
+
+
+# EOF

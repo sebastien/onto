@@ -18,6 +18,7 @@ from .model import FUNCTIONS_FORMAT, ExampleSource, Function, FunctionDeclaratio
 
 
 def splitValues(text: str, separator: str) -> list[str]:
+	"""Split comma-separated example values, respecting nested syntax."""
 	parts = []
 	start = 0
 	depth = 0
@@ -83,6 +84,7 @@ def signatureFromJson(data: Any) -> SignatureType:
 
 
 def readFunctionsJson(data: Any) -> FunctionLibrary:
+	"""Decode and validate function-library JSON data."""
 	value = jsonObject(data, ("format", "namespace", "functions"), ("header", "uses"))
 	if value["format"] != FUNCTIONS_FORMAT:
 		raise ValueError("Unknown function-library format")
@@ -221,6 +223,6 @@ def parseFunctions(sources: list[Source]) -> FunctionsDocument:
 	return doc
 
 
-__all__ = ["parseFunctions"]
+__all__ = ["parseFunctions", "splitValues", "readFunctionsJson", "parseFunctionDeclaration", "parseFunctionExample"]
 
 # EOF

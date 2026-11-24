@@ -334,7 +334,6 @@ def testStrictJsonRejectsMalformedOrNonRoundTrippableMappings(change):
 		mappingFromJson(SOURCE, TARGET, data)
 
 
-# EOF
 
 
 # -----------------------------------------------------------------------------
@@ -365,3 +364,6 @@ def testFilesOfOneMappingMustAgree(second: str):
 	first = Source("a.map", "@mapping S -> T from=v1\n@map Copy2 Code -> Label\n  X exact X\nPerson -> Human\n- Person.Currency {reason=ignore}\n")
 	with pytest.raises(FormatError):
 		loadMapping(SOURCE, TARGET, [first, Source("b.map", second)])
+
+
+# EOF

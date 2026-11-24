@@ -554,14 +554,19 @@ def identityFormat(value, original=None):
 
 
 def splitParse(separator, value):
+	if not separator:
+		raise Gap(SplitText.Invalid)
 	return {"set": sorted({part for part in value.split(separator) if part})}
 
 
 def splitFormat(separator, value, original=None):
 	members = value["set"]
-	if any(not member or separator in member for member in members):
+	if not separator:
 		raise Gap(SplitText.Unformattable)
-	return separator.join(sorted(members))
+	result = separator.join(sorted(members))
+	if set(splitParse(separator, result)["set"]) != set(members):
+		raise Gap(SplitText.Unformattable)
+	return result
 
 
 def dateTimeParse(pattern, value):
@@ -629,6 +634,7 @@ EpochDate = codec("Onto.EpochDate", source=either(Num, Text), canonical=DateTime
 IntegerText = codec("Onto.IntegerText", source=either(Text, Num), canonical=Decimal & Integral, parse=integerParse, format=identityFormat, gaps=["Invalid"],
 	examples=[{"input": 6, "output": "6", "direction": "forward"}, {"input": "6.5", "gap": "Invalid"}])
 SplitText = codec("Onto.SplitText", source=Text, canonical={"set": [Text]}, params={"Separator": Text}, parse=splitParse, format=splitFormat,
+	gaps=["Invalid"],
 	examples=[{"arguments": [","], "input": "b,a", "output": {"set": ["a", "b"]}, "direction": "forward"}])
 DateTimePattern = codec("Onto.DateTimePattern", source=Text, canonical=DateTime & Timed, params={"Pattern": Text}, parse=dateTimeParse, format=dateTimeFormat,
 	gaps=["Invalid"], examples=[{"arguments": ["YYYYMMDD hh:mm:ss"], "input": "20260915 10:30:00", "output": "2026-09-15T10:30:00"}])

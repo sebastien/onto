@@ -107,6 +107,20 @@ def testCollectionArgumentsStayWholeAndCollectionResultsStayEncoded():
 	assert value("split", "a,a", ",") == {"set": ["a"]}
 
 
+@pytest.mark.parametrize("members,separator", [
+	([], ""), (["a"], ""), ([""], ","), (["a,b"], ","), (["ab", "z"], "aba"),
+])
+def testJoinRejectsCollectionsThatCannotRoundTrip(members, separator):
+	result, = FunctionEvaluator().evaluate("join", [{"set": members}, separator])
+	assert result.value is None and result.reason
+
+
+def testJoinRoundTripsIncludingEmptyCollection():
+	for members, separator in [([], ","), (["a", "b"], ","), (["a", "b"], "ab")]:
+		joined = value("join", {"set": members}, separator)
+		assert value("split", joined, separator) == {"set": sorted(members)}
+
+
 def testRegisteredSignaturesNullHandlingExceptionsAndDetachedValues():
 	library = loadFunctions([], [Source("test.fn", """@functions L
 @fn Identity Number -> Number

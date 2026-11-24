@@ -85,6 +85,7 @@ def arithmetic(name: str, args: list[Any]) -> str:
 
 
 def patternParse(value: str, pattern: str, withTime: bool) -> str:
+	"""Parse a patterned date or date-time into ISO form."""
 	parts, offset, tokens = [], 0, set()
 	for match in RE_PATTERN.finditer(pattern):
 		token = match[0]
@@ -110,6 +111,7 @@ def patternParse(value: str, pattern: str, withTime: bool) -> str:
 
 
 def patternFormat(value: str, pattern: str) -> str:
+	"""Format an ISO date or date-time using `pattern`."""
 	timestampValue(value)
 	parsed = datetime.fromisoformat(value) if "T" in value else date.fromisoformat(value)
 	fields = {"YYYY": f"{parsed.year:04}", "MM": f"{parsed.month:02}", "DD": f"{parsed.day:02}"}
@@ -139,7 +141,13 @@ def builtin(name: str, args: list[Any]) -> Any:
 			return str(len(args[0]["set"]))
 		if not isinstance(args[1], str) or any(not isinstance(item, str) for item in args[0]["set"]):
 			raise ValueError("join requires texts")
-		return args[1].join(sorted(args[0]["set"]))
+		separator = args[1]
+		if not separator:
+			raise ValueError("join requires a nonempty separator")
+		result = separator.join(sorted(args[0]["set"]))
+		if {part for part in result.split(separator) if part} != set(args[0]["set"]):
+			raise ValueError("join cannot round-trip the collection")
+		return result
 	if name == "date" and len(args) == 1:
 		seconds = numeric(args[0])
 		if seconds != seconds.to_integral_value():
@@ -320,6 +328,6 @@ class FunctionEvaluator:
 		return count
 
 
-__all__ = ["FunctionEvaluator"]
+__all__ = ["FunctionEvaluator", "patternParse", "patternFormat"]
 
 # EOF

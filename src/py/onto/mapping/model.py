@@ -102,6 +102,6 @@ class Mapping:
 	loc: Loc | None = None
 
 
-__all__ = ["Condition", "MappingLine", "MappingScope", "MappingExclusion", "MappingDocument", "Mapping"]
+__all__ = ["Condition", "MappingLine", "MappingScope", "MappingExclusion", "MappingDocument", "Mapping", "ANNOTATION_KEYS", "HEADER_KEYS", "MAPPING_FORMAT", "QUALIFIER_KEYS"]
 
 # EOF

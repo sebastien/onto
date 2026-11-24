@@ -138,6 +138,8 @@ class Reverser:
 				raise Lossy(f"format '{literal}' does not hold a whole date")
 			return args[0], call("datetime" if hasParts(literal, TIME_PARTS) else "date", value, args[1])
 		if name in ("split", "join") and literal is not None:
+			if not literal:
+				raise Lossy(f"function '{name}' requires a nonempty separator")
 			return args[0], call("join" if name == "split" else "split", value, args[1])
 		if name in self.functions and len(args) == 1:
 			function, namespace = self.functions[name]

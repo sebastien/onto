@@ -28,6 +28,7 @@ def hasIdentity(policy: Policy) -> bool:
 
 
 def policyFor(model: Model, ref: Referential, typePath: str) -> Policy | None:
+	"""Find the policy applicable to an instance type."""
 	for ancestor in model.lineage(typePath):
 		for policy in ref.policies:
 			if policy.type == ancestor and hasIdentity(policy):
@@ -200,6 +201,6 @@ def referentialImplicit(ontologies: list[Ontology], ref: Referential, typePath: 
 	return implicitFor(model, ref, typePath)
 
 
-__all__ = ["Operator", "validateReferential", "loadReferential", "formatReferential", "referentialFromJson", "referentialPolicy", "referentialImplicit"]
+__all__ = ["Operator", "validateReferential", "loadReferential", "formatReferential", "referentialFromJson", "referentialPolicy", "referentialImplicit", "policyFor"]
 
 # EOF

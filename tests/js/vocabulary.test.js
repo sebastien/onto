@@ -1,10 +1,10 @@
-// The `Onto` vocabulary and value helpers of the JavaScript runtime, against the examples Python declares and checks.
+/** Module: vocabulary tests — check Onto vocabulary and values against Python's examples. */
 
 import { expect, test } from "bun:test";
 import { Gap } from "hexa/shapes.js";
 import { CODECS, TRANSFORMS } from "../../src/js/onto/vocabulary.js";
-import { arithmetic, printValue } from "../../src/js/onto/functions.js";
-import { canonicalNumber, decimalText, encodeKey, decodeKey, pyJson, sortedByJson, timestampValue } from "../../src/js/onto/values.js";
+import { arithmetic } from "../../src/js/onto/functions.js";
+import { canonicalNumber, decimalText, encodeKey, decodeKey, printValue, pyJson, sortedByJson, timestampValue } from "../../src/js/onto/values.js";
 
 const short = code => code.description.split(".").at(-1);
 
@@ -45,6 +45,28 @@ test("every Onto codec reproduces its examples in both directions", () => {
 			}
 		}
 	}
+});
+
+test("SplitText and generic split/join enforce reversible separators and members", () => {
+	const codec = CODECS.SplitText("aba");
+	const parse = text => codec.convert(text);
+	const format = value => codec.convert({ set: value }, { formatting: true });
+	const gap = (run, code) => {
+		try { run(); throw new Error("expected a gap"); }
+		catch (error) { expect(error).toBeInstanceOf(Gap); expect(short(error.code)).toBe(code); }
+	};
+	expect(parse("babab")).toEqual({ set: ["b"] });
+	expect(format(["z", "b"])).toBe("babaz");
+	expect(parse(format(["z", "b"]))).toEqual({ set: ["b", "z"] });
+	expect(format([])).toBe("");
+	for (const members of [[""], ["xabay"], ["ab", "z"]]) gap(() => format(members), "Unformattable");
+	gap(() => CODECS.SplitText("").convert("abc"), "Invalid");
+	gap(() => CODECS.SplitText("").convert({ set: [] }, { formatting: true }), "Unformattable");
+	const split = TRANSFORMS["Onto.Split"].function, join = TRANSFORMS["Onto.Join"].function;
+	expect(split("b,a,,b", ",")).toEqual({ set: ["a", "b"] });
+	expect(join({ set: ["b", "a"] }, ",")).toBe("a,b");
+	for (const args of [[{ set: ["ab", "z"] }, "aba"], [{ set: [""] }, ","], [{ set: [] }, ""]]) gap(() => join(...args), "Invalid");
+	gap(() => split("abc", ""), "Invalid");
 });
 
 test("decimal, date and key spellings match Python's", () => {

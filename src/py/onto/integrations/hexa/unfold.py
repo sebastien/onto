@@ -159,6 +159,7 @@ class StateIndex:
 		return self.instances.get(handle, {}).get("type")
 
 	def existence(self, handle: str) -> dict | None:
+		"""Return a non-conflicting existence claim if possible, otherwise the first."""
 		claims = [claim for claim in self.exists.get(handle, []) if not claim.get("conflict")] or self.exists.get(handle, [])
 		return claims[0] if claims else None
 
@@ -185,6 +186,7 @@ class Unfolder:
 		self.scopeTargets = scopeTargets or {}
 
 	def reference(self, handle: str, children: dict, pointer: str, meta: dict, conflicts: dict, context: str | None = None) -> dict:
+		"""Unfold a reference, adding target correspondence and requested children."""
 		result: dict = {"ref": handle}
 		if self.correspondence is not None and handle in self.correspondence:
 			result["target"] = self.correspondence[handle]
@@ -200,6 +202,7 @@ class Unfolder:
 		return result
 
 	def value(self, value: AnyValue, segment: AnyValue, children: dict, pointer: str, meta: dict, conflicts: dict, context: str | None = None) -> AnyValue:
+		"""Unfold references in a scalar or set value; leave other values unchanged."""
 		if segment.kind != "ref" or not isinstance(value, dict):
 			return value
 		if "ref" in value:
@@ -211,6 +214,7 @@ class Unfolder:
 		return value
 
 	def subtree(self, handle: str, reach: dict, base: str, meta: dict, conflicts: dict, context: str | None = None) -> dict:
+		"""Unfold reachable slots and record their metadata and conflicts by pointer."""
 		tree: dict = {}
 		sources = self.index.sources
 		for key, node in reach.items():
@@ -238,6 +242,7 @@ class Unfolder:
 		return tree
 
 	def verb(self, handle: str, segment: AnyValue, children: dict, pointer: str, meta: dict, conflicts: dict, context: str | None = None) -> dict | None:
+		"""Unfold related instances for a verb, recording relation provenance."""
 		found = self.index.model.verbs(segment.owner, segment.key)
 		if not found:
 			return None
@@ -414,6 +419,7 @@ class MappingEmitter:
 		return meta, [item for item in sources if item != src]
 
 	def record(self, plan: MappingScopePlan, occurrence: dict, record: dict, lines: list[LineInfo] | None, variant: tuple[str, dict] | None = None) -> None:
+		"""Emit claims for an occurrence or conflict variant, reporting failed slots."""
 		handle = record.get("handle")
 		if not isinstance(handle, str):
 			return
@@ -545,6 +551,7 @@ class MappingEmitter:
 		return {"values": {"p": info.key}, "facets": {"facet": info.key}, "links": {"verb": info.key}}[info.section]
 
 	def claim(self, plan: MappingScopePlan, handle: str, info: LineInfo, value: AnyValue, meta: dict, record: dict) -> None:
+		"""Emit a value, facet, or relation claim for a projected line."""
 		builder = self.builder
 		if info.section == "facets":
 			builder.facet(handle, info.key, meta, meta.get("ctx"))
@@ -576,6 +583,7 @@ class MappingEmitter:
 		builder.add({"s": handle, "p": info.key, **meta, "v": cleanValue(value, builder.implicit)})
 
 	def gap(self, target: str, reason: str, occurrence: dict, handle: str | None) -> None:
+		"""Record a mapping gap with its source location and optional handle."""
 		entry = {"target": target, "reason": reason, "src": occurrence["exists"]["src"], "location": occurrence["location"]}
 		if handle:
 			entry["handle"] = handle

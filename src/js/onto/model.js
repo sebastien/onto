@@ -26,6 +26,7 @@ export function unkeyed(path) {
 //
 // -----------------------------------------------------------------------------
 
+/** Look up declarations and inherited attributes in a compiled model index; the index is assumed well formed. */
 export class Model {
 	/**
 	 * `index` is the `modelJson` of a bundle: `{namespace, defaultCard, types, relations, facets, structs}`.
@@ -42,7 +43,7 @@ export class Model {
 		this.relationList = Object.entries(this.relations).map(([path, relation]) => ({ path, kind: "relation", ...relation }));
 	}
 
-	/** A declaration: `{kind: "entity" | "relation", ...}`, or undefined. */
+	/** The declaration at `path`, or undefined if it is not a type or relation. */
 	get(path) {
 		if (!path) return undefined;
 		if (Object.hasOwn(this.types, path)) return { path, ...this.types[path] };
@@ -67,6 +68,7 @@ export class Model {
 		return chain;
 	}
 
+	/** Whether `path` is `ancestor` or inherits from it. */
 	isA(path, ancestor) {
 		return this.lineage(path).includes(ancestor);
 	}

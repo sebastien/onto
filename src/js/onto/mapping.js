@@ -9,8 +9,8 @@
 
 import { Location } from "hexa/shapes.js";
 import { Policy, collect, each, lift, pipe, project } from "hexa/combinators.js";
-import { ClaimsBuilder, named, namedStage, registerFunctions } from "./binding.js";
 import { Registry } from "./program.js";
+import { ClaimsBuilder, cleanValue, named, namedStage, registerFunctions } from "./stages.js";
 import { reasonCode, textOf } from "./vocabulary.js";
 import { clone, compareCodePoints, compareTimestamps, handleOf, isAbsent, isSet, isUnknown, parseInterval, valueKey } from "./values.js";
 
@@ -39,7 +39,7 @@ function metaOf(claim, sources) {
 	return result;
 }
 
-/** The intersection of `valid` intervals, spelled with the bounds it keeps; null when unbounded or empty. */
+/** Intersect `valid` intervals, preserving their bound spelling; null for no inputs or disjoint bounds. */
 function intersect(valids) {
 	if (!valids.length) return null;
 	if (new Set(valids).size === 1) return valids[0];
@@ -54,7 +54,7 @@ function intersect(valids) {
 	return startText === endText ? startText : `${startText}..${endText}`;
 }
 
-/** The value at segment `keys`, through references' `of` subtrees; null when absent or plural. */
+/** Follow `keys` through references' `of` subtrees; return null when a step is missing. */
 function valueAt(tree, keys) {
 	let node = tree;
 	for (const [index, key] of keys.entries()) {
@@ -264,7 +264,7 @@ class Unfolder {
 		return result;
 	}
 
-	/** `{value: tree, location, meta, conflicts, exists}`, or null when the instance has no existence claim. */
+	/** Return the tree, location, metadata, conflicts, existence metadata and context, or null without an existence claim. */
 	occurrence(plan, handle, context = null) {
 		const existence = this.index.existence(handle);
 		if (existence === null) return null;
@@ -476,7 +476,7 @@ class MappingEmitter {
 				}
 				const [decl, inverse] = matches[0];
 				const [first, second] = decl.participants.map(item => item.role);
-				cleanReference(member, builder.implicit);
+				cleanValue(member, builder.implicit);
 				const other = member.ref;
 				builder.add({ rel: decl.path, roles: inverse ? { [first]: other, [second]: handle } : { [first]: handle, [second]: other }, ...meta });
 			}
@@ -484,24 +484,15 @@ class MappingEmitter {
 		}
 		if (info.also) {
 			const reference = record.values?.[info.also];
-			if (isObject(reference) && Object.hasOwn(reference, "ref")) builder.add({ s: reference.ref, p: info.key.split(".").slice(1).join("."), ...meta, v: cleanReference(value, builder.implicit) });
+			if (isObject(reference) && Object.hasOwn(reference, "ref")) builder.add({ s: reference.ref, p: info.key.split(".").slice(1).join("."), ...meta, v: cleanValue(value, builder.implicit) });
 			return;
 		}
-		builder.add({ s: handle, p: info.key, ...meta, v: cleanReference(value, builder.implicit) });
+		builder.add({ s: handle, p: info.key, ...meta, v: cleanValue(value, builder.implicit) });
 	}
 
 	gap(target, reason, occurrence, handle) {
 		this.gaps.push({ target, reason, src: occurrence.exists.src, location: occurrence.location, ...(handle ? { handle } : {}) });
 	}
-}
-
-function cleanReference(value, types) {
-	if (isObject(value) && Object.hasOwn(value, "ref")) {
-		if (Object.hasOwn(value, "type") && !Object.hasOwn(types, value.ref)) types[value.ref] = value.type;
-		return { ref: value.ref };
-	}
-	if (isSet(value)) return { ...value, set: value.set.map(item => cleanReference(item, types)) };
-	return value;
 }
 
 /** For each conflicting pointer that is some lines' source input, one tree per conflicting claim. */
@@ -523,7 +514,7 @@ function variantsOf(occurrence, plan, emitter) {
 	return result;
 }
 
-/** The state with the instances `ref(S, Key)` names and no claim mentions, typed `S` and implicit. */
+/** Add missing instances named by `ref(S, Key)` source expressions without adding claims. */
 function implicitReferences(state, model, plans) {
 	if (!plans.some(plan => Object.keys(plan.sourceRefs).length)) return state;
 	const index = new StateIndex(state, model), unfolder = new Unfolder(index, null);

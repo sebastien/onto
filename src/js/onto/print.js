@@ -1,8 +1,8 @@
-/** Module: print — spec-02 audit log text, flat or compact, as `observations/formatter.py`'s `renderObservationsLog`. */
+/** Module: print — spec-02 audit log text, flat or compact, as `observations/formatter.py`. */
 
-import { printText } from "./functions.js";
+import { QUALIFIERS } from "./model.js";
 import { claimOrder } from "./observations.js";
-import { activeHandles, compareCodePoints, compareTimestamps, jsonEqual } from "./values.js";
+import { activeHandles, compareCodePoints, compareTimestamps, jsonEqual, printText } from "./values.js";
 
 // -----------------------------------------------------------------------------
 //
@@ -10,7 +10,6 @@ import { activeHandles, compareCodePoints, compareTimestamps, jsonEqual } from "
 //
 // -----------------------------------------------------------------------------
 
-const QUALIFIERS = ["cur", "unit", "period", "scale"];
 const META_KEYS = ["src", "at", "valid", "ctx", "conf", "by", "of", "approved", ...QUALIFIERS, "conflict"];
 const HEADER_KEYS = ["rev", "src", "at", "by", "conf"];
 
@@ -148,8 +147,8 @@ class ObservationPrinter {
 			previous = run;
 		}
 		const reserved = new Set(Object.keys(this.observations.instances)), counts = new Map();
-		for (const [handle, uses_] of [...uses].sort(([a], [b]) => compareCodePoints(a, b))) {
-			if (["none", "null"].includes(handle) || !blocks.has(handle) && uses_ < 2) continue;
+		for (const [handle, useCount] of [...uses].sort(([a], [b]) => compareCodePoints(a, b))) {
+			if (["none", "null"].includes(handle) || !blocks.has(handle) && useCount < 2) continue;
 			const type = this.observations.instances[handle].type, decl = this.model.relations[type];
 			const name = decl ? decl.verb : type.split("/").at(-1);
 			const base = name.slice(0, 1).toLowerCase() + name.slice(1);
@@ -157,7 +156,7 @@ class ObservationPrinter {
 			while (reserved.has(alias = `${base}${index}`)) index += 1;
 			// Estimate the cost in characters without depending on one model's tokenizer.
 			const cost = blocks.has(handle) ? alias.length + 1 : `@entity ${alias}=${handle}\n`.length;
-			if (uses_ * (handle.length - alias.length) > cost) {
+			if (useCount * (handle.length - alias.length) > cost) {
 				this.aliases.set(handle, alias);
 				reserved.add(alias);
 				counts.set(base, index);
@@ -226,8 +225,8 @@ function* logEntries(p, events) {
 	}
 }
 
-/** Print a gap-free log as `.obs` text: flat, or `compact` with `@entity` blocks and aliases. */
-export function printObservationsLog(model, observations, { compact = false } = {}) {
+/** A log as `.obs` text: flat, or `compact` with `@entity` blocks and aliases. Logs here never hold gaps. */
+function renderObservationsLog(model, observations, { compact = false } = {}) {
 	const p = new ObservationPrinter(model, observations);
 	const events = [...observations.claims.map(claim => [claim, false]), ...observations.retractions.map(claim => [claim, true])];
 	events.sort(([a], [b]) => {
@@ -265,6 +264,22 @@ export function printObservationsLog(model, observations, { compact = false } = 
 		}
 	}
 	return lines.join("\n") + "\n";
+}
+
+// -----------------------------------------------------------------------------
+//
+// HIGH-LEVEL API
+//
+// -----------------------------------------------------------------------------
+
+/** Print a well-formed observation log as flat `.obs` text in audit order. */
+export function printObservationsLog(model, observations) {
+	return renderObservationsLog(model, observations);
+}
+
+/** Print a well-formed observation log as compact `.obs` text, preserving audit order. */
+export function printObservationsCompact(model, observations) {
+	return renderObservationsLog(model, observations, { compact: true });
 }
 
 // EOF

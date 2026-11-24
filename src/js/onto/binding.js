@@ -1,5 +1,5 @@
 /**
- * Module: binding — read documents through a compiled binding into a spec-02 log, as `integrations/hexa/stages.py`.
+ * Module: binding — read documents through a compiled binding into a spec-02 log, as `integrations/hexa/stages.py`'s `bindingStages`.
  *
  * BindingRead: DocumentsRead → ClaimsEmit
  * DocumentsRead: parallel(DocumentRecordsCollect)
@@ -7,32 +7,18 @@
  */
 
 import { Failure } from "hexa/shapes.js";
-import { Policy, collect, each, parallel, pipe, project, select, stage } from "hexa/combinators.js";
+import { Policy, collect, each, parallel, pipe, project, select } from "hexa/combinators.js";
 import { Ledger, report } from "hexa/runtime.js";
 import { captureState, copyCaptures } from "hexa/shape.js";
-import { FunctionEvaluator } from "./functions.js";
 import { Registry } from "./program.js";
-import { typed } from "./types.js";
-import { BindingCodes, functionCodec, functionTransform, reasonCode } from "./vocabulary.js";
-import { isAbsent, jsonEqual, referenceHandles } from "./values.js";
+import { ClaimsBuilder, named, namedStage, registerFunctions } from "./stages.js";
+import { BindingCodes, reasonCode } from "./vocabulary.js";
 
 // -----------------------------------------------------------------------------
 //
 // UTILITIES
 //
 // -----------------------------------------------------------------------------
-
-/** A stage carrying `name` in traces and ledger targets, without process-wide registration. */
-export function namedStage(name, inner) {
-	const run = function* (env, ...inputs) { return yield* inner(env, ...inputs); };
-	return named(name, run);
-}
-
-/** Name a generator for traces; `stage(fn)` takes the function's name without registering it. */
-export function named(name, fn) {
-	Object.defineProperty(fn, "name", { value: name });
-	return stage(fn);
-}
 
 function itemPolicy(mode) {
 	const reason = failure => failure.kind === Failure.Shape ? BindingCodes.TypeMismatch : failure.code;
@@ -87,17 +73,6 @@ function selectStage(scope) {
 	return owner[0];
 }
 
-function cleanValue(value, types) {
-	if (value && typeof value === "object" && !Array.isArray(value) && Object.hasOwn(value, "ref")) {
-		if (Object.hasOwn(value, "type") && !Object.hasOwn(types, value.ref)) types[value.ref] = value.type;
-		return { ref: value.ref };
-	}
-	if (value && typeof value === "object" && !Array.isArray(value) && Object.hasOwn(value, "set")) return { ...value, set: value.set.map(item => cleanValue(item, types)) };
-	return value;
-}
-
-const handleOf = value => value && typeof value === "object" && Object.hasOwn(value, "ref") ? value.ref : typeof value === "string" ? value : null;
-
 function gapTarget(typePath, path) {
 	if (path.length >= 2 && ["values", "links"].includes(path[0])) return `${typePath}.${path[1]}`;
 	if (path.length >= 2 && path[0] === "facets") return `${typePath}[${path[1]}]`;
@@ -113,108 +88,6 @@ function targetName(target) {
 // OPERATIONS
 //
 // -----------------------------------------------------------------------------
-
-/** Declare a program's function transforms and codecs in its registry, bound to one evaluator. */
-export function registerFunctions(registry, data, implementations) {
-	const evaluator = new FunctionEvaluator({ functions: data.functions ?? {}, maps: data.maps ?? {}, implementations, typed });
-	for (const name of [...Object.keys(data.functions ?? {}), ...Object.keys(data.maps ?? {})]) {
-		const transform = functionTransform(name, evaluator);
-		registry.set(transform.name, transform);
-	}
-	for (const [name, item] of Object.entries(data.codecs ?? {})) registry.set(name, functionCodec(item.function, item.inverse, registry.decode(item.canonical), evaluator));
-	return evaluator;
-}
-
-/** Assemble a spec-02 JSON log from records, numbering claims in record order. */
-export class ClaimsBuilder {
-	constructor(model, ontology, scope, by) {
-		this.model = model;
-		this.data = { format: "onto.observations/1", obs: { ontology, scope }, sources: {}, instances: {}, claims: [], retractions: [] };
-		Object.assign(this, { by, aliases: new Map(), implicit: {}, headers: new Map(), n: 0 });
-	}
-
-	alias(token) {
-		if (!this.aliases.has(token)) {
-			this.aliases.set(token, `d${this.aliases.size + 1}`);
-			this.data.sources[this.aliases.get(token)] = token;
-		}
-		return this.aliases.get(token);
-	}
-
-	instance(handle, typePath) {
-		const existing = this.data.instances[handle];
-		if (!existing || this.model.isA(typePath, existing.type) && typePath !== existing.type) this.data.instances[handle] = { type: typePath };
-	}
-
-	add(claim, retraction = false) {
-		this.n += 1;
-		const result = { n: this.n, ...claim };
-		this.data[retraction ? "retractions" : "claims"].push(result);
-		return result;
-	}
-
-	exists(handle, meta) {
-		const claim = this.add({ s: handle, exists: true, ...meta });
-		this.headers.set(handle, [claim.n, meta]);
-		return claim;
-	}
-
-	facet(handle, name, meta, ctx) {
-		const strip = item => Object.fromEntries(Object.entries(item).filter(([key]) => !["valid", "ctx"].includes(key)));
-		meta = strip(meta);
-		const header = this.headers.get(handle);
-		let n;
-		if (header && jsonEqual(strip(header[1]), meta)) n = header[0];
-		else {
-			n = this.n += 1;
-			this.data.claims.push({ n, s: handle, exists: true, ...meta });
-		}
-		this.data.claims.push({ n, s: handle, facet: name, ...meta, ...(ctx ? { ctx } : {}) });
-	}
-
-	contextual(typePath, member, isFacet) {
-		const facet = this.model.facets(typePath).get(isFacet ? member : member.split(".")[0]);
-		return Boolean(facet && (isFacet || this.model.facetOf(typePath, member) === facet) && facet.ctx);
-	}
-
-	/** Existence, values, facets and links of one identified record (or `- h` when deleted). */
-	record(record, meta) {
-		const { handle, type: typePath } = record;
-		this.instance(handle, typePath);
-		if (record.deleted === true) {
-			this.add({ s: handle, exists: true, ...meta }, true);
-			return;
-		}
-		const valid = record.valid;
-		this.exists(handle, { ...meta, ...(typeof valid === "string" ? { valid } : {}) });
-		const ctx = handleOf(record.ctx);
-		const relation = this.model.get(typePath);
-		for (const [name, value] of Object.entries(record.facets ?? {})) {
-			if (value === true) this.facet(handle, name, meta, ctx && this.contextual(typePath, name, true) ? ctx : null);
-		}
-		for (const [name, value] of Object.entries(record.values ?? {})) {
-			if (isAbsent(value)) continue;
-			const claim = { s: handle, p: name, ...meta, v: cleanValue(value, this.implicit) };
-			if (ctx && this.contextual(typePath, name, false)) claim.ctx = ctx;
-			this.add(claim);
-		}
-		for (const [verb, value] of Object.entries(record.links ?? {})) {
-			if (isAbsent(value)) continue;
-			cleanValue(value, this.implicit);
-			const found = !relation || relation.kind === "entity" ? this.model.verbs(typePath, verb) : [];
-			if (!found.length) continue;
-			const [decl, inverse] = found[0];
-			const [first, second] = decl.participants.map(item => item.role);
-			for (const other of referenceHandles(value)) this.add({ rel: decl.path, roles: inverse ? { [first]: other, [second]: handle } : { [first]: handle, [second]: other }, ...meta });
-		}
-	}
-
-	finish() {
-		for (const [handle, typePath] of Object.entries(this.implicit)) if (!Object.hasOwn(this.data.instances, handle)) this.data.instances[handle] = { type: typePath };
-		this.data.instances = Object.fromEntries(Object.entries(this.data.instances).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
-		return this.data;
-	}
-}
 
 /** Report gaps, stale slots (their input produced a gap) and unidentified scope types. */
 function documentGaps(records, gaps, scopes, src) {
@@ -245,7 +118,7 @@ function documentSummary(document, runTime) {
 	return { ...result, at: times[0] ?? runTime, records: document.records.filter(record => Object.hasOwn(record, "handle")).length };
 }
 
-/** `ClaimsEmit`: the run's spec-02 log, stale slots and gaps. */
+/** Emit a spec-02 log and reports from collected documents; `runTime` supplies missing record timestamps. */
 export function emitClaims(program, documents, runTime) {
 	const builder = new ClaimsBuilder(program.model, program.ontology, program.scope, program.by);
 	const scopes = Object.fromEntries(program.scopes.map(scope => [scope.name, scope]));
@@ -281,7 +154,8 @@ function needsClock(documents) {
 
 /**
  * A binding program decoded from its `bindingProgramJson`, with its stages.
- * `implementations` supplies the code of declared library functions, by `Namespace/Name`.
+ * `implementations` supplies declared library functions by `Namespace/Name`.
+ * A supplied `registry` is populated with slots and functions before scopes are decoded.
  */
 export function loadBindingProgram(data, model, { implementations = {}, registry = new Registry() } = {}) {
 	registry.declareSlots(data.slots);

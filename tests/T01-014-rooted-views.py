@@ -1,5 +1,7 @@
 """Rooted views: text/JSON round-trip and type checks independent of a mapping or Hexa."""
 
+from __future__ import annotations
+
 import pytest
 
 from onto import FormatError, Model, Source, loadOntology, ontologyDiff, ontologyFromJson, ontologyToJson, printOntologyDiff

@@ -19,7 +19,9 @@ class IntegrationUnavailable(ImportError):
 
 try:
 	import hexa.shapes  # noqa: F401
-except ImportError as error:
+except ModuleNotFoundError as error:
+	if error.name not in ("hexa", "hexa.shapes"):
+		raise
 	raise IntegrationUnavailable("onto.integrations.hexa needs the 'hexa' package", name="hexa") from error
 
 # NOTE: Imported after the check above, so a missing hexa raises `IntegrationUnavailable` first.

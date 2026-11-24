@@ -249,6 +249,7 @@ log, report = ops.result(program, result)
 | `runs.py` | Previous output, stale slots, retractions, safeguards, approval |
 | `operations.py` | `HexaBindingOperator`, `HexaMappingOperator` and their functional forms |
 | `views.py` | `HexaViewOperator`, read catalogue, supplier planning and rooted view reports |
+| `requests.py` | Read request templates filled into `RequestSend` requests and provenance tokens |
 | `bundle.py` | `viewBundle`: compiled programs, model facts and resolved views as JSON for the JavaScript runtime |
 
 Tests follow the onto convention, `tests/T06-<n>-hexa-<name>.py`, and are skipped
@@ -322,6 +323,8 @@ as Python's did.
 | --- | --- |
 | `index.js` | Public API |
 | `views.js` | `ViewOperator`, planning through hexa's `SelectionRequest`, evidence walks and projection |
+| `requests.js` | Read request templates filled into `RequestSend` requests and provenance tokens |
+| `stages.js` | Named stages, program functions and `ClaimsBuilder`, shared by binding and mapping runs |
 | `binding.js`, `mapping.js` | Binding stages and claim emission; mapping unfold, variants and emission |
 | `observations.js`, `print.js` | Merge and reconcile logs; `.obs` text |
 | `vocabulary.js`, `functions.js`, `types.js` | The `Onto` vocabulary, built-ins with exact decimals, function value typing |

@@ -110,3 +110,6 @@ def testRetractingOneElementOrAll():
 	text = "p1:Person\n  Phones[Mobile].Number 021\n  Phones[Mobile].Note Work\n  Phones[Home].Number 09\n"
 	assert state(text + "- p1.Phones[Mobile]\n") == {"Phones[Home].Number": "09"}
 	assert state(text + "- p1.Phones\n") == {}
+
+
+# EOF

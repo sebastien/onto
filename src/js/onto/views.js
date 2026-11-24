@@ -12,6 +12,7 @@
  *
  * `fetch` is needed only for reads without a request template; `describe` and `discover` have defaults, and an
  * optional `check(step, value, response)` checks a request's response, returning the document as `fetch` does.
+ * Bundles and host operations are trusted inputs; the constructor checks the bundle format, not its full schema.
  *
  * A retrieval is one hexa run. A read with a request template is a `RequestSend` effect (an HTTP request, see
  * `hexa/http.js`); any other read is a `DocumentFetch` effect answered by `fetch`. Effects are journaled and
@@ -21,12 +22,13 @@
 import { Failure, SelectionRequest, codes, profile } from "hexa/shapes.js";
 import { REGISTRY, member } from "hexa/core.js";
 import { parallel, pipe, plan, validate } from "hexa/combinators.js";
-import { p, run } from "hexa/runtime.js";
+import { run } from "hexa/runtime.js";
 import { loadBindingProgram } from "./binding.js";
 import { loadMappingProgram } from "./mapping.js";
 import { Model, unkeyed } from "./model.js";
 import { observationsFromJson, reconcileObservations, sourceState, sourceToken } from "./observations.js";
-import { activeHandles, jsonEqual, observationStatus, pyJson, referenceHandles, valueKey } from "./values.js";
+import { requestFor, requestSource, requestTemplate } from "./requests.js";
+import { RE_NAME, RE_PATH, activeHandles, jsonEqual, observationStatus, pyJson, referenceHandles, valueKey } from "./values.js";
 
 // -----------------------------------------------------------------------------
 //
@@ -35,10 +37,7 @@ import { activeHandles, jsonEqual, observationStatus, pyJson, referenceHandles, 
 // -----------------------------------------------------------------------------
 
 export const BUNDLE_FORMAT = "onto.view-bundle/1";
-const RE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const RE_PATH = /^[A-Za-z_][A-Za-z0-9_]*(?:\/[A-Za-z_][A-Za-z0-9_]*)*$/;
 const RE_REASON = /^[A-Za-z][A-Za-z0-9]*$/;
-const REQUEST_KEYS = ["method", "path", "api", "query", "headers", "body"];
 const PROFILES = new Map();
 // A read the host reports unavailable with reason `R` fails with the code `ViewRead.R`, declared on first use.
 codes("ViewRead", "UnreadableResponse");
@@ -90,50 +89,28 @@ function documentFetch(fetch) {
 	return async (step, value) => documentData(await fetch(step, value));
 }
 
-/** A key value as text (`String`). */
-const valueText = value => String(value);
-
-/** A request template part with the input value: `"{name}"` is the value, `{name}` in a longer string its text. */
-function templateFill(item, name, value) {
-	const token = `{${name}}`;
-	if (typeof item === "string") return item === token ? value : item.split(token).join(valueText(value));
-	if (Array.isArray(item)) return item.map(entry => templateFill(entry, name, value));
-	if (item && typeof item === "object") return Object.fromEntries(Object.entries(item).map(([key, entry]) => [key, templateFill(entry, name, value)]));
-	return item;
-}
-
-/** A read's request template in its canonical member order, the method spelled out. */
-function requestTemplate(read) {
-	return { method: read.request.method ?? "GET", ...Object.fromEntries(REQUEST_KEYS.slice(1).filter(key => Object.hasOwn(read.request, key)).map(key => [key, read.request[key]])) };
-}
-
-/** A read's `RequestSend` request for an input value; hexa's `p` encodes the path segment. */
-function requestFor(read, value) {
-	const literals = read.request.path.split(`{${read.input.name}}`);
-	const path = p(Object.assign([...literals], { raw: [...literals] }), ...literals.slice(1).map(() => value));
-	return Object.fromEntries(Object.entries(requestTemplate(read)).map(([key, item]) =>
-		[key, key === "path" ? path : ["method", "api"].includes(key) ? item : templateFill(item, read.input.name, value)]));
-}
-
-/** A response's provenance token: the read's `source` template, else the request's API and path. */
-function requestSource(read, request, value) {
-	if (read.source !== undefined) return read.source.split(`{${read.input.name}}`).join(valueText(value));
-	return (request.api !== undefined ? request.api + ":" : "") + request.path;
-}
-
-/** A claim value as a key value: canonical decimal text is a JSON number for numeric keys. */
+/** Convert finite numeric text to a JSON number for numeric keys; otherwise retain the value. */
 function keyValue(value, builtin) {
 	if (typeof value !== "string" || !["Integer", "Number"].includes(builtin)) return value;
 	const number = Number(value);
 	return Number.isFinite(number) ? number : value;
 }
 
-/** Each planned read's wave: 0 for the seed's reads, one more than its key's provider for the others. */
-function readWaves(steps, reads, seedKey) {
-	const waves = new Map();
+/** Each planned read's provider: the earlier read that discovers its key; none for the seed's reads. */
+function readProviders(steps, reads, seedKey) {
+	const providers = new Map();
 	for (const [index, name] of steps.entries()) {
 		const key = reads[name].input.key;
-		const provider = key === seedKey ? null : steps.slice(0, index).find(other => reads[other].provides?.key === key);
+		providers.set(name, key === seedKey ? null : steps.slice(0, index).find(other => reads[other].provides?.key === key) ?? null);
+	}
+	return providers;
+}
+
+/** Each planned read's wave: 0 without a provider, one more than its provider's otherwise. */
+function readWaves(steps, providers) {
+	const waves = new Map();
+	for (const name of steps) {
+		const provider = providers.get(name);
 		waves.set(name, provider ? waves.get(provider) + 1 : 0);
 	}
 	return waves;
@@ -411,7 +388,8 @@ export class ViewOperator {
 	 */
 	async runReads(view, seed, fields = null, { now = clockNow(), fetch = (step, value) => this.access.fetch(step, value), operations = {}, record, replay, signal, policy = {} } = {}) {
 		const result = await this.plan(view, seed, fields);
-		const param = this.views[view].input, steps = result.steps.map(item => item.step), waves = readWaves(steps, this.reads, param.key);
+		const param = this.views[view].input, steps = result.steps.map(item => item.step);
+		const providers = readProviders(steps, this.reads, param.key), waves = readWaves(steps, providers);
 		// A replayed journal may name host reasons this process has not declared yet.
 		for (const entry of replay ?? []) if (typeof entry?.failure?.code === "string" && entry.failure.code.startsWith("ViewRead.")) readCode(entry.failure.code.slice("ViewRead.".length));
 		const env = { FailureClassify: readClassify, ...this.operations, ...operations, ClockRead: () => now, DocumentFetch: documentFetch(fetch),
@@ -429,7 +407,7 @@ export class ViewOperator {
 			for (let wave = 0; wave <= Math.max(-1, ...waves.values()); wave++) {
 				const names = steps.filter(name => waves.get(name) === wave), items = [], effects = new Map();
 				for (const name of names) {
-					values.set(name, operator.readValues(name, steps, param, seed, outputs));
+					values.set(name, operator.readValues(name, providers.get(name), param, seed, outputs));
 					for (const value of values.get(name)) {
 						const item = operator.readEffect(name, value);
 						items.push([name, value, item]);
@@ -484,11 +462,9 @@ export class ViewOperator {
 		return value === `{${read.input.name}}` ? requestTemplate(read) : requestFor(read, value);
 	}
 
-	/** A read's input values: the seed, or what its key's provider (an earlier wave) discovered, in order. */
-	readValues(name, steps, param, seed, outputs) {
-		const key = this.reads[name].input.key;
-		if (key === param.key) return [seed[param.name]];
-		const provider = steps.slice(0, steps.indexOf(name)).find(other => this.reads[other].provides?.key === key);
+	/** A read's input values: the seed, or what its `provider` (an earlier wave) discovered, in order. */
+	readValues(name, provider, param, seed, outputs) {
+		if (this.reads[name].input.key === param.key) return [seed[param.name]];
 		return [...new Set((provider ? outputs.get(provider) : []).flatMap(output => output.status === "ok" ? output.discovered : []))];
 	}
 

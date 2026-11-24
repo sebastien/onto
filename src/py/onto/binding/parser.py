@@ -22,6 +22,7 @@ from .model import BINDING_FORMAT, HEADER_KEYS, Binding, BindingDocument, Bindin
 
 
 def qualifyPath(name: str, namespace: str, uses: dict[str, str]) -> str:
+	"""Resolve `name` against the namespace and aliases."""
 	if not isPath(name):
 		raise ValueError(f"Invalid ontology path '{name}'")
 	head, slash, rest = name.partition("/")
@@ -29,6 +30,7 @@ def qualifyPath(name: str, namespace: str, uses: dict[str, str]) -> str:
 
 
 def bindingHeader(header: dict[str, str | int]) -> dict[str, str | int]:
+	"""Validate and normalize binding header values."""
 	result = dict(header)
 	for key, value in header.items():
 		if key not in HEADER_KEYS:
@@ -58,6 +60,7 @@ def documentPath(text: str) -> Expression:
 
 
 def condition(text: str, *, binding: bool = True) -> Condition:
+	"""Parse a path-and-value condition."""
 	for index in scanUnquoted(text):
 		if text[index] == ":":
 			path = parseExpression(text[:index].strip(), binding=binding)
@@ -71,6 +74,7 @@ def condition(text: str, *, binding: bool = True) -> Condition:
 
 
 def annotationParts(text: str | None) -> list[str]:
+	"""Split annotations without splitting nested expressions."""
 	if text is None or not text.strip():
 		return []
 	# Annotation commas inside calls, strings or list steps do not end a value.
@@ -113,6 +117,7 @@ def bindingAnnotations(text: str | None, allowed: tuple[str, ...]) -> dict[str, 
 
 
 def readDoc(value: dict[str, Any]) -> str | None:
+	"""Read and validate an optional single-line doc string."""
 	if "doc" not in value:
 		return None
 	doc = value["doc"]
@@ -122,12 +127,14 @@ def readDoc(value: dict[str, Any]) -> str | None:
 
 
 def readCondition(data: Any, *, binding: bool = True) -> Condition:
+	"""Decode a condition from JSON data."""
 	value = jsonObject(data, ("path", "value"))
 	path = expressionFromJson({"path": value["path"]}, binding=binding)
 	return {"path": path["path"], "value": jsonString(value["value"])}
 
 
 def readBindingJson(data: Any) -> Binding:
+	"""Decode and validate binding JSON data."""
 	value = jsonObject(data, ("format", "ontology", "scopes"), ("header", "uses", "at", "columns", "functions", "exclusions"))
 	if value["format"] != BINDING_FORMAT:
 		raise ValueError("Unknown binding JSON format")
@@ -287,6 +294,6 @@ def parseBinding(source: Source) -> BindingDocument:
 	return doc
 
 
-__all__ = ["parseBinding"]
+__all__ = ["parseBinding", "qualifyPath", "bindingHeader", "condition", "annotationParts", "readDoc", "readCondition", "readBindingJson"]
 
 # EOF

@@ -120,3 +120,6 @@ def test_the_default_is_lossy_under_reversal():
 		"the default of exclusive lines has no reversible condition",
 	]
 	assert reversed_.scopes[0].lines == []
+
+
+# EOF

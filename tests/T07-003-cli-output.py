@@ -108,7 +108,6 @@ def test_stdout_and_stderr_are_separate(workspace):
 	assert "map.lossy" not in stdout.getvalue() and "map.lossy" in stderr.getvalue()
 
 
-# EOF
 
 
 def test_help_and_version_need_no_command_arguments():
@@ -132,3 +131,6 @@ def test_tables_keep_every_column(workspace):
 def test_whole_file_diagnostics_have_a_null_line_in_json(workspace):
 	document = json.loads(onto("--json", "state", "finance/markets.fn")[1])
 	assert document["diagnostics"][0]["line"] is None
+
+
+# EOF

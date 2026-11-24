@@ -1,9 +1,8 @@
 /**
- * Module: observations — merge, reconcile and print spec-02 observation logs, as `observations/operations.py`.
+ * Module: observations — merge and reconcile spec-02 observation logs, as `observations/operations.py`.
  *
- * Logs are their JSON form (`onto.observations/1`). Unlike Python, loading does not re-validate a log
- * through its text form: the runtime only reads logs that compiled programs produced, and Python checks
- * the same programs on the same inputs.
+ * Logs are their JSON form (`onto.observations/1`). These operations assume well-formed logs and do not
+ * validate untrusted JSON; callers must validate external logs before passing them in.
  */
 
 import { valueIdentity } from "./functions.js";
@@ -31,10 +30,12 @@ export function claimSlot(claim) {
 	return valueKey([claim.s, Object.hasOwn(claim, "facet") ? `[${claim.facet}]` : claim.p ?? "", claim.ctx ?? ""]);
 }
 
+/** Sort key for a claim: timestamp (or zero), then statement number. */
 export function claimOrder(claim) {
 	return [Object.hasOwn(claim, "at") ? timestampValue(claim.at) : ZERO, claim.n];
 }
 
+/** Compare claims by timestamp and then statement number. */
 export function compareClaims(left, right) {
 	const [a, n] = claimOrder(left), [b, m] = claimOrder(right);
 	return compareTimestamps(a, b) || n - m;
@@ -54,6 +55,7 @@ function withNamedRelationRoles(claim, previous) {
 	return claim;
 }
 
+/** Mark referenced instances without an explicit existence or named-relation claim as implicit. */
 export function markImplicit(instances, claims) {
 	const explicit = new Set(claims.filter(claim => claim.exists || Object.hasOwn(claim, "rel") && Object.hasOwn(claim, "s")).map(claim => claim.s));
 	const referenced = new Set();
@@ -66,6 +68,7 @@ export function markImplicit(instances, claims) {
 		{ type: instance.type, ...(referenced.has(handle) && !explicit.has(handle) ? { implicit: true } : {}) }]));
 }
 
+/** Resolve a claim's source alias, or return the source unchanged if it is not an alias. */
 export function sourceToken(observations, claim) {
 	const name = claim.src;
 	return Object.hasOwn(observations.sources, name ?? "") ? observations.sources[name] : name;
@@ -169,7 +172,7 @@ function canonicalise(model, claims, instances, mode, warnings) {
 //
 // -----------------------------------------------------------------------------
 
-/** A log's JSON as Python's `observationsFromJson` returns it: typed instances only, and an explicit `scope`. */
+/** Copy a well-formed log's JSON, retaining only instance types and making `scope` explicit; does not validate it. */
 export function observationsFromJson(data) {
 	return {
 		format: OBSERVATIONS_FORMAT, obs: { ...clone(data.obs), scope: data.obs.scope ?? null }, sources: { ...data.sources },
@@ -215,7 +218,7 @@ export function mergeObservationLogs(model, logs) {
 	return out ?? { format: OBSERVATIONS_FORMAT, obs: { ontology: model.namespace, scope: null }, sources: {}, instances: {}, claims: [], retractions: [] };
 }
 
-/** Apply withdrawals, identity links and supersession, and mark conflicting claims across sources. */
+/** Apply withdrawals, identity links and supersession, and mark conflicts. `strict` mode throws on identity conflicts; otherwise they become warnings. */
 export function reconcileObservations(model, observations, mode = "lenient") {
 	const instances = observations.instances, warnings = [];
 	const attrOf = (claim, registry) => Object.hasOwn(claim, "p") ? model.lookup(registry[claim.s]?.type, claim.p) : undefined;

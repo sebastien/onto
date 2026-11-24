@@ -35,6 +35,7 @@ NUMERIC = ("Integer", "Number", "Amount", "Percent")
 
 
 def rootSteps(path: Expression) -> list[Any]:
+	"""Return `path` steps without an initial root marker."""
 	steps = path["path"]
 	return steps[1:] if steps[:1] == [{"root": True}] else steps
 
@@ -60,6 +61,7 @@ def enclosingScope(path: list[Any], scopes: list[BindingScope]) -> BindingScope 
 
 
 def compatible(model: Model, actual: ResolvedType, expected: ResolvedType) -> bool:
+	"""Check whether the inferred value is compatible with the target type."""
 	if actual.kind == expected.kind == "builtin":
 		if actual.builtin != expected.builtin and {actual.builtin, expected.builtin} != {"Integer", "Number"}:
 			return False
@@ -82,6 +84,7 @@ def compatible(model: Model, actual: ResolvedType, expected: ResolvedType) -> bo
 
 
 def checkAssignment(model: Model, inferred: Inferred, expected: ResolvedType, collection: bool, what: str) -> None:
+	"""Validate an inferred assignment against its target."""
 	actual, plural = inferred
 	if plural and not collection:
 		raise ValueError(f"{what}: a collection cannot supply a single value")
@@ -372,6 +375,6 @@ def bindingFromJson(ontology: Ontology, data: Any, name: str = "binding.json", l
 	return loaded
 
 
-__all__ = ["Operator", "resolveBinding", "loadBinding", "formatBinding", "bindingFromJson"]
+__all__ = ["Operator", "resolveBinding", "loadBinding", "formatBinding", "bindingFromJson", "rootSteps", "enclosingPath", "enclosingScope", "compatible", "checkAssignment", "checkScalarTarget", "ExpressionResolver", "Inferred"]
 
 # EOF

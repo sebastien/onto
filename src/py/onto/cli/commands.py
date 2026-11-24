@@ -107,6 +107,7 @@ def sourceToken(template: str | None, path: str) -> str:
 
 
 def mergedLogs(ontology: Ontology, logs: list[tuple[Entry, Observations]]) -> dict[str, Any]:
+	"""Merge observation `logs` while retaining each entry's source location."""
 	return mergeObservationLogs(ontology, [log for _, log in logs], locations=[Loc(e.path, e.line) for e, _ in logs])
 
 

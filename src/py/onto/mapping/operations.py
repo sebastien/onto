@@ -31,6 +31,7 @@ from .parser import parseMapping, readMappingJson
 
 
 def contextModel(primary: Ontology, contexts: list[Ontology]) -> Model:
+	"""Build the ontology model for the mapping context."""
 	decls = {}
 	for ontology in [primary] + contexts:
 		for decl in ontology.decls:
@@ -547,6 +548,6 @@ def mappingFromJson(fromOntology: Ontology, toOntology: Ontology, data: Any, nam
 	return loaded
 
 
-__all__ = ["Operator", "parseMappings", "resolveMapping", "loadMapping", "formatMapping", "mappingFromJson"]
+__all__ = ["Operator", "parseMappings", "resolveMapping", "loadMapping", "formatMapping", "mappingFromJson", "contextModel", "correspondenceScopes", "correspondenceTarget", "acceptedTypes"]
 
 # EOF

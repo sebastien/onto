@@ -9,7 +9,7 @@
 import { Any, Bool, DateOnly, DateTime, Decimal, Gap, Num, Text, Timed, codec, codes, either, refine, rest, transform, where } from "hexa/shapes.js";
 import { Transform } from "hexa/template.js";
 import { Codec, compileShape } from "hexa/shape.js";
-import { FunctionEvaluator, arithmetic, patternFormat, patternParse } from "./functions.js";
+import { FunctionEvaluator, arithmetic, joinText, patternFormat, patternParse, splitText } from "./functions.js";
 import { ABSENT_VALUE, RE_DURATION, UNKNOWN, decimalText, decodeKey, handleOf, isAbsent, isRef, isSet, isUnknown, parseInterval, timestampValue, uniqueByJson, sortedByJson } from "./values.js";
 
 // -----------------------------------------------------------------------------
@@ -37,7 +37,7 @@ const EVALUATOR = new FunctionEvaluator();
 
 const isPlainObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 
-/** A document value in the spec-02 JSON encoding, untyped: numbers become decimal text, lists sets. */
+/** Convert an untyped document value to spec-02 encoding: numbers become decimal text and lists become deduplicated sets without null or absent members. */
 export function documentValue(value) {
 	if (value === null || typeof value === "boolean" || typeof value === "string") return value;
 	if (typeof value === "number") return decimalText(value);
@@ -59,7 +59,7 @@ export function textOf(value) {
 	return null;
 }
 
-/** One application gives its value; several (collection arguments) give a set; any failure is a gap. */
+/** Return a single complete outcome's value or a deduplicated set of outcomes; any reported failure is a gap. */
 export function resultValue(results, reason) {
 	if (results.some(item => item.reason)) throw new Gap(reason);
 	if (results.length === 1 && !results[0].partial) return results[0].value;
@@ -172,6 +172,7 @@ function handle(typeName, key) {
 	catch { throw new Gap(Handle.TypeMismatch); }
 }
 
+/** Build a scoped target handle, decoding a source key when its type prefix and encoding match. */
 export function sourceHandle(typeName, scope, source, sourceType) {
 	const short = sourceType.split("/").at(-1), prefix = short + "_";
 	const key = source.startsWith(prefix) ? decodeKey(source.slice(prefix.length)) : null;
@@ -193,6 +194,7 @@ function reference(typePath, key) {
 	catch { throw new Gap(Ref.TypeMismatch); }
 }
 
+/** Decode a handle or reference's key for `typeName`; absent stays absent and invalid handles produce a gap. */
 export function handleKey(value, typeName) {
 	if (isAbsent(value)) return ABSENT_VALUE;
 	const ref = isPlainObject(value) ? value.ref : value, prefix = typeName.split("/").at(-1) + "_";
@@ -355,12 +357,11 @@ export const EpochDate = codec("Onto.EpochDate", { source: either(Num, Text), ca
 export const IntegerText = codec("Onto.IntegerText", { source: either(Text, Num), canonical: refine(Decimal, Integral), parse: integerParse, format: value => value, gaps: ["Invalid"],
 	examples: [{ input: 6, output: "6", direction: "forward" }, { input: "6.5", gap: "Invalid" }] });
 export const SplitText = codec("Onto.SplitText", { source: Text, canonical: { set: [Text] }, params: { Separator: Text },
-	parse: (separator, value) => ({ set: [...new Set(value.split(separator).filter(Boolean))].sort() }),
+	parse: (separator, value) => { try { return { set: splitText(value, separator) }; } catch { throw new Gap(SplitText.Invalid); } },
 	format: (separator, value) => {
-		if (value.set.some(member => !member || member.includes(separator))) throw new Gap(SplitText.Unformattable);
-		return [...value.set].sort().join(separator);
+		try { return joinText(value.set, separator); } catch { throw new Gap(SplitText.Unformattable); }
 	},
-	examples: [{ arguments: [","], input: "b,a", output: { set: ["a", "b"] }, direction: "forward" }] });
+	gaps: ["Invalid"], examples: [{ arguments: [","], input: "b,a", output: { set: ["a", "b"] }, direction: "forward" }] });
 export const DateTimePattern = codec("Onto.DateTimePattern", { source: Text, canonical: refine(DateTime, Timed), params: { Pattern: Text },
 	parse: (pattern, value) => { try { return patternParse(value, pattern, true); } catch { throw new Gap(DateTimePattern.Invalid); } },
 	format: (pattern, value) => { try { return patternFormat(value, pattern); } catch { throw new Gap(DateTimePattern.Unformattable); } },

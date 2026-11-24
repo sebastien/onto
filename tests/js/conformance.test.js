@@ -1,15 +1,15 @@
-// Replay what the Python suite ran on hexa (recorded by `tests/conformance.py`) and compare with Python's output.
-//
-//   ONTO_CONFORMANCE=build/conformance.json python -m pytest -p tests.conformance && bun test tests/js/conformance.test.js
+/** Module: conformance — replay Python's recorded hexa cases and compare outputs.
+ * `make test-js` records the fixture before running this suite.
+ */
 
-import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { expect, test } from "bun:test";
 import { Failure } from "hexa/shapes.js";
 import { failureFromData } from "hexa/core.js";
 import { http } from "hexa/http.js"; // Also declares the `Request` codes of failed requests that journals name.
 import { run } from "hexa/runtime.js";
-import { Model, ViewOperator, ViewReadError, loadBindingProgram, loadMappingProgram, printObservationsLog } from "../../src/js/onto/index.js";
+import { Model, ViewOperator, ViewReadError, loadBindingProgram, loadMappingProgram, printObservationsCompact, printObservationsLog } from "../../src/js/onto/index.js";
 import { pyJson, valueKey } from "../../src/js/onto/values.js";
 
 const PATH = process.env.ONTO_CONFORMANCE ?? "build/conformance.json";
@@ -148,8 +148,8 @@ async function replay(item, live = null) {
 			...(live ?? (item.journal ? { replay: get(item.journal) } : {})) };
 		if (item.method === "report") return operator.report(item.view, item.seed, item.fields, options);
 		const observations = await operator.retrieve(item.view, item.seed, item.fields, options);
-		const print = compact => { try { return printObservationsLog(operator.targetModel, observations, { compact }); } catch { return null; } };
-		return { observations, log: print(false), compact: print(true) };
+		const print = printer => { try { return printer(operator.targetModel, observations); } catch { return null; } };
+		return { observations, log: print(printObservationsLog), compact: print(printObservationsCompact) };
 	}
 	const model = new Model(get(item.model));
 	const program = item.kind === "binding"
@@ -180,7 +180,10 @@ else for (const [index, item] of data.cases.entries()) {
 		catch (error) { failure = error; }
 		if (item.error) {
 			expect(failure, `Python raised ${JSON.stringify(item.error)}`).toBeDefined();
-			if (item.error.failure && failure instanceof Failure) expect([name(failure.kind), name(failure.code)]).toEqual([item.error.failure, item.error.code]);
+			if (item.error.failure) {
+				expect(failure).toBeInstanceOf(Failure);
+				expect([name(failure.kind), name(failure.code)]).toEqual([item.error.failure, item.error.code]);
+			}
 			return;
 		}
 		if (failure) throw failure;

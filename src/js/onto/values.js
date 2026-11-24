@@ -1,4 +1,4 @@
-/** Module: values — spec-02 value helpers shared by the runtime, matching the Python implementation byte for byte. */
+/** Module: values — spec-02 value helpers shared by the runtime, with Python-compatible formatting. */
 
 // -----------------------------------------------------------------------------
 //
@@ -6,11 +6,17 @@
 //
 // -----------------------------------------------------------------------------
 
+/** Sentinel for an unbound value; distinct from an observed null. */
 export const ABSENT_VALUE = Object.freeze({ absent: true });
+/** Sentinel for an unknown observed value. */
 export const UNKNOWN = Object.freeze({ unknown: true });
+export const RE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+export const RE_PATH = /^[A-Za-z_][A-Za-z0-9_]*(?:\/[A-Za-z_][A-Za-z0-9_]*)*$/;
 export const RE_DECIMAL = /^([+-]?)([0-9]*(?:\.[0-9]*)?)(?:[eE]([+-]?[0-9]+))?$/;
 export const RE_TIME = /^[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]+)?)?(?:Z|[+-][0-9]{2}:[0-9]{2})?)?$/;
 export const RE_DURATION = /^P(?=[0-9]|T[0-9])(?:[0-9]+Y)?(?:[0-9]+M)?(?:[0-9]+W)?(?:[0-9]+D)?(?:T(?=[0-9])(?:[0-9]+H)?(?:[0-9]+M)?(?:[0-9]+(?:\.[0-9]+)?S)?)?$/;
+// Python's str.isspace(), which str.strip() removes.
+const PY_SPACE = "\t\n\v\f\r\x1c\x1d\x1e\x1f \x85\xa0                　";
 
 // -----------------------------------------------------------------------------
 //
@@ -68,7 +74,7 @@ function ordinal(year, month, day) {
 //
 // -----------------------------------------------------------------------------
 
-/** Python's `json.dumps(value, sort_keys=sortKeys, ensure_ascii=ascii)`, used wherever Python orders or dedupes by it. */
+/** Python-style JSON formatting for ordering and deduplication; rejects non-finite numbers. */
 export function pyJson(value, { sortKeys = true, ascii = true } = {}) {
 	if (value === null || value === undefined) return "null";
 	if (value === true) return "true";
@@ -113,10 +119,12 @@ export function clone(value) {
 	return value === undefined ? undefined : structuredClone(value);
 }
 
+/** True for `undefined` or the exact absent sentinel shape. */
 export function isAbsent(value) {
 	return value === undefined || isObject(value) && Object.keys(value).length === 1 && value.absent === true;
 }
 
+/** True for the exact unknown sentinel shape. */
 export function isUnknown(value) {
 	return isObject(value) && Object.keys(value).length === 1 && value.unknown === true;
 }
@@ -186,7 +194,7 @@ export function timestampValue(text) {
 		const time = /^T([0-9]{2}):([0-9]{2})(?::([0-9]{2})(?:\.([0-9]+))?)?(Z|[+-][0-9]{2}:[0-9]{2})?$/.exec(text.slice(10));
 		const [, hh, mm, ss = "00", digits = "", zone] = time;
 		const hour = Number(hh), minute = Number(mm), second = Number(ss);
-		// Python accepts 24:00 as the next midnight.
+		// Treat 24:00 with a zero fractional part as the next midnight.
 		const midnight = hour === 24 && minute === 0 && second === 0 && /^0*$/.test(digits);
 		if (hour > 23 && !midnight || minute > 59 || second > 59) throw new Error(`Invalid time '${text}'`);
 		seconds += BigInt(hour * 3600 + minute * 60 + second);
@@ -207,7 +215,7 @@ export function compareTimestamps(left, right) {
 	return a < b ? -1 : a > b ? 1 : 0;
 }
 
-/** A point or interval `start..end`; rejects impossible dates and reversed bounds. */
+/** Return `[start, end]` timestamps for a point or `start..end`; an open bound is null. */
 export function parseInterval(text) {
 	const parts = text.includes("..") ? text.split("..") : [text, text];
 	if (parts.length !== 2 || !parts.some(Boolean)) throw new Error(`Invalid interval '${text}'`);
@@ -244,7 +252,7 @@ export function observationStatus(value) {
 	return "supplied";
 }
 
-/** `<Type>_<encoded key>` (spec-04): every character outside `[A-Za-z0-9]` as `_` and its UTF-8 bytes in hex. */
+/** Encode each non-alphanumeric UTF-8 byte as `_` followed by uppercase hex. */
 export function encodeKey(key) {
 	let result = "";
 	for (const char of key) {
@@ -254,6 +262,7 @@ export function encodeKey(key) {
 	return result;
 }
 
+/** Decode an encoded key, returning null for malformed hex or UTF-8. */
 export function decodeKey(text) {
 	if (!/^(?:[A-Za-z0-9]|_[0-9A-F]{2})*$/.test(text)) return null;
 	const bytes = [];
@@ -271,6 +280,7 @@ export function keyText(key) {
 	throw new Error("A key must be text or a number");
 }
 
+/** Build a handle from the final type path segment and an encoded text or numeric key. */
 export function handleOf(typeName, key) {
 	return `${typeName.split("/").at(-1)}_${encodeKey(keyText(key))}`;
 }
@@ -288,6 +298,36 @@ export function uniqueByJson(items, options) {
 		if (!seen.has(key)) seen.set(key, item);
 	}
 	return [...seen.values()];
+}
+
+/** Python's `str.strip()`, which removes more whitespace than `String.prototype.trim`. */
+export function pyStrip(text) {
+	let start = 0, end = text.length;
+	while (start < end && PY_SPACE.includes(text[start])) start++;
+	while (end > start && PY_SPACE.includes(text[end - 1])) end--;
+	return text.slice(start, end);
+}
+
+/** A text value as observations write it: bare, or a JSON string when bare text would read as something else. */
+export function printText(value, inSet = false) {
+	const unsafe = !value || value !== pyStrip(value) || /[\n\r"]/.test(value) || /(^|\s)(\{|\/\/)/u.test(value) || ["?", "null"].includes(value)
+		|| value.startsWith("[") || inSet && (value === "..." || /[,\]]/.test(value));
+	return unsafe ? pyJson(value, { ascii: false }) : value;
+}
+
+/** `ObservationPrinter.value(value, typed=False)`. */
+export function printValue(value, inSet = false) {
+	if (value === null) return "null";
+	if (typeof value === "boolean") return value ? "true" : "false";
+	if (value && typeof value === "object") {
+		if (Object.hasOwn(value, "unknown")) return "?";
+		if (Object.hasOwn(value, "ref")) return value.ref;
+		const members = value.set.map(member => [printValue(member, true), member]).sort(([a], [b]) => compareCodePoints(a, b));
+		const parts = members.map(([text]) => text);
+		if (value.partial) parts.push("...");
+		return `[${parts.join(", ")}]`;
+	}
+	return printText(value, inSet);
 }
 
 // EOF

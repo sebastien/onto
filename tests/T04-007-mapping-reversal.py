@@ -142,6 +142,21 @@ def test_spelling_functions_and_builtin_inverses_reverse():
 	assert lossy == []
 
 
+@pytest.mark.parametrize("expression", [
+	'split(Tags, "")', 'join(split(Tags, ","), "")',
+	'join(split(Tags, ""), ",")',
+])
+def test_empty_split_join_separator_is_statically_lossy(expression):
+	target = loadOntology([Source("t", """@ontology RevT rev=v1
+Human
+  * Tags Text
+""")]) if expression.startswith("split(") else TARGET
+	mapping = loadMapping(SOURCE, target, Source("m", f"@mapping RevS -> RevT\nPerson -> Human\n  Tags <- {expression}\n"))
+	reversed_, lossy = mappingReverse(mapping, SOURCE, target)
+	assert not lines(reversed_)
+	assert len(lossy) == 1 and "nonempty separator" in lossy[0].reason
+
+
 def test_incomplete_date_formats_and_other_functions_are_lossy():
 	_, lossy = reverse('  Born <- date(Stamp, "YYYYMMDD")\n  Stamp <- format(Born, "YYYY-MM")\n  Label <- concat(Name, Label)\n  OwnerName <- Name ?? Label\n  Tags <- "x"\n')
 	assert {item.line: item.reason for item in lossy}.keys() == {"Stamp", "Label", "OwnerName", "Tags"}

@@ -1,6 +1,6 @@
 /** Module: functions — pure function application and exact decimal built-ins (spec-04), as `functions/runtime.py`. */
 
-import { canonicalNumber, clone, compareCodePoints, decimalParts, isSet, isUnknown, plainDecimal, pyJson, sortedByJson, timestampValue, valueKey } from "./values.js";
+import { canonicalNumber, clone, compareCodePoints, decimalParts, isSet, isUnknown, plainDecimal, printValue, pyStrip, sortedByJson, timestampValue, valueKey } from "./values.js";
 
 // -----------------------------------------------------------------------------
 //
@@ -8,6 +8,7 @@ import { canonicalNumber, clone, compareCodePoints, decimalParts, isSet, isUnkno
 //
 // -----------------------------------------------------------------------------
 
+/** Built-in name to `[minimum, maximum]` argument counts; null maximum is unbounded. */
 export const BUILTIN_ARITIES = {
 	concat: [1, null], split: [2, 2], join: [2, 2], trim: [1, 1], lower: [1, 1], upper: [1, 1], number: [1, 1], text: [1, 1],
 	date: [1, 2], datetime: [2, 2], epoch: [1, 1], format: [2, 2], sum: [1, null], multiply: [1, null], subtract: [2, 2],
@@ -15,43 +16,12 @@ export const BUILTIN_ARITIES = {
 };
 const PATTERN_TOKENS = { YYYY: "[0-9]{4}", MM: "[0-9]{2}", DD: "[0-9]{2}", hh: "[0-9]{2}", mm: "[0-9]{2}", ss: "[0-9]{2}", Z: "Z|[+-][0-9]{2}:[0-9]{2}" };
 const RE_PATTERN = /YYYY|MM|DD|hh|mm|ss|Z/g;
-// Python's str.isspace(), which str.strip() removes.
-const PY_SPACE = "\t\n\v\f\r\x1c\x1d\x1e\x1f \x85\xa0                　";
 
 // -----------------------------------------------------------------------------
 //
 // UTILITIES
 //
 // -----------------------------------------------------------------------------
-
-export function pyStrip(text) {
-	let start = 0, end = text.length;
-	while (start < end && PY_SPACE.includes(text[start])) start++;
-	while (end > start && PY_SPACE.includes(text[end - 1])) end--;
-	return text.slice(start, end);
-}
-
-/** A text value as observations write it: bare, or a JSON string when bare text would read as something else. */
-export function printText(value, inSet = false) {
-	const unsafe = !value || value !== pyStrip(value) || /[\n\r"]/.test(value) || /(^|\s)(\{|\/\/)/u.test(value) || ["?", "null"].includes(value)
-		|| value.startsWith("[") || inSet && (value === "..." || /[,\]]/.test(value));
-	return unsafe ? pyJson(value, { ascii: false }) : value;
-}
-
-/** `ObservationPrinter.value(value, typed=False)`. */
-export function printValue(value, inSet = false) {
-	if (value === null) return "null";
-	if (typeof value === "boolean") return value ? "true" : "false";
-	if (value && typeof value === "object") {
-		if (Object.hasOwn(value, "unknown")) return "?";
-		if (Object.hasOwn(value, "ref")) return value.ref;
-		const members = value.set.map(member => [printValue(member, true), member]).sort(([a], [b]) => compareCodePoints(a, b));
-		const parts = members.map(([text]) => text);
-		if (value.partial) parts.push("...");
-		return `[${parts.join(", ")}]`;
-	}
-	return printText(value, inSet);
-}
 
 function numeric(value) {
 	if (typeof value !== "string") throw new Error("Numbers must be decimal strings");
@@ -112,7 +82,7 @@ function divide(left, right) {
 	return digits(coefficient) > 16 ? make(roundHalfEven(coefficient, 10n), exponent + 1) : make(coefficient, exponent);
 }
 
-/** Exact decimal arithmetic, spelled as Python's `Decimal` results are. */
+/** Decimal arithmetic on string arguments; inexact division rounds to 16 significant digits. */
 export function arithmetic(name, args) {
 	const values = args.map(numeric);
 	let result;
@@ -134,6 +104,7 @@ function isoDate(days) {
 	return date.toISOString().slice(0, 10);
 }
 
+/** Parse date pattern tokens into validated ISO text; `withTime` requires hh, mm and ss. */
 export function patternParse(value, pattern, withTime) {
 	const tokens = new Set();
 	let regex = "", offset = 0;
@@ -157,6 +128,7 @@ export function patternParse(value, pattern, withTime) {
 	return iso;
 }
 
+/** Format validated ISO date or date-time text, throwing if a requested field is missing. */
 export function patternFormat(value, pattern) {
 	timestampValue(value);
 	const fields = { YYYY: value.slice(0, 4), MM: value.slice(5, 7), DD: value.slice(8, 10) };
@@ -171,6 +143,21 @@ export function patternFormat(value, pattern) {
 	});
 }
 
+/** Split text into its distinct nonempty members. */
+export function splitText(value, separator) {
+	if (!separator) throw new Error("split requires a nonempty separator");
+	return [...new Set(value.split(separator).filter(Boolean))].sort(compareCodePoints);
+}
+
+/** Join members only when splitting the result recovers the same set. */
+export function joinText(members, separator) {
+	if (!separator) throw new Error("join requires a nonempty separator");
+	const expected = [...new Set(members)].sort(compareCodePoints);
+	const result = expected.join(separator), actual = splitText(result, separator);
+	if (actual.length !== expected.length || actual.some((member, index) => member !== expected[index])) throw new Error("join cannot represent collection");
+	return result;
+}
+
 /** A spec-04 built-in applied to one combination of arguments. */
 export function builtin(name, args) {
 	if (["sum", "multiply", "subtract", "divide"].includes(name)) return arithmetic(name, args);
@@ -180,7 +167,7 @@ export function builtin(name, args) {
 		if (args[0].partial) throw new Error(`'${name}' requires a complete collection`);
 		if (name === "count") return String(args[0].set.length);
 		if (typeof args[1] !== "string" || args[0].set.some(item => typeof item !== "string")) throw new Error("join requires texts");
-		return [...args[0].set].sort(compareCodePoints).join(args[1]);
+		return joinText(args[0].set, args[1]);
 	}
 	if (name === "date" && args.length === 1) {
 		const seconds = numeric(args[0]);
@@ -195,7 +182,7 @@ export function builtin(name, args) {
 	if (name === "trim") return pyStrip(args[0]);
 	if (name === "lower") return args[0].toLowerCase();
 	if (name === "upper") return args[0].toUpperCase();
-	if (name === "split") return { set: [...new Set(args[0].split(args[1]).filter(Boolean))].sort(compareCodePoints) };
+	if (name === "split") return { set: splitText(args[0], args[1]) };
 	if (name === "number") return canonicalNumber(args[0]);
 	if (name === "date" || name === "datetime") return patternParse(args[0], args[1], name === "datetime");
 	if (name === "epoch") {
@@ -238,16 +225,20 @@ export function valueIdentity(value, numeric, numericRange = false) {
 /**
  * Apply resolved function names; one outcome per Cartesian application.
  *
- * `functions`: name → `{args: [{collection, numeric}], nulls}` with an implementation in `implementations`;
- * `maps`: name → `{lines: [[from, to], ...]}`; `typed(value, type)` checks and canonicalises values
- * against a bundle type (see `types.js`) and defaults to the identity.
+ * `functions`: name → `{args: [type, ...], result: type, nulls}` with an implementation in `implementations`.
+ * `maps`: name → `{from: type, to: type, lines: [[fromValue, toValue], ...]}`.
+ * `typed(value, type)` checks and canonicalises values against a bundle type (see `types.js`);
+ * it defaults to the identity.
  */
 export class FunctionEvaluator {
 	constructor({ functions = {}, maps = {}, implementations = {}, typed = (value) => value } = {}) {
 		Object.assign(this, { functions, maps, implementations, typed });
 	}
 
-	/** Configuration errors throw; domain failures return reasons. */
+	/**
+	 * Return `{value, reason, partial}` outcomes for Cartesian applications of lifted sets.
+	 * Configuration errors throw; domain failures have a null value and a reason string.
+	 */
 	evaluate(name, args) {
 		const fn = this.functions[name], map = this.maps[name];
 		let minimum, maximum;

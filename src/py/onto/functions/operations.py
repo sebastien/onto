@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 
 
 def resolveSignature(model: Model, signature: SignatureType) -> ResolvedType:
+	"""Resolve and validate a function signature type against `model`."""
 	if signature.path:
 		decl = model.get(signature.path)
 		if not decl or decl.kind not in ("entity", "type") and not isAssociation(decl):
@@ -233,6 +234,12 @@ def functionsFromJson(ontologies: list[Ontology], data: Any, name: str = "functi
 		diag.error("json", str(error), Loc(name, 0))
 		raise FormatError(diag.items) from error
 	return loaded
+
+
+__all__ = [
+	"resolveSignature", "exampleValue", "NUMERIC", "ruleTypesCompatible", "checkRules",
+	"Operator", "resolveFunctions", "loadFunctions", "formatFunctions", "functionsFromJson",
+]
 
 
 # EOF

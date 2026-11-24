@@ -218,6 +218,7 @@ class Calls:
 		self.used = used
 
 	def transform(self, name: str) -> AnyValue:
+		"""Resolve a built-in or declared transform and record its use."""
 		if name in V.BUILTINS:
 			result = V.builtin(name)
 		else:
@@ -343,6 +344,7 @@ class ScopeCompiler:
 		return None
 
 	def attribute(self, line: BindingLine) -> Attr:
+		"""Resolve the line's target attribute, or raise a type mismatch."""
 		attr = self.model.lookup(self.scope.type, line.target)
 		if attr is None:
 			raise CompileError(V.BindingCodes.TypeMismatch, f"Unknown attribute '{line.target}' of '{self.scope.type}'")
@@ -362,6 +364,7 @@ class ScopeCompiler:
 		return result
 
 	def fieldPath(self, key: tuple) -> str:
+		"""Render a relative position as a binding document path."""
 		steps = list(self.steps) + [keyStep(step) for step in key]
 		if steps and isLevel(steps[0]):
 			steps.insert(0, {"root": True})
@@ -407,6 +410,7 @@ class ScopeCompiler:
 				self.positions[key].nulls = slot(slotName("Bind", self.short, "Nulls", fieldName([EACH if step == "*" else step for step in key])), Null)
 
 	def linePaths(self, expr: Expression) -> list[tuple]:
+		"""Collect the record-relative paths read by an expression."""
 		if "path" in expr:
 			first = expr["path"][0]
 			return [] if isinstance(first, dict) and "each" not in first else [self.relative(expr["path"])]
@@ -515,6 +519,7 @@ class ScopeCompiler:
 		return fields[name]
 
 	def pathValue(self, steps: list[AnyValue]) -> AnyValue:
+		"""Compile a path into a captured or derived template value."""
 		first = steps[0]
 		if isinstance(first, dict) and ("root" in first or "up" in first):
 			up = first.get("up", 0)
@@ -577,6 +582,7 @@ class ScopeCompiler:
 		return derive(V.When, derive(V.TextEquals, self.pathValue(when["path"]), when["value"]), value)
 
 	def lineValue(self, line: BindingLine) -> AnyValue:
+		"""Compile a binding line, including null policy and condition."""
 		expr = line.expr
 		if line.facet:
 			value = True
@@ -606,6 +612,7 @@ class ScopeCompiler:
 		return value
 
 	def template(self) -> dict[str, AnyValue]:
+		"""Build the scope's record template from its lines and metadata."""
 		scope = self.scope
 		values: dict[str, AnyValue] = {}
 		facets: dict[str, AnyValue] = {}
@@ -653,6 +660,7 @@ class BindingCompiler:
 			self.atSlot = slot("Bind.At", Any)
 
 	def attributeSlot(self, typePath: str, attrPath: str) -> AnyValue:
+		"""Return the cached attribute slot, declaring it on first use."""
 		name = slotName(typePath, attrPath)
 		if name not in self.slots:
 			attr = self.model.lookup(typePath, attrPath)
@@ -675,6 +683,7 @@ class BindingCompiler:
 						continue
 
 	def leaves(self, owner: str, member: str, seen: frozenset[str] = frozenset()) -> list[str]:
+		"""Expand a structure member into leaf paths, stopping at cycles."""
 		attr = self.model.lookup(owner, member)
 		structure = self.model.structOf(attr.type) if attr else None
 		if not structure or not structure.fields or structure.path in seen:
@@ -682,9 +691,11 @@ class BindingCompiler:
 		return [leaf for item in structure.fields for leaf in self.leaves(owner, f"{member}.{item.name}", seen | {structure.path})]
 
 	def scopes(self) -> list[BindingScope]:
+		"""Return binding scopes in type and document-path order."""
 		return sorted(self.binding.scopes, key=lambda item: (item.type, printExpression(item.path, binding=True)))
 
 	def enclosing(self, scope: BindingScope, up: int) -> BindingScope | None:
+		"""Find the scope enclosing `scope` by `up` levels, if any."""
 		try:
 			path = enclosingPath(rootSteps(scope.path), up, self.binding.scopes)
 		except ValueError:
@@ -699,6 +710,7 @@ class BindingCompiler:
 		return scope.expression(rootExpression(at))
 
 	def compile(self) -> list[ScopeCompiler]:
+		"""Declare slots and plan uniquely named scopes in normal-form order."""
 		self.declareSlots()
 		ordered = self.scopes()
 		counts: dict[str, int] = {}
@@ -851,6 +863,7 @@ class MappingScopeCompiler:
 		return self.roots[key]
 
 	def pathValue(self, steps: list[str]) -> tuple[AnyValue, list[Segment]]:
+		"""Compile a source path and return its value and resolved segments."""
 		segments = self.segments(steps)
 		value = optional(self.position(segments[0]))
 		if len(segments) > 1:
@@ -911,6 +924,7 @@ class MappingScopeCompiler:
 	# --- expressions -----------------------------------------------------------
 
 	def expression(self, expr: Expression) -> AnyValue:
+		"""Compile a mapping expression into a template value."""
 		if expr.get("path") == SELF:
 			# `$`: the scope instance, as a reference with its target instances
 			return optional(self.root("@self"))
@@ -948,6 +962,7 @@ class MappingScopeCompiler:
 		return derive(V.Ref, typePath, derive(V.builtin("concat"), optional(self.root("@scope")), "/", key))
 
 	def paths(self, expr: Expression | None) -> list[list[str]]:
+		"""Collect source paths read by a mapping expression."""
 		if expr is None:
 			return []
 		if "path" in expr:
@@ -1016,6 +1031,7 @@ class MappingScopeCompiler:
 		return value, info
 
 	def template(self) -> dict[str, AnyValue]:
+		"""Build the target record template and collect its line metadata."""
 		candidates = self.owner.mapping.header.get("candidates") is True
 		sections: dict[str, dict] = {"values": {}, "facets": {}, "links": {}}
 		qualifiers = {}
@@ -1087,6 +1103,7 @@ class MappingScopeCompiler:
 		return {"handle": derive(V.KeyedHandle, short, value, optional(self.root("@scope")), optional(self.root("@handle")), self.scope.source)}
 
 	def shape(self) -> AnyValue:
+		"""Build the loose input shape from registered root and field slots."""
 		fields = {f"{key}?": slotValue for key, slotValue in self.roots.items()}
 		fields |= {f"{key}?": tolerant(position) for key, position in self.positions.items()}
 		return loose(fields)

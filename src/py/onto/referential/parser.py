@@ -19,6 +19,7 @@ from .model import REFERENTIAL_FORMAT, Policy, Referential
 
 
 def checkPolicyShape(policy: Policy) -> None:
+	"""Validate the structural constraints of `policy`."""
 	if not isPath(policy.type):
 		raise ValueError("A policy must name an instance type")
 	if any(not isinstance(key, str) or not isName(key) for key in policy.keys) or len(set(policy.keys)) != len(policy.keys):
@@ -34,6 +35,7 @@ def checkPolicyShape(policy: Policy) -> None:
 
 
 def readReferentialJson(data: Any) -> Referential:
+	"""Decode and validate referential JSON data."""
 	value = jsonObject(data, ("format", "namespace", "policies"), ("header", "uses"))
 	if value["format"] != REFERENTIAL_FORMAT:
 		raise ValueError("Unknown referential JSON format")
@@ -137,6 +139,6 @@ def parseReferential(sources: list[Source]) -> Referential:
 	return ref
 
 
-__all__ = ["parseReferential"]
+__all__ = ["parseReferential", "checkPolicyShape", "readReferentialJson"]
 
 # EOF

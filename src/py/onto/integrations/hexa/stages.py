@@ -199,17 +199,20 @@ class ClaimsBuilder:
 		self.n = 0
 
 	def alias(self, token: str) -> str:
+		"""Return a stable log-local alias for a source token."""
 		if token not in self.aliases:
 			self.aliases[token] = f"d{len(self.aliases) + 1}"
 			self.data["sources"][self.aliases[token]] = token
 		return self.aliases[token]
 
 	def instance(self, handle: str, typePath: str) -> None:
+		"""Declare an instance, retaining a more specific type when available."""
 		existing = self.data["instances"].get(handle)
 		if existing is None or self.model.isA(typePath, existing["type"]) and typePath != existing["type"]:
 			self.data["instances"][handle] = {"type": typePath}
 
 	def add(self, claim: dict, retraction: bool = False) -> dict:
+		"""Number and append a claim or retraction to the log."""
 		self.n += 1
 		claim = {"n": self.n, **claim}
 		self.data["retractions" if retraction else "claims"].append(claim)
@@ -235,6 +238,7 @@ class ClaimsBuilder:
 		self.data["claims"].append({"n": n, "s": handle, "facet": name, **meta, **({"ctx": ctx} if ctx else {})})
 
 	def contextual(self, typePath: str, member: str, isFacet: bool) -> bool:
+		"""Check whether a facet or its member requires a context."""
 		facet = self.model.facets(typePath).get(member if isFacet else member.split(".")[0])
 		return bool(facet is not None and (isFacet or self.model.facetOf(typePath, member) is facet) and annotation(facet.ann, "ctx"))
 
@@ -273,6 +277,7 @@ class ClaimsBuilder:
 				self.add({"rel": decl.path, "roles": roles, **meta})
 
 	def finish(self) -> dict:
+		"""Add implicit referenced instances and return the log with sorted instances."""
 		for handle, typePath in self.implicit.items():
 			if handle not in self.data["instances"]:
 				self.data["instances"][handle] = {"type": typePath}

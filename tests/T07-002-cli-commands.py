@@ -189,12 +189,14 @@ IMPLEMENTATIONS = {
 
 @pytest.fixture
 def implementation(workspace, monkeypatch):
+	names = set()
 	def write(name: str, yearly: str) -> str:
 		(workspace / f"{name}.py").write_text(IMPLEMENTATION % yearly)
+		names.add(name)
 		monkeypatch.setattr(sys, "path", list(sys.path))
 		return name
 	yield write
-	for name in ("markets_good", "markets_bad"):
+	for name in names:
 		sys.modules.pop(name, None)
 
 
@@ -232,9 +234,6 @@ def test_fn_test_imports_multiple_modules_from_the_working_directory(workspace):
 def test_fn_test_unknown_module_is_a_usage_error(workspace):
 	status, _, err = onto("fn", "test", "--impl", "no_such_module")
 	assert status == 2 and "cannot import --impl no_such_module" in err
-
-
-# EOF
 
 
 def test_lossy_lines_carry_their_own_location(workspace):
@@ -427,3 +426,6 @@ def test_run_rejects_overlapping_handles_without_a_shared_scope(namesMapping, fi
 def test_run_needs_a_binding_or_mapping(workspace):
 	status, _, err = onto("run", "finance/finance.onto", "x.json")
 	assert status == 1 and "expected binding or mapping" in err
+
+
+# EOF

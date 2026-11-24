@@ -218,3 +218,6 @@ def test_as_prints_and_round_trips():
 def test_without_a_valid_as_the_reference_is_ambiguous_or_rejected(annotation: str):
 	with pytest.raises(FormatError):
 		loadMapping(AS_SOURCE, AS_TARGET, Source("m", AS_MAPPING.replace(", as=Matter", annotation)))
+
+
+# EOF

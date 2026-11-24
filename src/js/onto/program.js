@@ -19,7 +19,7 @@ export class Registry extends Map {
 	has(name) { return super.has(name) || REGISTRY.has(name); }
 	get(name) { return super.has(name) ? super.get(name) : REGISTRY.get(name); }
 
-	/** Declare encoded slots: local ones in this registry, `global` ones process-wide as Python declares them. */
+	/** Declare encoded slots, skipping names already present locally; global slots use hexa's slot registry. */
 	declareSlots(slots) {
 		for (const [name, { shape, global }] of Object.entries(slots)) {
 			if (super.has(name)) continue;
@@ -34,6 +34,7 @@ export class Registry extends Map {
 		return this;
 	}
 
+	/** Decode against this registry without node or byte limits. */
 	decode(value) {
 		return decode(value, null, { registry: this, maxNodes: Infinity, maxBytes: Infinity });
 	}

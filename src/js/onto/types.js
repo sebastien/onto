@@ -3,11 +3,11 @@
  * `FunctionEvaluator.typedValue` and `ObservationResolver.scalar` do.
  *
  * A type is the bundle's descriptor of a resolved signature: `{kind, builtin?, values?, open?,
- * hierarchical?, ordered?, unit?, element?, collection?, numeric?}`.
+ * hierarchical?, ordered?, unit?, element?, collection?, numeric?, numericRange?}`.
  */
 
-import { pyStrip, valueIdentity } from "./functions.js";
-import { RE_DURATION, canonicalNumber, compareCodePoints, compareTimestamps, decimalParts, isSet, isUnknown, pyJson, sortedByJson, timestampValue } from "./values.js";
+import { valueIdentity } from "./functions.js";
+import { RE_DURATION, RE_NAME, RE_PATH, canonicalNumber, compareCodePoints, compareTimestamps, decimalParts, isSet, isUnknown, pyJson, pyStrip, sortedByJson, timestampValue } from "./values.js";
 
 // -----------------------------------------------------------------------------
 //
@@ -15,8 +15,6 @@ import { RE_DURATION, canonicalNumber, compareCodePoints, compareTimestamps, dec
 //
 // -----------------------------------------------------------------------------
 
-const RE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const RE_PATH = /^[A-Za-z_][A-Za-z0-9_]*(?:\/[A-Za-z_][A-Za-z0-9_]*)*$/;
 const RE_REF = /^[A-Za-z_][A-Za-z0-9_]*(?::[A-Za-z_][A-Za-z0-9_]*(?:\/[A-Za-z_][A-Za-z0-9_]*)*)?$/;
 const NUMBERS = ["Integer", "Number", "Amount", "Percent"];
 
@@ -114,7 +112,11 @@ function scalar(raw, type) {
 //
 // -----------------------------------------------------------------------------
 
-/** Validate and detach a spec-02 encoded value against its concrete signature type. */
+/**
+ * Validate and canonicalise a spec-02 value against `type`; throws on mismatch.
+ * Collections use `{set: [...], partial?: true}` and reject duplicate members.
+ * Null and unknown values pass through as detached copies.
+ */
 export function typed(value, type) {
 	if (value === null || isUnknown(value)) return structuredClone(value);
 	if (type.collection) {

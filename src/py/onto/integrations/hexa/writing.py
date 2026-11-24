@@ -164,6 +164,7 @@ class WriteCompiler:
 		return documentPath(list(scope.path["path"]) + steps)
 
 	def chosen(self, path: str) -> str | None:
+		"""Return the selected writing format for a document path, if any."""
 		entry = self.formats.entries.get(path) if self.formats else None
 		return entry.format if entry and entry.format else None
 
@@ -235,6 +236,7 @@ class WriteCompiler:
 		return steps, codec, "value", None
 
 	def scope(self, scope: BindingScope, name: str) -> WriteScope:
+		"""Compile a scope's writable fields and record unsupported lines as lossy."""
 		short = lastSegment(scope.type)
 		handleSlot = slot("Write.Root.Handle", Any)
 		positions: dict[str, AnyValue] = {"@handle": handleSlot}
@@ -295,6 +297,7 @@ class WriteCompiler:
 		return self.names.get(id(found)) if found is not None else None
 
 	def compile(self) -> list[WriteScope]:
+		"""Compile ordered scopes with names matching the reading program."""
 		ordered = self.owner.scopes()
 		counts: dict[str, int] = {}
 		for scope in ordered:
