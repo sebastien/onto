@@ -286,8 +286,30 @@ def test_meta_describes_concepts_attributes_and_dimensions(workspace):
 		"Meta_Concept__Kind hasDimension Meta_Concept_Kind\n",
 	):
 		assert text in out, text
-	# NOTE: An attribute that refers to a concept has no dimension.
+	# NOTE: An attribute that refers to a concept has no dimension: it refers to the concept.
 	assert "Thing__Other hasDimension" not in out
+	assert "Thing__Other refersTo Thing\n" in out
+	(workspace / "finance/finance-meta.obs").write_text(out)
+	status, _, err = onto("check", "finance/finance-meta.obs")
+	assert status == 0, err
+
+
+def test_meta_describes_relations_and_their_roles(workspace):
+	(workspace / "finance/meta.onto").write_text(onto("meta", "--decl", "finance/finance.onto")[1])
+	status, out, _ = onto("meta", "finance/finance.onto")
+	assert status == 0
+	for text in (
+		"Trade__Trader:Meta/Role\n  Path Trade.Trader\n  IsRequired true\n  IsMultiple true\n",
+		"Trade__Counterparty:Meta/Role\n  Path Trade.Counterparty\n  IsRequired false\n  IsMultiple true\n",
+		"Trade hasRole Trade__Trader\n",
+		"Trade__Trader refersTo Person\n",
+		# NOTE: Every binary relation is a concept; its ends are roles named after their types.
+		"Company__issues__Instrument:Meta/Concept\n  Path Company.issues.Instrument\n  Kind Relation\n",
+		"Company__issues__Instrument__Instrument:Meta/Role\n  Path Company.issues.Instrument.Instrument\n  IsRequired true\n  IsMultiple false\n",
+		"Company__issues__Instrument hasRole Company__issues__Instrument__Company\n",
+		"Company__issues__Instrument__Company refersTo Company\n",
+	):
+		assert text in out, text
 	(workspace / "finance/finance-meta.obs").write_text(out)
 	status, _, err = onto("check", "finance/finance-meta.obs")
 	assert status == 0, err

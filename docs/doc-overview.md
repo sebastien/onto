@@ -351,7 +351,10 @@ layout.
 Ontologies, observations, bindings, mappings, functions, referential policies,
 the CLI and the hexa integration are implemented in Python. Overlays (spec-03)
 and registry-backed identities (minted handles, alternate keys) are specified
-but not yet implemented. A JavaScript implementation is planned.
+but not yet implemented. A JavaScript runtime (`src/js/onto/`) executes compiled
+bindings, mappings and rooted views from a Python-built bundle, in browsers,
+Node and Bun ([spec-06](specs/spec-06-hexa.md#bundles-and-the-javascript-runtime));
+parsing and compiling remain Python-only.
 
 ## Where to go next
 

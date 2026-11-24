@@ -54,6 +54,12 @@ python -m onto --help
 The package has not been published to PyPI yet. Once released, you can
 install it with `pip install onto-lang`.
 
+Compiled bindings, mappings and rooted views also run in JavaScript (browsers,
+Node, Bun) from a bundle Python exports; see
+[spec-06](docs/specs/spec-06-hexa.md#bundles-and-the-javascript-runtime).
+`make test-js` checks that runtime against Python; it needs Bun and the sibling
+`../hexa` checkout.
+
 For publishing, see the [release instructions](docs/releasing.md).
 
 ## In a nutshell

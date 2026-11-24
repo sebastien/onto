@@ -23,7 +23,7 @@ from ..functions import FunctionEvaluator, FunctionLibrary, functionsToJson, pri
 from ..inventory import Inventory, defaultBinding, inventoryFromDocuments, printInventory
 from ..meta import META_DOMAIN, metaDeclarations, metaObservations
 from ..mapping import Mapping, mappingCoverage, mappingReverse, mappingToJson, printMapping
-from ..observations import Observations, mergeObservationLogs, observationsFromJson, observationsToJson, printObservationsLog, printObservationsState, reconcileObservations
+from ..observations import Observations, mergeObservationLogs, observationsFromJson, observationsToJson, printObservationsCompact, printObservationsLog, printObservationsState, reconcileObservations
 from ..ontology import Ontology, loadOntology, normaliseOntology, ontologyDiff, ontologyFromJson, ontologyToJson, printOntology, printOntologyDiff
 from ..referential import Referential, printReferential, referentialToJson
 from ..text import Diagnostic, FormatError, Loc, Source, annotation, layoutText
@@ -413,7 +413,8 @@ class Commands:
 		entry, log = self.observations()
 		if log is None:
 			return Result(checked=1)
-		return Result(text=printObservationsLog(self.ws.context(entry).ontology, log), checked=1)
+		printer = printObservationsCompact if self.args.compact else printObservationsLog
+		return Result(text=printer(self.ws.context(entry).ontology, log), checked=1)
 
 	# -- Mappings --------------------------------------------------------------
 

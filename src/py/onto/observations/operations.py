@@ -27,6 +27,7 @@ from ..text import (
 from .formatter import (
 	renderObservationsLog,
 	observationsToJson,
+	printObservationsCompact,
 	printObservationsLog,
 	printObservationsState,
 )
@@ -268,6 +269,10 @@ class Operator:
 		"""Print a gap-free audit log."""
 		return printObservationsLog(self.ontology, observations)
 
+	def printCompact(self, observations: Observations) -> str:
+		"""Print a gap-free audit log with compact subject blocks."""
+		return printObservationsCompact(self.ontology, observations)
+
 	def printState(self, observations: Observations) -> str:
 		"""Print an already reconciled, gap-free state."""
 		return printObservationsState(self.ontology, observations)
@@ -485,20 +490,21 @@ def resolveObservations(ontology: Ontology, doc: ObservationsDocument, mode: str
 	"""Type parsed `doc`; lenient mode holds semantically invalid statements as gaps."""
 	if mode not in ("strict", "lenient"):
 		raise ValueError("mode must be strict or lenient")
-	observations = ObservationResolver(ontology, doc).resolve(mode)
+	resolver = ObservationResolver(ontology, doc)
+	observations = resolver.resolve(mode)
 	# NOTE: Imported here: `meta` builds on the observations formatter.
 	from ..meta import metaReferenceErrors
 
 	diagnostics, unresolved = metaReferenceErrors(ontology, observations, doc)
 	if mode == "strict":
-		return validateStatements(doc, observations,
+		return validateStatements(resolver, observations,
 			diagnostics + checkExclusive(ontology, observations, doc) + checkFacetConditions(ontology, observations, doc), mode)
-	observations = validateStatements(doc, observations, diagnostics, mode)
+	observations = validateStatements(resolver, observations, diagnostics, mode)
 	if unresolved:
 		observations.instances = {handle: item for handle, item in observations.instances.items() if handle not in unresolved}
 	witnesses: dict[int, dict[int, Claim]] = {}
-	observations = validateStatements(doc, observations, checkExclusive(ontology, observations, doc, witnesses), mode)
-	observations = validateStatements(doc, observations, checkFacetConditions(ontology, observations, doc, witnesses), mode)
+	observations = validateStatements(resolver, observations, checkExclusive(ontology, observations, doc, witnesses), mode)
+	observations = validateStatements(resolver, observations, checkFacetConditions(ontology, observations, doc, witnesses), mode)
 	observations.gaps = [replace(gap, witnesses=tuple(deepcopy(claim) for claim in witnesses[gap.n].values()))
 		if gap.n in witnesses else gap for gap in observations.gaps]
 	return observations
@@ -510,13 +516,15 @@ def loadObservations(ontology: Ontology, source: Source, mode: str = "strict") -
 
 
 def formatObservations(ontology: Ontology, source: Source, form: str = "state", mode: str = "strict") -> str:
-	"""Load `source` and print its `state` or audit `log` form."""
+	"""Load `source` and print its `state`, `log` or `compact` form."""
 	log = loadObservations(ontology, source, mode)
 	if form == "log":
 		return printObservationsLog(ontology, log)
+	if form == "compact":
+		return printObservationsCompact(ontology, log)
 	if form == "state":
 		return printObservationsState(ontology, reconcileObservations(ontology, log, mode))
-	raise ValueError("form must be state or log")
+	raise ValueError("form must be state, log or compact")
 
 
 def gapWitnessesMatch(ontology: Ontology, observations: Observations, gap: Gap, name: str) -> bool:

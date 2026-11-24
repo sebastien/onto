@@ -77,6 +77,7 @@ Doc strings (`--`) are not used in observations.
 @ctx <handle> | @ctx none
 @scope <token>
 @type <handle> <Type-or-S.verb.T>
+@entity [<alias>=]<handle> <Type-or-S.verb.T>
 @implicit <handle> [<handle> ...]
 ```
 
@@ -92,6 +93,8 @@ Doc strings (`--`) are not used in observations.
   source system). Without it, handles are local to the document.
 - `@type h T` records the type of a handle without making an observation claim
   ([type-only declarations](#type-only-declarations)).
+- `@entity [a=]h T` also sets the subject of an optional indented
+  [entity block](#entity-blocks). `a` is a document-local spelling for `h`.
 - `@implicit` lists [implicit instances](#implicit-instances). The state form
   writes it; it is ignored on input (recomputed).
 
@@ -176,6 +179,37 @@ p1.Investor.RiskTolerance Medium
 ```
 
 Metadata on the header line applies to the header claim only, not the body lines.
+
+### Entity blocks
+
+```text
+@entity group1=Source_Group_5175 Household
+  -> hasMember person1
+@entity person1=Source_Client_12222 Person
+  Name.Surname Reynolds
+```
+
+This means `@type Source_Group_5175 Household`, `@type Source_Client_12222 Person`
+and exactly two claims, in order: `Source_Group_5175 hasMember Source_Client_12222`
+and `Source_Client_12222.Name.Surname Reynolds`. Unlike an ordinary record
+header, `@entity` asserts no existence or facets, carries no metadata and counts
+as no statement. Its type can also be an association or a named binary relation.
+`@type` remains a standalone declaration.
+
+- Each two-space body line supplies one `Attr.Path Value` (including association
+  roles) or `-> verb object` (an anonymous binary relation in either direction).
+  Values and metadata follow the usual rules. The next unindented line ends the
+  block. Other statements, including retractions and named links, use line form.
+- An alias is available throughout this document, including forward references
+  and across `@src` changes. It expands only in handle positions: subjects,
+  relation handles and endpoints, reference values and sets, identity links and
+  `ctx`. Text, vocabulary values, source tokens and type names are untouched.
+  Scope, reconciliation and JSON use the full handles; no identity link is made.
+- Both sides of `alias=handle` must be handles other than `none` and `null`.
+  An alias cannot be rebound to a different target or shadow a declared
+  canonical handle (including an `@type` handle or another alias's target).
+  `@entity h T` opens a block for `h`; after an alias has been bound, it can
+  reopen the same subject as `@entity alias T`.
 
 ### Relations
 
@@ -411,6 +445,14 @@ claims, one per line (no record form); ordered by `at`, then document order. Eac
 handle is typed at its first occurrence. `@src`/`@at`/`@ctx` directives are
 emitted when the source, time or context (of contextual claims) changes; metadata
 equal to the current defaults is omitted.
+
+**Compact form** (`onto log --compact`): the same audit events, metadata and
+order as log form. Consecutive field and anonymous link claims about the same
+subject may use an `@entity` block. Directives and other statements break the
+block. Short type-based aliases are bound inline for long handles used outside
+their block, or in a declaration before the claims for a repeated target with
+no block of its own. Single statements can stay flat. Expanding compact text reproduces
+the flat log; neither form reconciles the data.
 
 **State form** (comparison, diff): retractions applied, superseded claims
 removed, conflicts kept and marked `{conflict}`, identity links applied (claims

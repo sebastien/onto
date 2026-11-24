@@ -53,7 +53,7 @@ class MappingScopePlan:
 	presenceInputs: list[list[str]] = field(default_factory=list)
 	update: bool = False
 	targetInputs: list[list[str]] = field(default_factory=list)
-	sourceRefs: dict[str, tuple[str, list[str]]] = field(default_factory=dict)  # `$ref<n>` -> (source type, key segments)
+	sourceRefs: dict[str, tuple[str, list[str]]] = field(default_factory=dict)  # `@ref<n>` -> (source type, key segments)
 
 	def activeLines(self, occurrence: dict) -> list[LineInfo]:
 		"""Global lines run once; lines reading contextual slots run in their context occurrence."""
@@ -286,16 +286,16 @@ class Unfolder:
 		conflicts: dict = {}
 		tree = self.subtree(handle, plan.reach, "", meta, conflicts, context)
 		existsMeta = metaOf(existence, self.index.sources)
-		tree |= {"$handle": handle, "$type": self.index.typeOf(handle), "$scope": self.index.scope, "$at": existence.get("at"), "$src": existsMeta["src"]}
+		tree |= {"@handle": handle, "@type": self.index.typeOf(handle), "@scope": self.index.scope, "@at": existence.get("at"), "@src": existsMeta["src"]}
 		if "valid" in existence:
-			tree["$valid"] = existence["valid"]
+			tree["@valid"] = existence["valid"]
 		if plan.name in self.scopeTargets.get(handle, {}):
-			tree["$target"] = self.scopeTargets[handle][plan.name]
+			tree["@target"] = self.scopeTargets[handle][plan.name]
 		elif self.correspondence is not None and handle in self.correspondence:
-			tree["$target"] = self.targets.get(handle, {}).get(plan.target, self.correspondence[handle])
+			tree["@target"] = self.targets.get(handle, {}).get(plan.target, self.correspondence[handle])
 		if plan.readsSelf:
 			# `$` reads the instance itself: a reference translated like any other
-			tree["$self"] = self.reference(handle, {}, "", meta, conflicts, context)
+			tree["@self"] = self.reference(handle, {}, "", meta, conflicts, context)
 		for key, (typePath, keys) in plan.sourceRefs.items():
 			# `ref(S, Key)`: the source instance `<S>_<key>`, a reference translated like any other
 			value = valueAt(tree, keys)
@@ -524,7 +524,7 @@ class MappingEmitter:
 		path = entry.get("path") or []
 		if path[:1] == ["present"] and plan.presence:
 			if variant is None:
-				self.presenceGap(plan, occurrence, occurrence["value"]["$target"], reasonCode(entry["reason"]), record)
+				self.presenceGap(plan, occurrence, occurrence["value"]["@target"], reasonCode(entry["reason"]), record)
 			return
 		if len(path) < 2:
 			return
@@ -536,7 +536,7 @@ class MappingEmitter:
 			return  # a line whose condition is false demands nothing, not even a value
 		if self.inputs({**occurrence, "scope": plan.name}, info, variant[0] if variant else None)[1]:
 			return
-		handle = occurrence["value"]["$target"]
+		handle = occurrence["value"]["@target"]
 		target = f"{plan.target}[{info.key}]" if section == "facets" else f"{plan.target}.{info.key}"
 		self.gap(target, reasonCode(entry["reason"]), occurrence, handle)
 		self.markStale(plan, occurrence, info, handle, reasonCode(entry["reason"]), record, variant)
@@ -658,7 +658,7 @@ def mappingStages(program: AnyValue, plans: list[MappingScopePlan], mode: str) -
 			whenSelected = set()
 			presenceOccurrences = []
 			for handle in index.handlesOf(plan.source):
-				occurrence = unfolder.occurrence(plan, handle) or {"value": {"$handle": handle, "$scope": index.scope, "$type": index.typeOf(handle)}, "location": f"/{plan.name}/{escape(handle)}"}
+				occurrence = unfolder.occurrence(plan, handle) or {"value": {"@handle": handle, "@scope": index.scope, "@type": index.typeOf(handle)}, "location": f"/{plan.name}/{escape(handle)}"}
 				if "exists" in occurrence:
 					present.add(occurrence["location"])
 					if not plan.update and scopeSelected(plan, occurrence):
@@ -689,32 +689,32 @@ def mappingStages(program: AnyValue, plans: list[MappingScopePlan], mode: str) -
 			presenceSelected = set()
 			if presenceOccurrences:
 				projected = yield from collect(presenceStages[plan.name])(env, presenceOccurrences)
-				byLocation = {item["location"]: item["value"]["$handle"] for item in presenceOccurrences}
+				byLocation = {item["location"]: item["value"]["@handle"] for item in presenceOccurrences}
 				presenceSelected = {byLocation[item["source"]] for item in projected["value"] if isPresent(item.get("present"))}
 			resolved = iter(result["value"])
 			failed = {entry.get("source") for entry in result["ledger"]}
 			for occurrence in occurrences:
 				if occurrence["location"] in failed:
-					unresolved.append({"type": plan.target, "handle": occurrence["value"]["$handle"], "location": occurrence["location"],
+					unresolved.append({"type": plan.target, "handle": occurrence["value"]["@handle"], "location": occurrence["location"],
 						"reasons": [reasonCode(entry["reason"]) for entry in result["ledger"] if entry.get("source") == occurrence["location"]]})
 					continue
 				value = next(resolved)
 				if plan.update and plan.presence and not isPresent(value.get("present")):
 					continue
 				if occurrence["location"] in targetConflicts:
-					unresolved.append({"type": plan.target, "handle": occurrence["value"]["$handle"], "location": occurrence["location"], "reasons": [str(MappingCodes.InputConflicting)]})
+					unresolved.append({"type": plan.target, "handle": occurrence["value"]["@handle"], "location": occurrence["location"], "reasons": [str(MappingCodes.InputConflicting)]})
 					continue
 				if isinstance(value.get("handle"), str):
 					if not plan.update:
 						# An instance known only by reference (no existence claim) cannot be tested: it is not skipped
 						active = presenceSelected if plan.presence else whenSelected
-						if occurrence["location"] not in present or occurrence["value"]["$handle"] in active:
-							selected.setdefault(occurrence["value"]["$handle"], set()).add(plan.target)
-						correspondence.setdefault(occurrence["value"]["$handle"], value["handle"])
-						targets.setdefault(occurrence["value"]["$handle"], {}).setdefault(plan.target, value["handle"])
-					scopeTargets.setdefault(occurrence["value"]["$handle"], {})[plan.name] = value["handle"]
+						if occurrence["location"] not in present or occurrence["value"]["@handle"] in active:
+							selected.setdefault(occurrence["value"]["@handle"], set()).add(plan.target)
+						correspondence.setdefault(occurrence["value"]["@handle"], value["handle"])
+						targets.setdefault(occurrence["value"]["@handle"], {}).setdefault(plan.target, value["handle"])
+					scopeTargets.setdefault(occurrence["value"]["@handle"], {})[plan.name] = value["handle"]
 				elif plan.update:
-					unresolved.append({"type": plan.target, "handle": occurrence["value"]["$handle"], "location": occurrence["location"], "reasons": [str(MappingCodes.ReferenceUnmapped)]})
+					unresolved.append({"type": plan.target, "handle": occurrence["value"]["@handle"], "location": occurrence["location"], "reasons": [str(MappingCodes.ReferenceUnmapped)]})
 		skipped = {handle: set(types) - selected.get(handle, set()) for handle, types in targets.items() if set(types) - selected.get(handle, set())}
 		return {"state": state, "correspondence": correspondence, "targets": targets, "scopeTargets": scopeTargets, "unresolved": unresolved, "skipped": skipped}
 
@@ -791,7 +791,7 @@ def emitMapping(program: AnyValue, plans: list[MappingScopePlan], collected: dic
 		for skipped in scope["skipped"]:
 			occurrence = skipped["occurrence"]
 			emitter.gaps.append({key: value for key, value in skipped.items() if key != "occurrence"})
-			handle = occurrence["value"]["$target"]
+			handle = occurrence["value"]["@target"]
 			emitter.stale.append({"src": skipped["src"], "s": handle, "reason": skipped["reason"]})
 			for info in plan.activeLines(occurrence):
 				emitter.markStale(plan, occurrence, info, handle, skipped["reason"])

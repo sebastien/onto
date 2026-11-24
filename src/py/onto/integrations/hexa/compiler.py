@@ -772,7 +772,7 @@ class LineInfo:
 		return paths[self.source] if 0 <= self.source < len(paths) else []
 
 
-ROOT_KEYS = ("$handle", "$type", "$scope", "$target", "$self", "$valid", "$at", "$src")
+ROOT_KEYS = ("@handle", "@type", "@scope", "@target", "@self", "@valid", "@at", "@src")
 SELF = [{"root": True}]
 
 
@@ -800,7 +800,7 @@ class MappingScopeCompiler:
 		self.lines: list[LineInfo] = []
 		self.roots: dict[str, AnyValue] = {}
 		self.when = self.compiledCondition(scope.when)
-		self.sourceRefs: dict[str, tuple[str, list[str]]] = {}  # `$ref<n>` -> (source type, key path): `ref(S, Key)`
+		self.sourceRefs: dict[str, tuple[str, list[str]]] = {}  # `@ref<n>` -> (source type, key path): `ref(S, Key)`
 
 	# --- paths ---------------------------------------------------------------
 
@@ -913,14 +913,14 @@ class MappingScopeCompiler:
 	def expression(self, expr: Expression) -> AnyValue:
 		if expr.get("path") == SELF:
 			# `$`: the scope instance, as a reference with its target instances
-			return optional(self.root("$self"))
+			return optional(self.root("@self"))
 		if "path" in expr:
 			return self.pathValue(expr["path"])[0]
 		if "call" in expr:
 			name, args = expr["call"], expr["args"]
 			if self.isSourceRef(expr):
 				# Resolved while unfolding: the source instance's handle from its key, as a reference read from the state.
-				key = next((name for name, item in self.sourceRefs.items() if item == (args[0]["path"][0], args[1]["path"])), f"$ref{len(self.sourceRefs)}")
+				key = next((name for name, item in self.sourceRefs.items() if item == (args[0]["path"][0], args[1]["path"])), f"@ref{len(self.sourceRefs)}")
 				self.sourceRefs[key] = (args[0]["path"][0], args[1]["path"])
 				return optional(self.root(key))
 			if name == "ref":
@@ -929,7 +929,7 @@ class MappingScopeCompiler:
 		if "coalesce" in expr:
 			return derive(V.Coalesce, *[self.expression(item) for item in expr["coalesce"]])
 		if "meta" in expr:
-			return optional(self.root(f"${expr['meta']}"))
+			return optional(self.root(f"@{expr['meta']}"))
 		return literal(expr)
 
 	def isSourceRef(self, expr: Expression) -> bool:
@@ -945,7 +945,7 @@ class MappingScopeCompiler:
 		policy = self.owner.policy(typePath)
 		if policy is not None:
 			return derive(V.Ref, typePath, key)
-		return derive(V.Ref, typePath, derive(V.builtin("concat"), optional(self.root("$scope")), "/", key))
+		return derive(V.Ref, typePath, derive(V.builtin("concat"), optional(self.root("@scope")), "/", key))
 
 	def paths(self, expr: Expression | None) -> list[list[str]]:
 		if expr is None:
@@ -1035,7 +1035,7 @@ class MappingScopeCompiler:
 			self.lines.append(info)
 			if line.qualifiers:
 				qualifiers[info.record] = {key + "?": self.expression(expr) for key, expr in line.qualifiers.items()}
-		record: dict[str, AnyValue] = {"type": self.scope.target, "scope": self.name, "handle": optional(self.root("$target"))}
+		record: dict[str, AnyValue] = {"type": self.scope.target, "scope": self.name, "handle": optional(self.root("@target"))}
 		if self.scope.valid is not None:
 			record["valid?"] = derive(V.Valid, self.expression(self.scope.valid))
 		if self.scope.ctx is not None:
@@ -1059,10 +1059,10 @@ class MappingScopeCompiler:
 		policy = self.owner.policy(self.scope.target)
 		short = lastSegment(self.scope.target)
 		if policy is None:
-			scope = optional(self.root("$scope"))
+			scope = optional(self.root("@scope"))
 			if self.scope.name:
 				scope = derive(V.builtin("concat"), scope, "/@", self.scope.name)
-			return {"handle": derive(V.SourceHandle, short, scope, optional(self.root("$handle")), self.scope.source)}
+			return {"handle": derive(V.SourceHandle, short, scope, optional(self.root("@handle")), self.scope.source)}
 		if self.scope.name:
 			raise CompileError(V.MappingCodes.PolicyUnsupported, "Named scopes currently require source-qualified identities")
 		key = policy.keys[0]
@@ -1084,7 +1084,7 @@ class MappingScopeCompiler:
 		if line.when:
 			value = self.condition(line.when, value)
 		# spec-05: a record without its key keeps a source-qualified handle; it never becomes a gap
-		return {"handle": derive(V.KeyedHandle, short, value, optional(self.root("$scope")), optional(self.root("$handle")), self.scope.source)}
+		return {"handle": derive(V.KeyedHandle, short, value, optional(self.root("@scope")), optional(self.root("@handle")), self.scope.source)}
 
 	def shape(self) -> AnyValue:
 		fields = {f"{key}?": slotValue for key, slotValue in self.roots.items()}

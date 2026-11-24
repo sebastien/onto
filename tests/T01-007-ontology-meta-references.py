@@ -32,6 +32,7 @@ Question
   Field Meta/Path
   * Fields Meta/Path
 Question -populates-> Meta/Attribute
+Question -fills-> Meta/Role
 Question -isAbout-> Meta/Concept
 """
 
@@ -75,6 +76,16 @@ def testErrorsAreLocated():
 		observe("q:Question\n  Code X\nq populates Person__Mail:Meta/Attribute\n")
 	[item] = raised.value.diagnostics
 	assert item.loc and item.loc.line == 4
+
+
+def testRolesResolveAsRoles():
+	# NOTE: The ends of a binary relation are roles, `Subject` and `Object` when they share a type.
+	observe("q:Question\nq fills Person__knows__Person__Object:Meta/Role\nq fills Household__hasMember__Person__Household:Meta/Role\n")
+	# NOTE: Every relation is a concept, with or without attributes.
+	observe("q:Question\nq isAbout Person__knows__Person:Meta/Concept\n")
+	# NOTE: A relation's attribute named Role is an attribute; a role is not an attribute.
+	assert codes("q:Question\nq fills Household__hasMember__Person__Role:Meta/Role\n") == ["meta.unresolved"]
+	assert codes("q:Question\nq populates Person__knows__Person__Object:Meta/Attribute\n") == ["meta.unresolved"]
 
 
 @pytest.mark.parametrize("value", [
@@ -151,6 +162,8 @@ def testHelpersDescribeWhatMetaGenerates():
 	model = Model(ontology())
 	assert ("Person__Email", "Attribute") in metaHandles(model.ontology)
 	assert "Household.hasMember.Person.Role" in metaPaths(model.ontology)
+	assert ("Person__knows__Person__Subject", "Role") in metaHandles(model.ontology)
+	assert {"Person.knows.Person", "Household.hasMember.Person.Household"} <= metaPaths(model.ontology)
 	assert resolvesMetaPath(model, "Address.Street") and not resolvesMetaPath(model, "Address.Town")
 
 

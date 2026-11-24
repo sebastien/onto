@@ -30,6 +30,7 @@ from .parser import (
 	parseObservations,
 )
 from .formatter import (
+	printObservationsCompact,
 	printObservationsState,
 	printObservationsLog,
 	observationsToJson,
@@ -71,6 +72,7 @@ __all__ = [
 	"parseInterval",
 	# Functional API.
 	"parseObservations",
+	"printObservationsCompact",
 	"printObservationsState",
 	"printObservationsLog",
 	"observationsToJson",

@@ -1,18 +1,29 @@
-"""Module: integrations.hexa.views — plan and retrieve a declared rooted view over a host read catalogue."""
+"""Module: integrations.hexa.views — plan and retrieve a declared rooted view over a host read catalogue.
+
+A retrieval is one hexa run. A read with a request template is a `RequestSend` effect (an HTTP request, see
+`hexa.http`); any other read is a `DocumentFetch` effect answered by the host. Effects are journaled and
+replayable, and the reads whose input is known run concurrently.
+"""
 
 from __future__ import annotations
 
 from collections import defaultdict
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from functools import cached_property
 from hashlib import sha256
+import inspect
 import json
 from math import isfinite
+import re
+from string.templatelib import Interpolation, Template
 
-from hexa.combinators import pipe, plan, validate
-from hexa.runtime import run
-from hexa.shapes import Failure, SelectionRequest, profile
+from hexa.combinators import parallel, pipe, plan, validate
+from hexa.core import REGISTRY, member
+from hexa.runtime import p, run
+from hexa.shapes import Failure, SelectionRequest, codes, profile
 from ...binding.model import Binding
 from ...mapping.model import Mapping, MappingLine, MappingScope
 from ...mapping.operations import acceptedTypes, correspondenceScopes, correspondenceTarget
@@ -34,11 +45,19 @@ from .operations import HexaBindingOperator, HexaMappingOperator
 
 @dataclass(slots=True)
 class ViewRead:
-	"""A catalogue step: typed input key, admitted bindings, and any key discovered in their output."""
+	"""A catalogue step: typed input key, admitted bindings, any key discovered in their output, and its request.
+
+	`request` is a `RequestSend` template, `{method?, path, api?, query?, headers?, body?}`. In `path`, `{name}` (the
+	input's name) is the input value as one encoded path segment; elsewhere a string `"{name}"` is the value itself,
+	and `{name}` within a longer string its text. `source` spells the response's provenance token the same way.
+	Without `request`, the host's `fetch` reads the step.
+	"""
 
 	input: ViewInput
 	bindings: list[Binding]
 	provides: ViewInput | None = None
+	request: dict | None = None
+	source: str | None = None
 
 	@property
 	def key(self) -> str:
@@ -56,18 +75,25 @@ class ViewDocument:
 
 
 class ViewReadError(ValueError):
-	"""A source-specific read outcome to record in the report."""
+	"""A source-specific read outcome to record in the report: the read fails with the code `ViewRead.<reason>`."""
 
 	reason = "UnreadableResponse"
 
 
+RE_REASON = re.compile(r"[A-Za-z][A-Za-z0-9]*")
+REQUEST_KEYS = ("method", "path", "api", "query", "headers", "body")
+METHODS = ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE")
+codes("ViewRead", "UnreadableResponse")
+
+
 @dataclass(slots=True)
 class ReadOutcome:
-	"""Scope a read's status and empty collections to the concrete input that was fetched."""
+	"""Scope a read's status and empty collections to the concrete input that was fetched; `failure` says why it is unavailable."""
 
 	handles: set[str]
 	status: str
 	emptyTypes: tuple[str, ...] = ()
+	failure: BaseException | None = None
 
 
 # -----------------------------------------------------------------------------
@@ -86,6 +112,126 @@ def writesViewField(model: Model, scope: MappingScope, line: MappingLine, field:
 			role = relation.participants[int(inverse)].role
 			return model.isA(scope.target, field.owner if role == field.roles[0] else field.other)
 	return False
+
+
+def readCode(reason: object):
+	"""The code of a read unavailable for `reason`: `ViewRead.<reason>`, or `ViewRead.UnreadableResponse`; declared on first use."""
+	name = "ViewRead." + (reason if isinstance(reason, str) and RE_REASON.fullmatch(reason) else "UnreadableResponse")
+	return REGISTRY[name] if name in REGISTRY else member(name)
+
+
+def readReason(error: BaseException) -> str:
+	"""How a report names a failed read: a `ViewReadError` or `ViewRead` code by its reason, another hexa code
+	(a failed request, say) by its qualified name, anything else as `UnreadableResponse`."""
+	if isinstance(error, ViewReadError):
+		return error.reason if isinstance(error.reason, str) and RE_REASON.fullmatch(error.reason) else "UnreadableResponse"
+	if not isinstance(error, Failure) or error.kind not in (Failure.Effect, Failure.Contract):
+		return "UnreadableResponse"
+	return str(error.code).removeprefix("ViewRead.")
+
+
+def readDetail(error: BaseException) -> dict:
+	"""The message of a failed read, as a report gives it to help resolve the failure: a hexa failure's host cause
+	(spelled as its journal records it), or the error itself; none when there is no message."""
+	cause = error.__cause__ if isinstance(error, Failure) else error
+	return {} if cause is None else {"detail": str(cause) or type(cause).__name__}
+
+
+def readClassify(error: BaseException) -> dict:
+	"""`FailureClassify` for reads: a `ViewReadError` fails with its reason's code, any other error as unreadable."""
+	return {"code": readCode(error.reason if isinstance(error, ViewReadError) else None), "transient": getattr(error, "transient", False) is True}
+
+
+def documentDict(document: ViewDocument) -> dict:
+	return {"document": document.document, "source": document.source, "emptyTypes": list(document.emptyTypes), "emptyInputs": list(document.emptyInputs)}
+
+
+def documentFetch(fetch):
+	"""The `DocumentFetch` operation over a host `fetch`; what it raises is classified by `readClassify`."""
+	async def DocumentFetch(step, value, context):
+		response = fetch(step, value)
+		if inspect.isawaitable(response):
+			response = await response
+		return documentDict(response)
+	return DocumentFetch
+
+
+def valueText(value: object) -> str:
+	"""A key value as text, spelled as JavaScript's `String` spells it."""
+	if isinstance(value, bool):
+		return "true" if value else "false"
+	if isinstance(value, float) and value.is_integer():
+		return str(int(value))
+	return str(value)
+
+
+def templateFill(item: object, name: str, value: object) -> object:
+	"""A request template part with the input value: `"{name}"` is the value, `{name}` in a longer string its text."""
+	token = "{" + name + "}"
+	if isinstance(item, str):
+		return value if item == token else item.replace(token, valueText(value))
+	if isinstance(item, dict):
+		return {key: templateFill(entry, name, value) for key, entry in item.items()}
+	if isinstance(item, list):
+		return [templateFill(entry, name, value) for entry in item]
+	return item
+
+
+def requestTemplate(read: ViewRead) -> dict:
+	"""A read's request template in its canonical member order, the method spelled out."""
+	return {"method": read.request.get("method", "GET"), **{key: read.request[key] for key in REQUEST_KEYS[1:] if key in read.request}}
+
+
+def requestFor(read: ViewRead, value: object) -> dict:
+	"""A read's `RequestSend` request for an input value; hexa's `p` encodes the path segment."""
+	request, literals = requestTemplate(read), read.request["path"].split("{" + read.input.name + "}")
+	parts = [literals[0]]
+	for literal in literals[1:]:
+		parts += [Interpolation(value, read.input.name), literal]
+	return {key: p(Template(*parts)) if key == "path" else item if key in ("method", "api") else templateFill(item, read.input.name, value)
+		for key, item in request.items()}
+
+
+def requestSource(read: ViewRead, request: dict, value: object) -> str:
+	"""A response's provenance token: the read's `source` template, else the request's API and path."""
+	if read.source is not None:
+		return read.source.replace("{" + read.input.name + "}", valueText(value))
+	return (request["api"] + ":" if "api" in request else "") + request["path"]
+
+
+def checkRequest(step: str, read: ViewRead) -> None:
+	"""Reject a request template that `requestFor` could not fill into a request."""
+	template = read.request
+	if template is None:
+		if read.source is not None:
+			raise ValueError(f"{step}: a source template needs a request template")
+		return
+	path = template.get("path") if isinstance(template, dict) else None
+	if (not isinstance(path, str) or not path.startswith("/") or re.search(r"[{}]", path.replace("{" + read.input.name + "}", ""))
+		or set(template) - set(REQUEST_KEYS) or template.get("method", "GET") not in METHODS or not isinstance(template.get("api", ""), str)
+		or not isinstance(read.source if read.source is not None else "", str)):
+		raise ValueError(f"{step}: a request is {{method?, path, api?, query?, headers?, body?}}, its path starting with / and naming only {{{read.input.name}}}")
+
+
+def keyValue(value: object, builtin: str | None) -> object:
+	"""A claim value as a key value: canonical decimal text is a JSON number for numeric keys."""
+	if isinstance(value, str) and builtin in ("Integer", "Number"):
+		try:
+			number = Decimal(value)
+		except InvalidOperation:
+			return value
+		return int(number) if builtin == "Integer" or number == number.to_integral_value() else float(number)
+	return value
+
+
+def readWaves(steps: list[str], reads: dict[str, ViewRead], seedKey: str) -> dict[str, int]:
+	"""Each planned read's wave: 0 for the seed's reads, one more than its key's provider for the others."""
+	waves = {}
+	for index, name in enumerate(steps):
+		key = reads[name].key
+		provider = None if key == seedKey else next((other for other in steps[:index] if (p := reads[other].provides) and p.key == key), None)
+		waves[name] = waves[provider] + 1 if provider else 0
+	return waves
 
 
 def describeHop(hop: Hop) -> dict:
@@ -114,12 +260,20 @@ def describeWitness(state: Observations, witness: Witness) -> dict:
 
 
 class HexaViewOperator:
-	"""Discover rooted views in the mapping target. `access` supplies only source-wide I/O and identity."""
+	"""Discover rooted views in the mapping target. `access` supplies only source-wide I/O and identity.
 
-	def __init__(self, mapper: HexaMappingOperator, mapping: Mapping, reads: dict[str, ViewRead], access):
+	`operations` are hexa host operations for every run: `RequestSend` for reads with a request template (e.g. from
+	`hexa.http.http`), and optionally `FailureClassify`.
+	"""
+
+	def __init__(self, mapper: HexaMappingOperator, mapping: Mapping, reads: dict[str, ViewRead], access, operations: dict | None = None):
 		self.source, self.target = mapper.fromOntology, mapper.toOntology
 		self.sourceModel, self.targetModel = Model(self.source), Model(self.target)
-		self.mapper, self.mapping, self.reads, self.access = mapper, mapping, reads, access
+		self.mapper, self.mapping, self.reads, self.access, self.operations = mapper, mapping, reads, access, dict(operations or {})
+		for step, read in reads.items():
+			checkRequest(step, read)
+			if read.request is None and not callable(getattr(access, "fetch", None)):
+				raise ValueError(f"{step}: a read without a request template needs the host's fetch")
 		self.scopes = MappingCompiler(self.source, self.target, mapping, mapper.referential, mapper.libraries, mapper.implementations, mapper.ontologies).compile()
 		self.binder = HexaBindingOperator(self.source, mode=mapper.mode, libraries=mapper.libraries, implementations=mapper.implementations, ontologies=mapper.ontologies)
 		self.footprints, self.programs = {}, {}
@@ -266,7 +420,7 @@ class HexaViewOperator:
 			name = item["step"]
 			read = self.reads[name]
 			description = {"step": name, "input": read.input.name, "requires": steps[name]["requires"], "bindings": [b.header.get("name", b.ontology) for b in read.bindings],
-				**self.access.describe(name, value if read.key == param.key else "{" + read.input.name + "}")}
+				**self.describeRead(name, value if read.key == param.key else "{" + read.input.name + "}")}
 			reads.append(description)
 		gaps = []
 		for gap in compiled["gaps"]:
@@ -278,16 +432,16 @@ class HexaViewOperator:
 			"root": {"role": rooted.root, "type": kind.removeprefix(self.target.namespace + "/"), "handle": handle},
 			"fields": outputs, "paths": paths, "steps": reads, "gaps": gaps}
 
-	async def report(self, view: str, seed: dict, fields: list[str] | None = None) -> dict:
-		"""Explain the reads, proven answers and missing links as a diagnostic report."""
-		result, state, outcomes = await self.runReads(view, seed, fields)
+	async def report(self, view: str, seed: dict, fields: list[str] | None = None, now: str | None = None, **options) -> dict:
+		"""Explain the reads, proven answers and missing links as a diagnostic report; `options` as for `runReads`."""
+		result, state, outcomes = await self.runReads(view, seed, fields, now, **options)
 		result["format"] = "onto.view-report/1"
 		result["facts"], result["coverage"] = self.project(state, result, outcomes)
 		return result
 
-	async def retrieve(self, view: str, seed: dict, fields: list[str] | None = None) -> Observations:
-		"""Return native observations: selected claims and the evidence that connects them to the seed."""
-		result, state, outcomes = await self.runReads(view, seed, fields)
+	async def retrieve(self, view: str, seed: dict, fields: list[str] | None = None, now: str | None = None, **options) -> Observations:
+		"""Return native observations: selected claims and the evidence that connects them to the seed; `options` as for `runReads`."""
+		result, state, outcomes = await self.runReads(view, seed, fields, now, **options)
 		selected = set()
 		self.project(state, result, outcomes, selected)
 		claims = [c for c in state.claims if id(c) in selected]
@@ -298,69 +452,169 @@ class HexaViewOperator:
 		return Observations(header, {k: v for k, v in state.sources.items() if k in sources},
 			{h: {"type": item["type"]} for h, item in state.instances.items() if h in handles}, claims, [])
 
-	async def runReads(self, view: str, seed: dict, fields: list[str] | None = None):
-		"""Return the plan/receipts, reconciled state and read outcomes before rooted projection."""
+	async def runReads(self, view: str, seed: dict, fields: list[str] | None = None, now: str | None = None, *,
+		fetch=None, operations: dict | None = None, record=None, replay: list | None = None, signal=None, policy: dict | None = None):
+		"""Return the plan/receipts, reconciled state and read outcomes before rooted projection.
+
+		One hexa run reads, binds and maps. A read with a request template is a `RequestSend` effect; another read is
+		a `DocumentFetch(step, value)` effect answered by `fetch` (default `access.fetch`). Reads run in waves: a
+		wave's effects are performed concurrently (`parallel`), each distinct request once, then its reads are
+		checked, bound and accounted for in plan order. `now` fixes the clock; `operations` add to the operator's;
+		`record` (a journal sink), `replay`, `signal` and `policy` (retry, concurrency) go to the run. A failed read
+		is reported by reason and message; its outcome keeps the failure, and the journal a failed effect's details.
+		"""
 		result = await self.plan(view, seed, fields)
 		param = self.views[view].input
-		keys = {param.key: [seed[param.name]]}
-		emptyInputs = set()
-		calls, logs, outcomes = [], [], defaultdict(list)
-		now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-		env = {"ClockRead": lambda context: now}
-		for step in result["steps"]:
-			name = step["step"]
+		steps = [step["step"] for step in result["steps"]]
+		waves = readWaves(steps, self.reads, param.key)
+		# NOTE: A replayed journal may name host reasons this process has not declared yet.
+		for entry in replay or ():
+			code = entry.get("failure", {}).get("code") if isinstance(entry, dict) else None
+			if isinstance(code, str) and code.startswith("ViewRead."):
+				readCode(code.removeprefix("ViewRead."))
+		now = now or datetime.now(timezone.utc).isoformat(timespec="seconds")
+		env = {"FailureClassify": readClassify, **self.operations, **(operations or {}), "ClockRead": lambda context: now,
+			"DocumentFetch": documentFetch(fetch or getattr(self.access, "fetch", None)), "policy": {"maxNodes": 500000, **(policy or {})},
+			**{key: item for key, item in (("record", record), ("replay", replay), ("signal", signal)) if item is not None}}
+		operator = self
+
+		def ReadSend(env, effect):
+			operation, *arguments = effect
+			try:
+				return {"status": "ok", "result": (yield getattr(env, operation)(*arguments))}
+			except Failure as failure:
+				if failure.kind is Failure.Defect:
+					raise
+				return {"status": "unavailable", "reason": readReason(failure), "failure": failure}
+		send = parallel(ReadSend)
+
+		def ViewRetrieve(env):
+			values, outputs, sent = {}, {}, {}
+			for wave in range(max(waves.values(), default=-1) + 1):
+				names = [name for name in steps if waves[name] == wave]
+				items, effects = [], {}
+				for name in names:
+					values[name] = operator.readValues(name, steps, param, seed, outputs)
+					for value in values[name]:
+						item = operator.readEffect(name, value)
+						items.append((name, value, item))
+						if "key" in item and item["key"] not in sent:
+							effects.setdefault(item["key"], item["effect"])
+				sent.update(zip(effects, (yield from send(env, list(effects.values()))) if effects else ()))
+				for name in names:
+					outputs[name] = []
+				for name, value, item in items:
+					outputs[name].append((yield from operator.readProcess(env, name, value, item, sent.get(item.get("key")))))
+			logs = [log for name in steps for output in outputs[name] if output["status"] == "ok" for log in output["logs"]]
+			mapped = (yield from operator.mapProgram.stages.MappingRead(env, operator.sourceState(logs))) if logs else None
+			return values, outputs, mapped
+
+		values, outputs, mapped = await run(env, ViewRetrieve)
+		emptyInputs, calls, outcomes = set(), [], defaultdict(list)
+		for name in steps:
 			read = self.reads[name]
-			values = keys.get(read.key, [])
-			if not values:
+			if not values[name]:
 				outcomes[name].append(ReadOutcome(set(), "empty" if read.key in emptyInputs else "unavailable"))
 				if read.key not in emptyInputs:
 					result["gaps"].append({"step": name, "reason": "MissingInput", "input": read.input.name})
-			for value in values:
-				receipt = {"step": name, "input": {read.input.name: value}, **self.access.describe(name, value)}
+			for value, output in zip(values[name], outputs[name]):
+				receipt = {"step": name, "input": {read.input.name: value}, **self.describeRead(name, value), "status": output["status"]}
 				calls.append(receipt)
-				try:
-					response = self.access.fetch(name, value)
-					batch = []
-					for i, b in enumerate(read.bindings):
-						key = (name, i)
-						if key not in self.programs:
-							self.programs[key] = self.binder.compile(b)
-						program = self.programs[key]
-						raw = await run(env, program.stages.BindingRead, [{"src": response.source, "document": response.document}])
-						log, report = self.binder.result(program, raw)
-						batch.append(log)
-						result["gaps"].extend({"step": name, **asdict(g)} for g in report.gaps)
-					state = self.sourceState(batch)
-					discovered = self.access.discover(state, read.provides)
+				result["gaps"].extend(output["gaps"])
+				if output["status"] == "ok":
+					emptyInputs.update(output["emptyInputs"])
 					if read.provides:
-						for item in discovered:
-							self.checkValue(read.provides, item)
-				except (OSError, ValueError, KeyError, IndexError, TypeError, FormatError, Failure) as exc:
-					if isinstance(exc, Failure) and exc.kind is Failure.Defect:
-						raise
-					receipt["status"] = "unavailable"
-					reason = exc.reason if isinstance(exc, ViewReadError) else "UnreadableResponse"
-					result["gaps"].append({"step": name, "input": receipt["input"], "reason": reason, "detail": str(exc)})
+						receipt["discovered"] = {read.provides.name: output["discovered"]}
 				else:
-					receipt["status"] = "ok"
-					logs.extend(batch)
-					emptyInputs.update(response.emptyInputs)
-					if read.provides:
-						key = read.provides.key
-						if key != param.key:
-							keys[key] = list(dict.fromkeys([*keys.get(key, ()), *discovered]))
-						receipt["discovered"] = {read.provides.name: discovered}
+					result["gaps"].append({"step": name, "input": receipt["input"], "reason": output["reason"], **readDetail(output["failure"])})
 				handles = {self.access.rootHandle(read.input, value, kind) for kind in self.inputTargets[read.key]}
-				outcomes[name].append(ReadOutcome(handles, receipt["status"], response.emptyTypes if receipt["status"] == "ok" else ()))
+				ok = output["status"] == "ok"
+				outcomes[name].append(ReadOutcome(handles, output["status"], tuple(output["emptyTypes"]) if ok else (), None if ok else output["failure"]))
 		state = Observations({"ontology": self.target.namespace, "scope": None}, {}, {}, [], [])
-		if logs:
-			program = self.mapProgram
-			raw = await run(env, program.stages.MappingRead, self.sourceState(logs))
-			log, report = self.mapper.result(program, raw)
+		if mapped is not None:
+			log, report = self.mapper.result(self.mapProgram, mapped)
 			result["gaps"].extend(asdict(g) for g in report.gaps)
 			state = reconcileObservations(self.target, log, mode=self.mapper.mode)
 		result["calls"] = calls
 		return result, state, outcomes
+
+	def describeRead(self, name: str, value: object) -> dict:
+		"""The host's description of a read, else its request (its template while the value is the placeholder `{name}`)."""
+		if callable(describe := getattr(self.access, "describe", None)):
+			return describe(name, value)
+		read = self.reads[name]
+		if read.request is None:
+			return {}
+		return requestTemplate(read) if value == "{" + read.input.name + "}" else requestFor(read, value)
+
+	def readValues(self, name: str, steps: list[str], param: ViewInput, seed: dict, outputs: dict) -> list:
+		"""A read's input values: the seed, or what its key's provider (an earlier wave) discovered, in order."""
+		key = self.reads[name].key
+		if key == param.key:
+			return [seed[param.name]]
+		provider = next((other for other in steps[:steps.index(name)] if (p := self.reads[other].provides) and p.key == key), None)
+		return list(dict.fromkeys(item for output in outputs.get(provider, ()) if output["status"] == "ok" for item in output["discovered"]))
+
+	def readEffect(self, name: str, value: object) -> dict:
+		"""The effect a read needs, `[operation, ...arguments]`, keyed so that equal requests are sent once."""
+		read = self.reads[name]
+		try:
+			effect = ["DocumentFetch", name, value] if read.request is None else ["RequestSend", requestFor(read, value)]
+		except Failure as failure:
+			return {"failure": failure}
+		return {"effect": effect, "key": json.dumps(effect, sort_keys=True)}
+
+	def readDocument(self, name: str, value: object, effect: list, result: dict) -> dict:
+		"""The document of a read from its effect's result: a request's response, checked by the host's `check`."""
+		if effect[0] == "DocumentFetch":
+			return result
+		read, request = self.reads[name], effect[1]
+		source = requestSource(read, request, value)
+		if not callable(check := getattr(self.access, "check", None)):
+			return {"document": result["data"], "source": source, "emptyTypes": [], "emptyInputs": []}
+		# NOTE: Reads sharing a request share its response; each checks a copy of its own.
+		return documentDict(check(name, value, {"request": request, "status": result["status"], "data": deepcopy(result["data"]), "source": source}))
+
+	def discoverKeys(self, state: dict, provides: ViewInput | None) -> list:
+		"""Without a host `discover`: the provided key's values on the bound instances of its type, in claim order."""
+		if provides is None:
+			return []
+		builtin, found = getattr(self.keyTypes[provides.key], "builtin", None), []
+		for claim in state["claims"]:
+			instance = state["instances"].get(claim.get("s"))
+			if (claim.get("p") == provides.attr and not claim.get("conflict") and instance and self.sourceModel.isA(instance["type"], provides.path)
+				and isinstance(claim.get("v"), (str, int, float)) and not isinstance(claim["v"], bool)):
+				found.append(keyValue(claim["v"], builtin))
+		return list(dict.fromkeys(found))
+
+	def readProcess(self, env, name: str, value: object, item: dict, sent: dict | None):
+		"""One read after its effect: the document, its bindings and discovered keys. A failure makes it unavailable, with a reason."""
+		read, gaps, logs = self.reads[name], [], []
+		if "failure" in item:
+			return {"status": "unavailable", "gaps": [], "reason": readReason(item["failure"]), "failure": item["failure"]}
+		if sent["status"] != "ok":
+			return {"status": "unavailable", "gaps": [], "reason": sent["reason"], "failure": sent["failure"]}
+		try:
+			response = self.readDocument(name, value, item["effect"], sent["result"])
+			for index, binding in enumerate(read.bindings):
+				if (name, index) not in self.programs:
+					self.programs[name, index] = self.binder.compile(binding)
+				program = self.programs[name, index]
+				raw = yield from program.stages.BindingRead(env, [{"src": response["source"], "document": response["document"]}])
+				log, report = self.binder.result(program, raw)
+				logs.append(log)
+				gaps.extend({"step": name, **asdict(g)} for g in report.gaps)
+			state = self.sourceState(logs)
+			discover = getattr(self.access, "discover", None)
+			discovered = list(discover(state, read.provides)) if callable(discover) else self.discoverKeys(state, read.provides)
+			if read.provides:
+				for key in discovered:
+					self.checkValue(read.provides, key)
+		except (OSError, ValueError, KeyError, IndexError, TypeError, FormatError, Failure) as exc:
+			if isinstance(exc, Failure) and exc.kind is Failure.Defect:
+				raise
+			return {"status": "unavailable", "gaps": gaps, "reason": readReason(exc), "failure": exc}
+		return {"status": "ok", "logs": logs, "gaps": gaps, "discovered": discovered, "emptyTypes": response["emptyTypes"], "emptyInputs": response["emptyInputs"]}
 
 	def sourceState(self, logs: list) -> dict:
 		mode = self.mapper.mode

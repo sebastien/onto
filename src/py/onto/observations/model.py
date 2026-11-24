@@ -115,6 +115,7 @@ class ObservationsDocument:
 	statements: list[Statement] = field(default_factory=list)
 	diagnostics: list[Diagnostic] = field(default_factory=list)
 	declarations: list[TypeDeclaration] = field(default_factory=list)
+	aliases: dict[str, str] = field(default_factory=dict)  # Document-local handle spellings, never instance identities.
 
 
 @dataclass(slots=True)

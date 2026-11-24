@@ -170,7 +170,7 @@ class HexaMappingOperator:
 			plans.append(MappingScopePlan(item.name, item.scope.source, item.scope.target, item.reach(), item.lines, item.when, handleTemplate, scope,
 				{(info.section, info.record): info for info in item.lines}, {tuple(steps): [segment.key for segment in item.segments(steps)] for steps in paths},
 				item.scope.ctx is not None, contextualScope,
-				[[segment.key for segment in item.segments(path)] for path in item.paths(item.scope.ctx)], "$self" in item.roots,
+				[[segment.key for segment in item.segments(path)] for path in item.paths(item.scope.ctx)], "@self" in item.roots,
 				item.scope.present is not None, [[segment.key for segment in item.segments(path)] for path in item.paths(item.scope.present)],
 				item.scope.into is not None, [[segment.key for segment in item.segments(path)] for path in item.paths(item.scope.into)],
 				{key: (typePath, [segment.key for segment in item.segments(steps)]) for key, (typePath, steps) in item.sourceRefs.items()}))

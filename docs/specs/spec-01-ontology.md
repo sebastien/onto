@@ -949,9 +949,10 @@ structural only: references, collisions and cycles are checked by loading.
 ## Meta domain
 
 Data sometimes refers to the ontology itself: a questionnaire question to the
-attribute its answer populates, a rule to the vocabulary it ranges over. The
-`Meta` domain describes an ontology as instances of itself, so that such
-references are relations to instances rather than paths copied as text.
+attribute its answer populates or the relation role it fills, a rule to the
+vocabulary it ranges over. The `Meta` domain describes an ontology as instances
+of itself, so that such references are relations to instances rather than paths
+copied as text.
 
 ```text
 Meta/Concept {layer=Reference}
@@ -963,6 +964,10 @@ Meta/Attribute {layer=Reference}
   1 IsRequired Boolean
   1 IsMultiple Boolean
   ? Description Text
+Meta/Role {layer=Reference}
+  1 Path Meta/Path {id=key}
+  1 IsRequired Boolean
+  1 IsMultiple Boolean
 Meta/Dimension {layer=Reference}
   1 Path Meta/Path {id=key}
   ? Kind Meta/Dimension/Kind
@@ -971,7 +976,10 @@ Meta/Dimension {layer=Reference}
   ? IsOrdered Boolean
   ? Description Text
 Meta/Concept -hasAttribute/isAttributeOf-> Meta/Attribute 1:*
+Meta/Concept -hasRole/isRoleOf-> Meta/Role 1:*
 Meta/Attribute -hasDimension/isDimensionOf-> Meta/Dimension *:?
+Meta/Attribute -refersTo/isReferredToBy-> Meta/Concept *:?
+Meta/Role -refersTo/isReferredToBy-> Meta/Concept *:?
 Meta/Dimension -isBasedOn/isBaseOf-> Meta/Dimension *:?
 Meta/Dimension -extends/isExtendedBy-> Meta/Dimension *:?
 ```
@@ -983,20 +991,27 @@ namespace and header); `onto meta` prints the instances as
 
 | Instance | One per | Notes |
 | --- | --- | --- |
-| `Meta/Concept` | Entity, facet, n-ary relation, binary relation with attributes | `Kind` is `Entity`, `Facet` or `Relation` |
+| `Meta/Concept` | Entity, facet, relation (n-ary or binary) | `Kind` is `Entity`, `Facet` or `Relation` |
 | `Meta/Attribute` | Attribute, on the concept that declares it | `IsRequired` for `1` and `+`, `IsMultiple` for `*` and `+`; roles are not attributes |
+| `Meta/Role` | Participant of a relation, on the relation | A role of an n-ary relation, or an end of a binary relation, named as its [roles](#binary-shorthand) are (`Subject` and `Object` when both ends have the same type). `IsRequired` and `IsMultiple` read the participant cardinality (default `1`) as an attribute's; each end of a binary relation is `1`, as a link has one subject and one object |
 | `Meta/Dimension` | Built-in type in use, type declaration, vocabulary written in an attribute | `Kind` is `Builtin`, `Vocabulary`, `Value` (a named scalar), `Structure` or `Range`; an alias takes the kind and values of what it names. `Range<T>` written in an attribute is one dimension per `T`, with path `Range<T>` and handle `<T handle>__Range` |
 
 - `Path` is relative to the ontology namespace: `Person`, `Person.Email`,
   `D/AssetClass`, `Household.hasMember.Person.Role`. A built-in's path is its
-  name. A vocabulary written in an attribute has the attribute's path.
+  name. A vocabulary written in an attribute has the attribute's path. A role's
+  path is its relation's path and its name: `Trade.Trader`,
+  `Household.hasMember.Person.Person`.
 - The handle of an instance is its path with `/` written `_` and `.` written
-  `__` (`D_AssetClass`, `Person__Email`); a vocabulary written in an attribute
-  adds `__Values`. The document declares `@scope onto:<Namespace>`, so the
-  handles are stable and other documents of that scope can refer to them.
+  `__` (`D_AssetClass`, `Person__Email`, `Trade__Trader`); a vocabulary written
+  in an attribute adds `__Values`. The document declares `@scope
+  onto:<Namespace>`, so the handles are stable and other documents of that scope
+  can refer to them.
 - `hasDimension` links an attribute to the dimension of its type; attribute
   reuse (`Owner.Attr`) takes the reused attribute's dimension. An attribute that
-  refers to a concept has none.
+  refers to a concept has none: `refersTo` links it to that concept instead.
+- `hasRole` links a relation to its roles, and `refersTo` links a role to the
+  concept whose instances take it. A relation's attributes and roles share one
+  namespace, so a role and an attribute never have the same path.
 - `isBasedOn` links a named type to the type it is defined as
   (`D/Money/USD = Amount`), and a range to the type of its bounds.
 - `extends` links a vocabulary [extension](#extensions) to the vocabulary it
@@ -1010,8 +1025,9 @@ checked against it may refer to its records, e.g. a question that
 `populates Person__Email:Meta/Attribute`. Such references are checked against
 what `onto meta` generates for the ontology:
 
-- an instance typed `Meta/Concept`, `Meta/Attribute` or `Meta/Dimension` must be
-  a record `onto meta` generates with that type (`meta.unresolved`), so renaming
+- an instance typed `Meta/Concept`, `Meta/Attribute`, `Meta/Role` or
+  `Meta/Dimension` must be a record `onto meta` generates with that type
+  (`meta.unresolved`; a role is not a `Meta/Attribute`), so renaming
   `Person.Email` breaks the observations that refer to it;
 - a value of type `Meta/Path` must name an element (`meta.path`): a path
   `onto meta` generates, a declaration, or an attribute, facet attribute, role

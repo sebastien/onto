@@ -173,11 +173,11 @@ COMMANDS = (
 		("onto state statement.obs",),
 	),
 	Command(
-		"log", "Observations", "FILE.obs",
+		"log", "Observations", "[--compact] FILE.obs",
 		"Print the log form",
 		"Print observations in log form (spec-02): every statement, retractions included, ordered by time.",
-		(Argument("file"),), (LENIENT, KIND),
-		("onto log statement.obs",),
+		(Argument("file"),), (Option(("--compact",), "Group consecutive observations in @entity blocks with local handle aliases"), LENIENT, KIND),
+		("onto log statement.obs", "onto log --compact statement.obs"),
 	),
 	Command(
 		"coverage", "Mappings", "FILE [--view VIEW] [--inventory FILE.inv]",

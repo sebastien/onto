@@ -7,12 +7,14 @@ import re
 from collections import (
 	Counter,
 )
+from collections.abc import Iterator
 from copy import (
 	deepcopy,
 )
 from fractions import (
 	Fraction,
 )
+from itertools import groupby
 from typing import (
 	Any,
 )
@@ -31,6 +33,7 @@ from .model import (
 	META_KEYS,
 	OBSERVATIONS_FORMAT,
 	Observations,
+	activeHandles,
 	markImplicit,
 	claimOrder,
 	claimSlot,
@@ -82,8 +85,11 @@ class ObservationPrinter:
 		self.observations = observations
 		self.short = Namer(ontology.namespace, ontology.uses)
 		self.typed: set[str] = set()
+		self.aliases: dict[str, str] = {}
 
 	def handle(self, name: str) -> str:
+		if name in self.aliases:
+			return self.aliases[name]  # Its @entity declaration supplies the type, even on a forward reference.
 		if name == "?" or name in self.typed:
 			return name
 		self.typed.add(name)
@@ -109,9 +115,21 @@ class ObservationPrinter:
 		return printText(value, inSet)
 
 	def meta(self, claim: Claim, defaults: dict[str, Any]) -> str:
-		pairs = [(key, claim[key]) for key in META_KEYS if key in claim and (key not in defaults or claim[key] != defaults[key])]
+		pairs = [(key, self.aliases.get(claim[key], claim[key]) if key == "ctx" else claim[key])
+			for key in META_KEYS if key in claim and (key not in defaults or claim[key] != defaults[key])]
 		text = printAnnotations(pairs, list(META_KEYS))
 		return f" {text}" if text else ""
+
+	def linkParts(self, claim: Claim) -> tuple[str, str, str]:
+		decl = self.model.get(claim["rel"])
+		left, right = decl.participants
+		subject, obj = claim["roles"][left.role], claim["roles"][right.role]
+		if subject != "?":
+			return subject, decl.arrow.verb, obj
+		# Only the object can be unknown in text. Preserve the roles using the inverse verb.
+		if obj == "?" or not decl.arrow.inverse:
+			raise ValueError("A relation with an unknown subject requires an inverse verb and a known object")
+		return obj, decl.arrow.inverse, "?"
 
 	def statement(self, claim: Claim) -> str:
 		for kind, operator in (("same", "="), ("distinct", "!=")):
@@ -119,22 +137,65 @@ class ObservationPrinter:
 				left, right = claim[kind]
 				return f"{self.handle(left)} {operator} {self.handle(right)}"
 		if "rel" in claim:
-			decl = self.model.get(claim["rel"])
-			left, right = decl.participants
-			prefix = f"{claim['s']}: " if "s" in claim else ""
-			subject, obj = claim["roles"][left.role], claim["roles"][right.role]
-			if subject == "?":
-				# Only the object can be unknown in text. Keep canonical roles by using the inverse verb.
-				if obj == "?" or not decl.arrow.inverse:
-					raise ValueError("A relation with an unknown subject requires an inverse verb and a known object")
-				return f"{prefix}{self.handle(obj)} {decl.arrow.inverse} ?"
-			return f"{prefix}{self.handle(subject)} {decl.arrow.verb} {self.handle(obj)}"
+			prefix = f"{self.aliases.get(claim['s'], claim['s'])}: " if "s" in claim else ""
+			subject, verb, obj = self.linkParts(claim)
+			return f"{prefix}{self.handle(subject)} {verb} {self.handle(obj)}"
 		subject = self.handle(claim["s"])
 		if "facet" in claim:
 			return f"{subject}[{claim['facet']}]"
 		if "p" in claim:
 			return f"{subject}.{claim['p']}" + (f" {self.value(claim['v'])}" if "v" in claim else "")
 		return subject
+
+	def typeName(self, handle: str) -> str:
+		decl = self.model.get(self.observations.instances[handle]["type"])
+		if decl.arrow:
+			left, right = decl.participants
+			return f"{self.short(left.type)}.{decl.arrow.verb}.{self.short(right.type)}"
+		return self.short(decl.path)
+
+	def blockSubject(self, claim: Claim, retract: bool) -> str | None:
+		if not retract:
+			if "p" in claim:
+				return claim["s"]
+			if "rel" in claim and "s" not in claim:
+				return self.linkParts(claim)[0]
+		return None
+
+	def bindAliases(self, events: list[tuple[Claim, bool]]) -> set[str]:
+		"""Allocate aliases for reused handles; return those without a body to bind them inline."""
+		blocks, uses = set(), Counter()
+		previous = None
+		for claim, retract in events:
+			subject = self.blockSubject(claim, retract)
+			run = (subject, claim.get("src"), claim.get("at"), claim.get("ctx"))
+			if subject and subject in blocks and run != previous:
+				uses[subject] += 1
+			if subject:
+				blocks.add(subject)
+			others = activeHandles([claim])
+			others.discard(subject)
+			others.update(claim.get("same", ()), claim.get("distinct", ()))
+			uses.update(others)
+			previous = run
+		reserved = set(self.observations.instances)
+		counts = Counter()
+		for handle, count in sorted(uses.items()):
+			if handle in ("none", "null") or handle not in blocks and count < 2:
+				continue
+			decl = self.model.get(self.observations.instances[handle]["type"])
+			name = decl.arrow.verb if decl.arrow else decl.path.rsplit("/", 1)[-1]
+			base = name[:1].lower() + name[1:]
+			index = counts[base] + 1
+			while (alias := f"{base}{index}") in reserved:
+				index += 1
+			# Estimate the cost in characters without depending on one model's tokenizer.
+			cost = len(alias) + 1 if handle in blocks else len(f"@entity {alias}={handle}\n")
+			if count * (len(handle) - len(alias)) > cost:
+				self.aliases[handle] = alias
+				reserved.add(alias)
+				counts[base] = index
+		return self.aliases.keys() - blocks
 
 	def headers(self) -> list[str]:
 		obs = self.observations.obs
@@ -159,25 +220,17 @@ class ObservationPrinter:
 			ordinary.update(member["ref"] for member in members if isinstance(member, dict) and "ref" in member)
 		for handle, instance in sorted(self.observations.instances.items()):
 			decl = self.model.get(instance["type"])
-			if handle in (namedLinks if decl.arrow else ordinary):
+			if handle in self.aliases or handle in (namedLinks if decl.arrow else ordinary):
 				continue
-			if decl.arrow:
-				left, right = decl.participants
-				typeName = f"{self.short(left.type)}.{decl.arrow.verb}.{self.short(right.type)}"
-			else:
-				typeName = self.short(decl.path)
-			lines.append(f"@type {handle} {typeName}")
+			lines.append(f"@type {handle} {self.typeName(handle)}")
 			self.typed.add(handle)
 		return lines
 
-def renderObservationsLog(ontology: Ontology, observations: Observations, ordinals: list[int] | None = None) -> str:
-	"""Render a log, optionally mapping each emitted statement to its original ordinal."""
-	p = ObservationPrinter(ontology, observations)
-	lines = p.headers()
+
+def logEntries(p: ObservationPrinter, events: list[tuple[Claim, bool]], ordinals: list[int] | None) -> Iterator[str | tuple[Claim, bool, str]]:
+	"""Yield directives and statements with their metadata suffix in audit order."""
+	observations = p.observations
 	current = observationDefaults(observations)
-	events = [(claim, False) for claim in observations.claims] + [(claim, True) for claim in observations.retractions]
-	events += [({"n": gap.n, **gap.meta, "gap": gap}, False) for gap in observations.gaps]
-	events.sort(key=lambda pair: (*claimOrder(pair[0]), not pair[0].get("exists", False)))
 	directiveKeys = {key for key in ("src", "at") if all(key in event for event, _ in events)}
 	grouped: set[int] = set()
 	for claim, retract in events:
@@ -188,10 +241,10 @@ def renderObservationsLog(ontology: Ontology, observations: Observations, ordina
 		if "gap" in claim:
 			gap = claim["gap"]
 			if gap.ctx != current.get("ctx"):
-				lines.append(f"@ctx {gap.ctx or 'none'}")
+				yield f"@ctx {gap.ctx or 'none'}"
 				current["ctx"] = gap.ctx
 			# Emit effective defaults explicitly; raw source stays available on the Gap object.
-			lines.append(gap.text + p.meta(gap.meta, {}))
+			yield gap.text + p.meta(gap.meta, {})
 			continue
 		meta = claimMeta(claim)
 		facets = []
@@ -215,10 +268,45 @@ def renderObservationsLog(ontology: Ontology, observations: Observations, ordina
 			value = meta.get(key)
 			if value is not None and value != current.get(key):
 				if key == "ctx" or key in directiveKeys:
-					lines.append(f"@{key} {value}")
+					yield f"@{key} {p.aliases.get(value, value) if key == 'ctx' else value}"
 					current[key] = value
-		text = p.statement(claim) + (f"[{', '.join(sorted(facets))}]" if facets else "")
-		lines.append(("- " if retract else "") + text + p.meta(meta, current))
+		yield claim, retract, (f"[{', '.join(sorted(facets))}]" if facets else "") + p.meta(meta, current)
+
+
+def renderObservationsLog(ontology: Ontology, observations: Observations, ordinals: list[int] | None = None, *, compact: bool = False) -> str:
+	"""Render a log, optionally mapping each emitted statement to its original ordinal."""
+	p = ObservationPrinter(ontology, observations)
+	events = [(claim, False) for claim in observations.claims] + [(claim, True) for claim in observations.retractions]
+	events += [({"n": gap.n, **gap.meta, "gap": gap}, False) for gap in observations.gaps]
+	events.sort(key=lambda pair: (*claimOrder(pair[0]), not pair[0].get("exists", False)))
+	prelude = p.bindAliases(events) if compact else ()
+	lines = p.headers()
+	lines.extend(f"@entity {p.aliases[h]}={h} {p.typeName(h)}" for h in sorted(prelude))
+	bound = set()
+	for handle, run in groupby(logEntries(p, events, ordinals),
+		key=lambda e: p.blockSubject(e[0], e[1]) if compact and not isinstance(e, str) else None):
+		if handle is not None:
+			run = list(run)
+			alias = p.aliases.get(handle)
+			if alias or len(run) > 1:
+				name = f"{alias}={handle}" if alias and handle not in bound else alias or handle
+				lines.append(f"@entity {name} {p.typeName(handle)}")
+				bound.add(handle)
+				p.typed.add(handle)
+				for claim, _, suffix in run:
+					if "p" in claim:
+						body = f"{claim['p']} {p.value(claim['v'])}"
+					else:
+						_, verb, obj = p.linkParts(claim)
+						body = f"-> {verb} {p.handle(obj)}"
+					lines.append("  " + body + suffix)
+				continue
+		for entry in run:
+			if isinstance(entry, str):
+				lines.append(entry)
+			else:
+				claim, retract, suffix = entry
+				lines.append(("- " if retract else "") + p.statement(claim) + suffix)
 	return "\n".join(lines) + "\n"
 
 
@@ -324,6 +412,13 @@ def printObservationsLog(ontology: Ontology, observations: Observations) -> str:
 	if observations.gaps:
 		raise ValueError("Log text cannot preserve inert gaps; use JSON")
 	return renderObservationsLog(ontology, observations)
+
+
+def printObservationsCompact(ontology: Ontology, observations: Observations) -> str:
+	"""Print a gap-free log in claim-neutral subject blocks, preserving audit order."""
+	if observations.gaps:
+		raise ValueError("Compact text cannot preserve inert gaps; use JSON")
+	return renderObservationsLog(ontology, observations, compact=True)
 
 
 def observationsToJson(observations: Observations) -> dict[str, Any]:

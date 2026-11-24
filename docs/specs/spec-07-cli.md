@@ -328,8 +328,8 @@ sorted by kind then namespace. Index diagnostics (`cli.kind`) are reported.
 #### `onto meta [--decl] FILE.onto`
 
 Print the ontology as observations of its own
-[`Meta` domain](spec-01-ontology.md#meta-domain): its concepts, attributes and
-dimensions, so that data can refer to them. Files sharing the namespace are
+[`Meta` domain](spec-01-ontology.md#meta-domain): its concepts, attributes,
+relation roles and dimensions, so that data can refer to them. Files sharing the namespace are
 described together. With `--decl`, print the `Meta` domain declarations instead,
 as an ontology file with the same header as `FILE.onto`, to keep among the files
 of the ontology. Without the domain, the observations are still printed, with a
@@ -342,9 +342,10 @@ hint: they validate once the declarations are added.
 Print the reconciled **state form** (spec-02): retractions applied, superseded
 claims removed, conflicts marked, identity links resolved.
 
-#### `onto log FILE.obs`
+#### `onto log [--compact] FILE.obs`
 
-Print the **log form**: every statement, ordered by `at`.
+Print the **log form**: every statement, ordered by `at`. `--compact` prints
+the same log with [entity blocks and local aliases](spec-02-observations.md#entity-blocks).
 
 Both accept `--lenient` and `--kind`.
 

@@ -334,7 +334,21 @@ logical section headers, explicit `# EOF`. Do not delegate without authorization
 - CLI (spec-07): static tooling implemented in `src/py/onto/cli/`, tested by
   `tests/T07-*`. Deferred: `bind`/`map` runs (with the hexa integration),
   `diff`, overlays, `formats update`, `.ids`/`.reg` readers.
-- JavaScript backend sharing JSON contracts and conformance examples.
+- JavaScript backend sharing JSON contracts and conformance examples. Done for
+  execution: `src/js/onto/` runs exported bindings, mappings and rooted views
+  (spec-06, Bundles), and `make test-js` replays every run of the Python suite
+  on it (`tests/conformance.py`). Still Python-only: parsers, compilers,
+  writing (`compileWrite`), re-running (`BindingRun`/`MappingRun`, approval),
+  inventory fields and writing-format learning. The suite covers what the
+  Python tests run; features they do not exercise in a run are unverified.
+- Views: a retrieval is one hexa run (spec-06). A read with a request template
+  is a `RequestSend` effect (`hexa.http`), deduplicated within the run and
+  checked by the host's optional `check`; `describe` and `discover` have
+  catalogue defaults. Next: adviceos-data moves its catalogue to request
+  templates and its checks to `check`. `rootHandle` stays a host hook: a target
+  handle may depend on more than the source key. Later, declare the common
+  checks (the record is the one asked for, deleted rows, empty collections) so
+  that hosts need no code but their credentials.
 - Skills: `docs/skills/` (modeling, review) and `docs/ref/ref-onto-cheatsheet.md`;
   their `onto` blocks are loaded by `tests/T00-001-docs-examples.py`. Install with
   `make install-skills`.
@@ -1086,6 +1100,43 @@ Found mapping the AdviceLink CRM to AdviceOS (adviceos-data `TODO_ONTO.md`):
   binding and mapping targets, and mapping paths (`{key: ...}` steps,
   `keyedSteps`). Unkeyed multi-valued structures warn (`key`). Hexa slot names
   write keys as `Phones.KeyMobile`. Tests: `T02-009`, `T06-015`.
+
+### Meta roles and relations (2026-11-25)
+
+Found building questionnaires from the facts an AdviceOS view reports missing
+(adviceos-data `TODO_ONTO.md`). A question could populate an attribute
+(`Meta/Attribute`), but not ask who a person's partner is or who will own a
+property: those are a binary relation and a relation role, and `onto meta`
+described neither.
+
+- **Every relation is a `Meta/Concept`**, binary ones included; they were listed
+  only when they had attributes.
+- **`Meta/Role`**: one record per participant of a relation, linked from the
+  relation (`hasRole`). It covers an n-ary relation's roles and a binary
+  relation's ends (`Subject` and `Object` when both ends have the same type).
+  Its path is `Relation.Role`. `IsRequired` and `IsMultiple` read the participant
+  cardinality (default `1`); each end of a binary relation is `1`. Roles stay
+  distinct from attributes: a role referenced as a `Meta/Attribute` is
+  `meta.unresolved`.
+- **`refersTo`** links a role, and an attribute whose type is a concept, to
+  that concept. An attribute with a dimension keeps `hasDimension` instead.
+  The links are resolved once every concept is recorded, so no existing handle
+  changes.
+
+Tests: `T01-007`, `T07-002`. Open: a binary relation's participation counts
+(`L:R`) are not described.
+
+### Read gaps keep the error's message (2026-11-25)
+
+Decided: a view report's read gap is `{step, input, reason, detail}` again,
+`detail` being the error's message (a hexa failure's cause, as the journal
+spells it). It had been left to the journal, as it may quote the source.
+Resolving a failure needs the message, and the journal is internal, while the
+report is for the host that made the read. Python and JavaScript alike
+(`readDetail`); spec-06 "Rooted retrieval". The JavaScript conformance
+replay over HTTP compares reports without these messages, because a failed
+request's message names the server that answered it. Tests: `T06-018`,
+`tests/js/conformance.test.js`.
 
 ## Workspace hygiene
 

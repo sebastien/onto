@@ -238,8 +238,10 @@ Answer(Question, Respondent: Customer) {kind=event}
   Value Text
 ```
 
-When a question populates an attribute, link it to the ontology through the
-`Meta` domain (`onto meta`) rather than copying the attribute's path as text.
+When a question populates an attribute, or fills a relation role (who is the
+partner, who owns the property), link it to the ontology through the `Meta`
+domain (`onto meta`: `Meta/Attribute`, `Meta/Role`) rather than copying the
+path as text.
 With the `Meta` declarations loaded (`onto meta --decl`), `onto check` resolves
 those links and any `Meta/Path` value, so renaming an attribute breaks the
 question instead of leaving a dangling reference.

@@ -237,7 +237,7 @@ class WriteCompiler:
 	def scope(self, scope: BindingScope, name: str) -> WriteScope:
 		short = lastSegment(scope.type)
 		handleSlot = slot("Write.Root.Handle", Any)
-		positions: dict[str, AnyValue] = {"$handle": handleSlot}
+		positions: dict[str, AnyValue] = {"@handle": handleSlot}
 		fields: dict = {}
 		leaves: list[WriteLeaf] = []
 		parent: str | None = None
@@ -331,7 +331,7 @@ class Writer:
 				if index.existence(handle) is None:
 					continue
 				# Nulls and unknowns are not formatted; lines with a null policy write them when materializing.
-				tree: dict = {"$handle": handle} | {f"[{name}]": True for name in facets.get(handle, ())}
+				tree: dict = {"@handle": handle} | {f"[{name}]": True for name in facets.get(handle, ())}
 				nulls: dict = {}
 				for key, claims in index.values.get(handle, {}).items():
 					value = claims[0]["v"]
@@ -356,7 +356,7 @@ class Writer:
 			lastEach = max((index for index, step in enumerate(scope.steps) if step == EACH), default=-1)
 			start = next((index for index, step in enumerate(scope.steps) if index > lastEach and isIndex(step)), len(scope.steps))
 			suffix = [relativeStep(step) for step in scope.steps[start:]]
-			trees = {occurrence["value"]["$handle"]: occurrence for occurrence in item["occurrences"][scope.name]}
+			trees = {occurrence["value"]["@handle"]: occurrence for occurrence in item["occurrences"][scope.name]}
 			result = []
 			for fragment in item["fragments"][scope.name]:
 				fragment = deepcopy(fragment)

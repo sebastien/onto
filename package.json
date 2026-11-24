@@ -1,0 +1,17 @@
+{
+	"name": "onto",
+	"version": "0.2.1",
+	"description": "Runtime for compiled onto bindings, mappings and rooted views",
+	"type": "module",
+	"exports": {
+		"./index.js": "./src/js/onto/index.js",
+		"./*.js": "./src/js/onto/*.js"
+	},
+	"files": ["src/js/onto"],
+	"dependencies": {
+		"hexa": "file:../hexa"
+	},
+	"scripts": {
+		"test": "bun test tests/js"
+	}
+}

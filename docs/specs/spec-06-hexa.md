@@ -53,7 +53,8 @@ for each projection up to its first static gap. Hexa's `SelectionRequest`
 deduplicates their read steps and adds prerequisite reads before any I/O.
 Reads and their input providers are shared across views.
 
-The adapter configures `ViewRead(input, bindings, provides=None)` per step.
+The adapter configures `ViewRead(input, bindings, provides=None, request=None,
+source=None)` per step.
 Both `input` and `provides` are `ViewInput(name, path, attr)` values, for
 example `ViewInput("id", "Exchange/Issuer", "Id")`. Steps match on the full
 source attribute, not `name`: a view may call this argument `issuerId`.
@@ -62,20 +63,91 @@ ontology, and checks the mapping's instance correspondence to the root before
 exposing the view. Starting from that source key, `provides` determines the
 reachable reads. Providers precede consumers; ties use catalogue order. A
 discovered key needs one provider.
-`rootHandle(input, value, targetType)` translates the source identity into a target handle;
-`describe(step, value)` describes a read without performing it;
-`fetch(step, value)` returns a `ViewDocument` with the response and its source;
-`discover(boundState, provides)` validates the bound response and returns
-the concrete key values for the next read. `ViewDocument.emptyInputs` names
-fully qualified source keys whose result is known to be empty. The adapter may raise `ViewReadError` with a
+
+`request` is the template of the read's HTTP request, the argument of hexa's
+`RequestSend` ([hexa.http](../../../hexa/docs/specs/spec-005-shape_pipelines_stages.md#http-requests)):
+`{method?, path, api?, query?, headers?, body?}`, the method `GET` by default.
+`{name}`, the input's name, stands for the input value: in `path`, as one
+percent-encoded segment (hexa's `p`; the path names no other placeholder); in
+`query`, `headers` and `body`, a string `"{name}"` is the value itself (a JSON
+number stays a number) and `{name}` within a longer string its text. `source`
+spells the response's provenance token the same way; without it the token is
+`api:path` (`path` without an API). The operator rejects a template it could
+not fill.
+
+```python
+ViewRead(ViewInput("isin", "Exchange/Instrument", "Isin"), [names],
+  request={"method": "POST", "path": "/instruments", "body": {"isin": "{isin}"}},
+  source="instrument/{isin}")
+```
+
+`HexaViewOperator(mapper, mapping, reads, access, operations=None)` takes the
+hexa host operations of every run: `RequestSend` (usually `http(base, ...)` from
+`hexa.http`, with the host's credentials) and, optionally, `FailureClassify`. The
+adapter `access` holds what only the source system knows:
+
+- `rootHandle(input, value, targetType)` translates the source identity into a target handle;
+- `fetch(step, value)` returns a `ViewDocument` with the response and its source;
+  only reads without a `request` need it;
+- `check(step, value, response)`, optional, checks a request's response
+  `{request, status, data, source}` and returns the read's `ViewDocument`: that
+  the response is the case asked for, the rows the view admits, and the
+  collections (`emptyTypes`) and keys (`emptyInputs`) it shows empty. Without
+  it, the document is `data` with the `source` token;
+- `describe(step, value)`, optional, describes a read without performing it;
+  by default, its request (its template while the value is still unknown);
+- `discover(boundState, provides)`, optional, validates the bound response and
+  returns the concrete key values for the next read; by default, the values of
+  the `provides` attribute on the bound instances of its type, in claim order.
+
+`ViewDocument.emptyInputs` names fully qualified source keys whose result is
+known to be empty. `fetch` and `check` may raise `ViewReadError` with a
 source-specific reason. No adapter method takes a view name.
+
+A report or retrieval is one hexa run. A read with a `request` is a
+`RequestSend(request)` effect; any other read is a `DocumentFetch(step, value)`
+effect, which `fetch` answers (plain or `async`). Reads run in waves: a read
+whose input is the seed is in the first wave, and a read of a discovered key is
+in the wave after its provider's. A wave's effects are performed concurrently
+(hexa's `parallel`, at most `maxConcurrency` at a time), each distinct request
+once, even when several reads need its response, and a response is not
+requested again later in the run. Each read of the wave is then checked, bound
+(`BindingRead`) and discovered in plan order; the mapping's `MappingRead` stage
+closes the run. Receipts, gaps and outcomes follow the plan, so the result does
+not depend on the order in which effects complete.
+
+- A failed effect is a `Failure.Effect`. `fetch`, or a host's `RequestSend`,
+  raising `ViewReadError` fails with the code `ViewRead.<reason>` (declared on
+  first use), any other error with `ViewRead.UnreadableResponse`; hexa's
+  `RequestSend` fails with its `Request` codes. A `ViewReadError` from `check`,
+  or a failure binding or discovering a response, makes the read unavailable
+  too: with its reason, or `UnreadableResponse`.
+- The report gives the read status `unavailable` and the gap `{step, input,
+  reason, detail}`. The reason is a `ViewRead` code's name, another code's
+  qualified name (`Request.NotFound`) or a `ViewReadError`'s reason. `detail`
+  is the error's message, to help resolve the failure: a hexa failure's cause,
+  spelled as the journal records it, or the error itself; it is absent when
+  there is no message. The message may quote the source, so a report is for
+  the host that made the read.
+- Each unavailable read's outcome from `runReads` also holds its failure. The
+  message of a failed effect is the failure's cause, so the run's journal
+  keeps it as the failure's `detail`.
+- `runReads`, `report` and `retrieve` take the run options `operations` (added
+  to the operator's), `record` (a journal sink, which receives the effects'
+  results and failures with their details), `replay` (a journal: the reads are
+  answered from it, and no host operation is called), `signal` and `policy`
+  (`retry`, `maxConcurrency`). A `ViewReadError` with `transient = True`, like
+  a transient `Request` failure, is retried under a retry policy.
+- Replaying the journal of a retrieval gives the same report or observations, in
+  Python or JavaScript.
 
 - `await operator.retrieve(view, seed, fields=None)` returns an **Onto
   `Observations`** document. Its claims are the selected leaves and the
   original link and filter witnesses for successful paths, deduplicated
   across fields. Handles, source identities and qualifiers are retained.
-  Use `printObservationsLog(target, result)` for compact `.obs` text;
-  no proven leaves means a document with no claims.
+  Use `printObservationsCompact(target, result)` for `.obs` text grouped by
+  entity or `printObservationsLog(target, result)` for the flat audit log.
+  No proven leaves means a document with no claims.
 - Explicit `fields` select projections by `population.member`. A type-based
   spelling such as `Instrument.Name` also works if it does not match a
   population selector and identifies exactly one projection.
@@ -177,10 +249,83 @@ log, report = ops.result(program, result)
 | `runs.py` | Previous output, stale slots, retractions, safeguards, approval |
 | `operations.py` | `HexaBindingOperator`, `HexaMappingOperator` and their functional forms |
 | `views.py` | `HexaViewOperator`, read catalogue, supplier planning and rooted view reports |
+| `bundle.py` | `viewBundle`: compiled programs, model facts and resolved views as JSON for the JavaScript runtime |
 
 Tests follow the onto convention, `tests/T06-<n>-hexa-<name>.py`, and are skipped
 when hexa is not installed. Each `Onto` vocabulary entry is also checked by
 hexa's conformance run over its examples.
+
+### Bundles and the JavaScript runtime
+
+Python compiles; other runtimes execute. `viewBundle(operator)` returns an
+`onto.view-bundle/1` document holding everything a `HexaViewOperator` needs
+after compiling:
+
+- `source` and `target`: the model facts that claim emission, reconciliation,
+  unfolding and projection consult (lineage, attributes with cardinality,
+  numeric identity, declared qualifiers and structures, facets, binary relations,
+  `@use` aliases);
+- `bindings` and `reads`: each read's binding programs (hexa encodings of their
+  selectors, shapes, templates and slots, and the declared functions and value
+  maps they call, a function with an `inverse` as a codec), deduplicated, and
+  its `request` and `source` templates;
+- `mapping`: the scope plans (reach, compiled lines, handle templates) and the
+  declared functions and value maps their transforms call, with resolved
+  signatures; library functions name their implementation, which the host supplies;
+- `views`: each rooted view resolved to populations, hops and selections,
+  with the read supplying each obligation; `keyTypes` and `inputTargets`.
+
+Slots whose shapes depend on an ontology revision stay program-local, as in
+Python; fixed-shape selector captures are declared process-wide. Function
+transforms and codecs are program-local too, each program with its own
+evaluator. The tree keys of an unfolded instance begin with `@`, because hexa
+cannot encode an optional key that begins with `$`.
+
+Member order is significant in a bundle, as in the Python objects it encodes:
+template members order a record's claims, catalogue order breaks ties between
+reads, relation order resolves a verb, and selection order orders a report.
+Keep it when transforming a bundle (do not sort keys).
+
+`bindingProgramJson(operator, program)` and `mappingProgramJson(mapper,
+program, libraries=None)` export single programs. The JavaScript runtime loads
+them with `loadBindingProgram(data, model, {implementations})` and
+`loadMappingProgram(data, sourceModel, targetModel, {implementations})`.
+
+The JavaScript runtime in `src/js/onto/` loads a bundle on the hexa JavaScript
+binding. `ViewOperator(bundle, {access, implementations, operations})` has the
+methods `plan`, `report`, `retrieve` and `runReads`, whose options are `now`,
+`fetch` (overriding `access.fetch`), `operations`, `record`, `replay`, `signal`
+and `policy`. Reads are the same effects as in Python, so a journal recorded in
+either language replays in the other. In a browser, `operations` is typically
+`http({base, fetch})` from `hexa/http.js`, with a `fetch` that adds the user's
+credentials. The runtime does not parse or compile text,
+write documents, re-run with approval or learn formats. It does not re-validate
+logs through their text form, because Python checks the same programs on the
+same inputs. Its output equals Python's: the same claims, gaps, reports and
+`.obs` text (flat or compact). It omits only the inventory `fields` and learned
+writing formats of a binding run.
+
+`make test-js` checks this. `tests/conformance.py`, a pytest plugin enabled by
+`ONTO_CONFORMANCE=<file>`, records each `BindingRead` and `MappingRead` run and
+each view plan, report and retrieval that the Python suite makes. A record holds
+the exported program or bundle, the input, every answer of the host (library
+function calls, view identities and discoveries), the hexa journal of a report
+or retrieval and Python's output. `tests/js/conformance.test.js` replays each
+record on the JavaScript runtime and compares the outputs: a view reads from
+the journal, which it must consume exactly. Each report and retrieval is also
+run live, its `fetch` and `RequestSend` answering (or failing) as Python's host
+did, and must record the same journal. One whose reads are requests is run
+again through hexa's `http` against a local server that answers each request
+as Python's did.
+
+| Module | Contents |
+| --- | --- |
+| `index.js` | Public API |
+| `views.js` | `ViewOperator`, planning through hexa's `SelectionRequest`, evidence walks and projection |
+| `binding.js`, `mapping.js` | Binding stages and claim emission; mapping unfold, variants and emission |
+| `observations.js`, `print.js` | Merge and reconcile logs; `.obs` text |
+| `vocabulary.js`, `functions.js`, `types.js` | The `Onto` vocabulary, built-ins with exact decimals, function value typing |
+| `model.js`, `program.js`, `values.js` | Model facts, program-local registries, spec-02 value helpers |
 
 ## Correspondence
 
@@ -758,14 +903,15 @@ source input is that of its `{src=Path}`, or else of its first path.
 state into a tree:
 
 ```text
-{$handle, $type, $scope, $target, $self?, $valid?, $at, $src, Attr: Value, ...}
+{@handle, @type, @scope, @target, @self?, @valid?, @at, @src, Attr: Value, ...}
 ```
 
-- `$handle` and `$type` are the instance's; `$scope` is the state's `@scope`;
-  `$target` is the handle of its target instance for this scope ([Handles](#handles));
-  `$self`, present when a line reads `$`, is the instance as a reference
-  (`{ref, target, targets?}`); `$valid`, `$at` and `$src` come from its existence
-  claim, `$src` as the provenance token.
+- `@handle` and `@type` are the instance's; `@scope` is the state's `@scope`;
+  `@target` is the handle of its target instance for this scope ([Handles](#handles));
+  `@self`, present when a line reads `$`, is the instance as a reference
+  (`{ref, target, targets?}`); `@valid`, `@at` and `@src` come from its existence
+  claim, `@src` as the provenance token. Root keys begin with `@`, never `$`:
+  hexa cannot encode an optional key that begins with `$`.
 - Keys are attribute paths as in spec-02 claims (`p`, e.g. `Bond.CouponRate`),
   binary relations by verb, and the roles of an n-ary relation instance by role
   name. Only keys in the reach are present.
@@ -841,10 +987,10 @@ since references need the targets of the instances they point to.
   references to it are gaps (`Mapping.ReferenceUnmapped`).
 
 The pairs of source and target handles are the instance correspondence. They are
-reported with the run, and used by the unfold for `$target` and `target`.
+reported with the run, and used by the unfold for `@target` and `target`.
 
 A source type with several scope lines (spec-04 Instances) has one target per
-line: the unfold keeps them by target type, gives each scope's tree the `$target`
+line: the unfold keeps them by target type, gives each scope's tree the `@target`
 of its own type, and adds `targets: {<T>: handle}` to references to such an
 instance. A line receiving one compiles `Onto.CorrespondAs(value, "<T>")`, `<T>`
 being the target type the receiver accepts, chosen at compile time; other
@@ -876,7 +1022,7 @@ A scope compiles as a binding scope line does, over trees instead of documents:
   vocabulary (`Mapping.ValueUnmapped`). Reference translation is
   `Onto.Correspond(r)`, which returns `{ref: target}`, or raises
   `Mapping.ReferenceUnmapped` when the reference has no target.
-- The record's `handle` is `$Map.Root.Target`, captured from `$target`. Root
+- The record's `handle` is `$Map.Root.Target`, captured from `@target`. Root
   keys starting with `$` are written `$$` in hexa's JSON encoding.
 - Scope `{when}` is evaluated by `InstancesUnfold`: instances whose condition
   fails are not unfolded, and a conflicting condition is a gap
@@ -939,8 +1085,8 @@ tree of the bond, and its metadata table (all claims from the feed, source alias
 `f`):
 
 ```json
-{"$handle": "Instrument_US0000000019", "$type": "Exchange/Instrument", "$scope": "Exchange",
- "$target": "Instrument_US0000000019", "$at": "2026-11-10", "$src": "feed:instruments/2026-11-10",
+{"@handle": "Instrument_US0000000019", "@type": "Exchange/Instrument", "@scope": "Exchange",
+ "@target": "Instrument_US0000000019", "@at": "2026-11-10", "@src": "feed:instruments/2026-11-10",
  "Class": "F", "Code": "ACM30", "CouponRate": "0.0525", "Isin": "US0000000019",
  "MaturityDate": "1907712000", "Name": "Acme 5.25% 2030", "PaymentInterval": "6",
  "Issuer": {"ref": "Issuer_C_2D17", "target": "Company_ACME"}}
@@ -953,7 +1099,7 @@ tree of the bond, and its metadata table (all claims from the feed, source alias
 compiles to:
 
 ```text
-InstrumentTree = {$target?: $Map.Root.Target,
+InstrumentTree = {@target?: $Map.Root.Target,
                   Class?: tolerant($Exchange.Instrument.Class),
                   Code?: tolerant($Exchange.Instrument.Code),
                   CouponRate?: tolerant($Exchange.Instrument.CouponRate),

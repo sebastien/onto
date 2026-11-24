@@ -140,6 +140,12 @@ def rawMembers(text: str) -> tuple[list[str], bool]:
 	return items, partial
 
 
+def expandRef(text: str, aliases: dict[str, str]) -> str:
+	"""Expand the handle of a bare or typed reference, preserving its type spelling."""
+	handle, colon, kind = text.partition(":")
+	return aliases.get(handle, handle) + colon + kind
+
+
 # -----------------------------------------------------------------------------
 #
 # OPERATIONS
@@ -188,6 +194,7 @@ class ObservationResolver:
 		if not match:
 			raise ValueError(f"Invalid reference '{text}'")
 		handle, typeName = match.groups()
+		handle = self.doc.aliases.get(handle, handle)
 		if typeName:
 			if path := self.typePath(typeName, loc):
 				self.declare(handle, path, loc)
@@ -448,13 +455,50 @@ class ObservationResolver:
 			if not actual or not self.model.isA(actual, expected):
 				self.diag.error("type", f"'{handle}' is '{actual}', expected '{expected}'", loc)
 		observations = Observations(dict(self.doc.obs), dict(self.doc.sources), dict(sorted(self.instances.items())), claims, retractions)
-		return validateStatements(self.doc, observations, self.diag.items, mode)
+		return validateStatements(self, observations, self.diag.items, mode)
+
+	def gapText(self, statement: Statement) -> str:
+		"""Spell a held statement for JSON replay, which has no local alias table."""
+		text = splitAnnotations(statement.text)[0]
+		aliases = self.doc.aliases
+		if not aliases:
+			return text
+		prefix = "- " if statement.retract else ""
+		if statement.form in ("same", "distinct", "link"):
+			verb = {"same": "=", "distinct": "!="}.get(statement.form, statement.verb)
+			name = f"{statement.name}: " if statement.name else ""
+			return f"{prefix}{name}{statement.s} {verb} {statement.obj}"
+		# Only the initial handle changes in a header or attribute path.
+		text = prefix + re.sub(rf"^{HANDLE}", lambda _: statement.s, text.removeprefix(prefix), count=1)
+		raw = statement.raw
+		if raw is None:
+			return text
+		owner = self.instances.get(statement.s, {}).get("type")
+		attr = self.model.lookup(owner, statement.p) if owner else None
+		if not attr or useType(self.model, attr, statement.meta).kind not in ("entity", "relation"):
+			return text
+
+		def ref(item: str) -> str:
+			return expandRef(item, aliases) if RE_REF.fullmatch(item) else item
+
+		if raw.startswith("["):
+			try:
+				members, partial = rawMembers(raw)
+			except ValueError:
+				return text  # Malformed collection syntax fails before resolving any members.
+			if partial:
+				members.append("...")
+			value = "[" + ", ".join(map(ref, members)) + "]"
+		else:
+			value = ref(raw)
+		return text[:-len(raw)] + value
 
 
-def validateStatements(doc: ObservationsDocument, observations: Observations, diagnostics: list[Diagnostic], mode: str) -> Observations:
+def validateStatements(resolver: ObservationResolver, observations: Observations, diagnostics: list[Diagnostic], mode: str) -> Observations:
 	"""Reject errors in strict mode; in lenient mode hold whole statements as inert gaps."""
 	if not diagnostics:
 		return observations
+	doc = resolver.doc
 	statements = {statement.loc: statement for statement in doc.statements}
 	allDiagnostics = observations.diagnostics + diagnostics
 	if mode == "strict" or any(item.level == "error" and item.loc not in statements for item in diagnostics):
@@ -463,7 +507,7 @@ def validateStatements(doc: ObservationsDocument, observations: Observations, di
 	for item in dict.fromkeys(diagnostics):
 		if item.level == "error":
 			errors.setdefault(item.loc, []).append(replace(item, level="warning"))
-	gaps = [Gap(statement.n, statement.rawLine, splitAnnotations(statement.text)[0], statement.loc,
+	gaps = [Gap(statement.n, statement.rawLine, resolver.gapText(statement), statement.loc,
 		deepcopy(statement.meta), statement.ctx, tuple(errors[statement.loc]))
 		for statement in doc.statements if statement.loc in errors]
 	blocked = {gap.n for gap in gaps}
@@ -671,11 +715,12 @@ def jsonGap(value: Any) -> Gap:
 
 
 def parseObservations(source: Source) -> ObservationsDocument:
-	"""Parse `source` into statements; directives supply metadata defaults, never record headers."""
+	"""Parse `source` into statements, expanding record and claim-neutral entity bodies."""
 	diag = Diagnostics()
 	doc = ObservationsDocument()
 	defaults: dict[str, Any] = {}
 	record, ctx = None, None
+	entity = False
 	rawLines = source.text.split("\n")
 	if "\r" in source.text:
 		diag.error("syntax", "Line endings must be LF", Loc(source.name, 1))
@@ -688,9 +733,16 @@ def parseObservations(source: Source) -> ObservationsDocument:
 			if record is None:
 				diag.error("indent", "Body line without a record header", line.loc)
 				continue
-			text = f"{record}.{line.text}"
+			if entity and line.text.startswith("->"):
+				text = f"{record} {line.text[2:].lstrip()}"
+				if not line.text[2:3].isspace() or not RE_LINK.fullmatch(splitAnnotations(text)[0]):
+					diag.error("syntax", "An entity link requires '-> verb object'", line.loc)
+					continue
+			else:
+				text = f"{record}.{line.text}"
 		else:
 			record = None
+			entity = False
 			text = line.text
 		if text.startswith("@"):
 			parts = text.split(maxsplit=1)
@@ -732,6 +784,23 @@ def parseObservations(source: Source) -> ObservationsDocument:
 					diag.error("directive", "@type requires a handle and an instance type, without metadata", line.loc)
 				else:
 					doc.declarations.append(TypeDeclaration(parts[0], parts[1], line.loc))
+			elif directive == "@entity":
+				parts = args.split()
+				if len(parts) != 2:
+					diag.error("directive", "@entity requires [alias=]handle and an instance type", line.loc)
+					continue
+				alias, equals, handle = parts[0].rpartition("=")
+				if not isName(handle) or equals and (not isName(alias) or {alias, handle} & {"none", "null"}):
+					diag.error("directive", "Invalid @entity handle or alias", line.loc)
+					continue
+				if equals:
+					if alias in doc.aliases and doc.aliases[alias] != handle:
+						diag.error("duplicate", f"Entity alias '{alias}' redefined", line.loc)
+					doc.aliases[alias] = handle
+				else:
+					handle = doc.aliases.get(handle, handle)  # Reopen a previously bound subject.
+				doc.declarations.append(TypeDeclaration(handle, parts[1], line.loc))
+				record, entity = handle, True
 			elif directive == "@implicit" and args and all(isName(handle) for handle in args.split()):
 				# NOTE: Display-only: neither introduces types nor asserts existence.
 				pass
@@ -770,6 +839,22 @@ def parseObservations(source: Source) -> ObservationsDocument:
 			diag.error("syntax", f"Unrecognised statement '{text}'", line.loc)
 	if not doc.obs.get("ontology"):
 		diag.error("header", "Missing @obs directive")
+	if doc.aliases:
+		for declaration in doc.declarations:
+			if declaration.handle in doc.aliases:
+				diag.error("duplicate", f"Entity alias '{declaration.handle}' shadows a declared handle", declaration.loc)
+		# Value operands are expanded by ref() only when the ontology calls for a handle.
+		for statement in doc.statements:
+			statement.s = expandRef(statement.s, doc.aliases)
+			if statement.obj:
+				statement.obj = expandRef(statement.obj, doc.aliases)
+			if statement.name:
+				statement.name = doc.aliases.get(statement.name, statement.name)
+			if statement.ctx:
+				statement.ctx = doc.aliases.get(statement.ctx, statement.ctx)
+			if "ctx" in statement.meta:
+				value = statement.meta["ctx"]
+				statement.meta["ctx"] = doc.aliases.get(value, value)
 	doc.diagnostics = diag.check()
 	return doc
 

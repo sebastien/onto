@@ -4,6 +4,7 @@ VERSION = $(shell $(UV) version --short)
 DIST_DIR ?= dist
 WHEEL = $(DIST_DIR)/onto_lang-$(VERSION)-py3-none-any.whl
 RELEASE_FILES = $(DIST_DIR)/onto_lang-$(VERSION).tar.gz $(WHEEL)
+HEXA ?= ../hexa
 HEXA_SRC ?= ../hexa/src/py
 GIT_REMOTE ?= origin
 GIT_BRANCH ?= main
@@ -11,7 +12,7 @@ SKILLS = $(notdir $(wildcard docs/skills/*))
 # Where agents look for skills; each skill is linked, so edits here apply at once.
 SKILLS_DIRS ?= $(HOME)/.config/opencode/skills $(HOME)/.agents/skills
 
-.PHONY: test test-hexa test-release release install-skills uninstall-skills
+.PHONY: test test-hexa test-js test-release release install-skills uninstall-skills
 
 test:
 	$(PYTEST) -q
@@ -19,6 +20,16 @@ test:
 test-hexa:
 	PYTHONPATH="$(abspath $(HEXA_SRC)):$$PYTHONPATH" $(UV) run python -c 'import hexa.shapes'
 	PYTHONPATH="$(abspath $(HEXA_SRC)):$$PYTHONPATH" $(PYTEST) -q -o 'pythonpath=src/py'
+
+# The JavaScript runtime: its unit tests and a replay of every binding, mapping and view run the Python suite makes.
+test-js: node_modules/hexa
+	ONTO_CONFORMANCE=build/conformance.json PYTHONPATH="$(abspath $(HEXA_SRC)):$$PYTHONPATH" $(PYTEST) -q -p tests.conformance -o 'pythonpath=src/py'
+	bun test tests/js
+
+# The runtime imports `hexa/...`: link the sibling checkout, as `npm install` would.
+node_modules/hexa:
+	mkdir -p node_modules
+	ln -s "$(abspath $(HEXA))" node_modules/hexa
 
 test-release:
 	$(UV) build --no-sources --out-dir "$(DIST_DIR)"
