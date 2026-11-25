@@ -239,6 +239,15 @@ def test_scope_conditions_that_cannot_reverse_lose_the_scope():
 	assert reversed_.scopes == [] and [item.line for item in lossy] == ["Label"]
 
 
+def test_conditions_with_alternatives_and_several_tests_reverse_test_by_test():
+	reversed_, lossy = reverse("  OwnerName <- Name\n  Stamp <- Stamp\n  Tags <- Tags {when=Name:a|b & (Stamp:x | Name:c)}\n")
+	assert lossy == []
+	assert lines(reversed_)["Tags"]["when"] == {"all": [{"path": ["OwnerName"], "values": ["a", "b"]},
+		{"any": [{"path": ["Stamp"], "value": "x"}, {"path": ["OwnerName"], "value": "c"}]}]}
+	reversed_, lossy = reverse("  OwnerName <- Name\n  Tags <- Tags {when=Name:a | Code:X}\n")
+	assert [(item.line, item.reason) for item in lossy] == [("Tags", "condition 'Code' is not read back by a direct line")]
+
+
 def test_derived_values_are_never_projected_back():
 	"""A -> B -> A: a derived target, or a reverse assigning a derived input, is lossy."""
 	source = loadOntology([Source("s.onto", "@ontology DerS rev=v1\nPerson\n  Name Text\n  ~ CanEdit Boolean <- Name {rule=?}\n")])

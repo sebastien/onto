@@ -555,6 +555,11 @@ Household -hasMember/memberOf-> Person 1:*
   A `(From, To)` pair appears once.
   For hierarchical vocabularies, use full value paths; inferred ancestors count
   as declared values. Map lines do not implicitly apply to descendants.
+- A value may have several counterparts (`Both narrower Insurance` and
+  `Both narrower Lending`), or none: `- FromValue [-- doc]` records that it
+  deliberately has no counterpart, and the value then has no other line. A map
+  with either is **set-valued**: as a function, it gives sets
+  ([spec-04](spec-04-mapping.md#mappings)).
 - Annotations: `rule` (e.g. a scalar conversion token), `status`, `src`, `check`.
 - In [mappings](spec-04-mapping.md#mappings), a map is also a function from
   `From` values to `To` values.
@@ -936,7 +941,7 @@ convert losslessly (comments excepted); the structure is defined by
 - `{"kind": "domain", "path", "doc"?}`; `{"kind": "map", "path", "from", "to",
   "lines": [{"from", "match", "to", "doc"?}], "ann"?, "doc"?}` (`from`/`to` are
   full type paths; line values are names, or full value paths for hierarchical
-  vocabularies).
+  vocabularies). A `- FromValue` line is `{"from", "doc"?}`.
 - `ann.context`, `ann.ctx` and `ann.extends` are full paths, and so is the `V`
   of a `?:V` qualifier.
 - `ids` optionally carries the identity sidecar (same paths and identifiers).

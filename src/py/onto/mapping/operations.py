@@ -7,6 +7,7 @@ from typing import Any
 
 from ..binding.operations import ExpressionResolver, Inferred, checkAssignment, checkScalarTarget, compatible
 from ..binding.parser import qualifyPath
+from ..conditions import conditionPaths, testValues
 from ..expressions import keyedSteps
 from ..ontology.model import unkeyed
 from ..coverage import ViewSelection, viewSelections
@@ -14,7 +15,7 @@ from ..functions.model import Function, FunctionLibrary, FunctionsDocument
 from ..functions.operations import resolveFunctions
 from ..observations.model import ObservationsDocument
 from ..observations.parser import ObservationResolver
-from ..ontology.model import Model, Ontology, ResolvedType, TypeExpr, isAssociation
+from ..ontology.model import Model, Ontology, ResolvedType, TypeExpr, isAssociation, isSetValued
 from ..ontology.operations import checkAnnotations, validateMap
 from ..referential.model import Referential
 from ..referential.operations import policyFor, validateReferential
@@ -90,14 +91,16 @@ def acceptedTypes(targetModel: Model, owner: str, name: str, attr: Any) -> list[
 
 
 def checkExclusive(name: str, lines: list[MappingLine], facet: bool) -> None:
-	"""Lines assigning one target must be exclusive: `when` on one path with distinct values, and at most one default."""
+	"""Lines assigning one target must be exclusive: `when` tests of one path sharing no value, and at most one default."""
 	if len(lines) < 2:
 		return
 	conditional = [line.when for line in lines if line.when]
-	if facet or len(lines) - len(conditional) > 1 or any(when["path"] != conditional[0]["path"] for when in conditional[1:]) \
-		or len({when["value"] for when in conditional}) != len(conditional):
+	# A test of having a value overlaps any value: exclusive lines test values.
+	values = [value for when in conditional for value in testValues(when)] if all("path" in when and testValues(when) for when in conditional) else []
+	if facet or len(lines) - len(conditional) > 1 or not values or any(when["path"] != conditional[0]["path"] for when in conditional[1:]) \
+		or len(set(values)) != len(values):
 		raise ValueError(f"Target '{name}' is assigned twice in one scope; repeated lines need exclusive conditions"
-			" (`when` on one path with distinct values) and at most one line without `when`")
+			" (`when` tests of one path sharing no value) and at most one line without `when`")
 
 
 def chosenTarget(model: Model, targetModel: Model, mapping: Mapping, inferred: Inferred, asType: str, accepted: list[str]) -> Inferred:
@@ -234,7 +237,7 @@ class MappingExpressionResolver(ExpressionResolver):
 			raise ValueError(f"Invalid argument count for local map '{decl.path}'")
 		actual, plural = self.resolve(expr["args"][0])
 		checkAssignment(self.model, (actual, False), self.model.resolveType(TypeExpr(path=decl.mapFrom)), True, decl.path)
-		return self.targetModel.resolveType(TypeExpr(path=decl.mapTo)), plural
+		return self.targetModel.resolveType(TypeExpr(path=decl.mapTo)), plural or isSetValued(decl)
 
 	def translate(self, inferred: Inferred, accepted: list[str] | None = None) -> Inferred:
 		"""A source reference's type as the target sees it, through the instance correspondence.
@@ -385,8 +388,8 @@ def resolveMapping(fromOntology: Ontology, toOntology: Ontology, doc: MappingDoc
 					raise ValueError("into currently requires a non-contextual reference")
 				destination = resolver.translate((intoType, False), [scope.target])
 				checkAssignment(targetModel, destination, targetModel.resolveType(TypeExpr(path=scope.target)), False, "into target")
-			if scope.when:
-				resolver.resolve({"path": scope.when["path"]})
+			for path in conditionPaths(scope.when):
+				resolver.resolve({"path": path})
 			if scope.valid:
 				resolver.resolve(scope.valid)
 			if scope.present:
@@ -405,6 +408,11 @@ def resolveMapping(fromOntology: Ontology, toOntology: Ontology, doc: MappingDoc
 				siblings = targets.setdefault(key, [])
 				siblings.append(line)
 				checkExclusive(name, siblings, bool(line.facet))
+				if len(siblings) > 1:
+					# A collection can hold two exclusive values at once: exclusive lines test a single value.
+					shared = next(item.when["path"] for item in siblings if item.when)
+					if MappingExpressionResolver(model, targetModel, mapping, scope, functions, Diagnostics(), selections).resolve({"path": shared})[1]:
+						raise ValueError(f"Target '{name}': exclusive lines test a single-valued path")
 				inferred: Inferred = None, False
 				if line.expr is not None:
 					inferred = resolver.resolve(line.expr)
@@ -412,8 +420,8 @@ def resolveMapping(fromOntology: Ontology, toOntology: Ontology, doc: MappingDoc
 					raise ValueError(f"src='{line.src}' names a path the expression does not read")
 				if line.reverse and not resolver.throughReference:
 					raise ValueError("reverse requires a path through a reference")
-				if line.when:
-					resolver.resolve({"path": line.when["path"]})
+				for path in conditionPaths(line.when):
+					resolver.resolve({"path": path})
 				qualifierTypes = {key: resolver.resolve(expr) for key, expr in line.qualifiers.items()}
 				contextsRead = set(resolver.contexts)
 				facet = targetModel.facets(scope.target).get(line.facet) if line.facet else targetModel.facetOf(scope.target, name)

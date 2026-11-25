@@ -97,7 +97,7 @@ Customs/Code = C6109|C0808|...
 | `F of E {when=A:V}` | Conditional facet: applies only to subjects whose `A` is `V` |
 | `S -verb/inverse-> T L:R` + body | Binary relation |
 | `R(Role: [card] Type, ...)` + body | Association (n-ary relation) |
-| `@map M From -> To` + body | Value map: `exact`, `broader`, `narrower`, `related` |
+| `@map M From -> To` + body | Value map: `exact`, `broader`, `narrower`, `related`; `- V` gives `V` no counterpart. Several lines for one value, or an excluded one, make the map give sets |
 | `@view V` + body | View |
 | `@domain D` | Domain: a top-level namespace segment |
 | `~ A T <- X {rule=Lib/Fn}` | Derived attribute whose rule is a `.fn` library function, checked when the library loads |

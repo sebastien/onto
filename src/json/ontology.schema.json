@@ -181,11 +181,20 @@
             "lines": {
               "type": "array",
               "items": {
-                "type": "object", "required": ["from", "match", "to"], "additionalProperties": false,
-                "properties": {
-                  "from": { "$ref": "#/$defs/path" }, "match": { "enum": ["exact", "broader", "narrower", "related"] },
-                  "to": { "$ref": "#/$defs/path" }, "doc": { "$ref": "#/$defs/doc" }
-                }
+                "oneOf": [
+                  {
+                    "type": "object", "required": ["from", "match", "to"], "additionalProperties": false,
+                    "properties": {
+                      "from": { "$ref": "#/$defs/path" }, "match": { "enum": ["exact", "broader", "narrower", "related"] },
+                      "to": { "$ref": "#/$defs/path" }, "doc": { "$ref": "#/$defs/doc" }
+                    }
+                  },
+                  {
+                    "description": "`- FromValue`: the value has no counterpart.",
+                    "type": "object", "required": ["from"], "additionalProperties": false,
+                    "properties": { "from": { "$ref": "#/$defs/path" }, "doc": { "$ref": "#/$defs/doc" } }
+                  }
+                ]
               }
             },
             "ann": { "$ref": "#/$defs/ann" }, "doc": { "$ref": "#/$defs/doc" }

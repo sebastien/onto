@@ -155,6 +155,16 @@ def test_derived_targets_are_read_but_never_written():
 	assert document == {"rows": [{"name": "A"}]}
 
 
+def test_conditions_with_alternatives_or_several_tests_are_not_written_back():
+	"""Writing restores a line's `path:value` condition; it cannot choose among alternatives."""
+	ontology = loadOntology([Source("w.onto", "@ontology Cond rev=v1\nRow\n  Name Text\n  Kind Text\n")])
+	binding = loadBinding(ontology, Source("w.bind", "@binding Cond\nRow <- rows[*] {id=id}\n  Kind <- kind\n  Name <- name {when=kind:A|B}\n"))
+	state = readState(ontology, binding, {"rows": [{"id": "1", "name": "N", "kind": "A"}]})
+	document, report, _ = write(ontology, binding, state)
+	assert [(item["line"], item["reason"]) for item in report.lossy] == [("Name", "Binding.PathUnsupported: A condition with alternatives or several tests cannot be written back")]
+	assert document == {"rows": [{"kind": "A"}]}
+
+
 def test_null_policies_write_json_null():
 	text = TEXT.replace("  Class <- class\n", "  Class <- class {null=unknown}\n")
 	binding = loadBinding(EXCHANGE, Source("b", text))

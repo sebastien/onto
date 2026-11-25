@@ -503,10 +503,16 @@ The record template produces one **record** per occurrence:
   `ClaimsEmit` uses it to type referenced-only handles and strips it before
   observation interchange; public reference values remain `{"ref": handle}`.
 - `source` is `$Location` and `origin` is `$Origin?`. Both are value-free.
-- `{when=path:value}` wraps the line's value: `Onto.When(Onto.TextEquals($F, "value"),
-  Value)`, which is absent when the condition fails. On a `[Facet]` line it
-  wraps `true`.
-- `deleted=path:value` compiles to `deleted: Onto.TextEquals($F, "value")`.
+- `{when=condition}` wraps the line's value: `Onto.When(C, Value)`, which is
+  absent when the condition fails. On a `[Facet]` line it wraps `true`. `C` is
+  the [condition](spec-04-mapping.md#conditions) as a boolean: a test
+  `path:value` is `Onto.TextEquals($F, "value")` and `path:A|B` is
+  `Onto.TextIn($F, ["A", "B"])`, each holding for a collection one of whose
+  members is listed; a path alone is `Onto.HasValue($F)`; `&` is
+  `Onto.AllOf(...)` and `|` is `Onto.AnyOf(...)`.
+- `deleted=condition` compiles to `deleted: C`.
+- `{unset=V}` wraps the line's value, before its condition: `Onto.Unset(Value,
+  "V")` is absent when the value's text is `V`'s (numbers as canonical decimals).
 - `formats` has one key per field read with `$format`, the field's binding path
   (`instruments[*].dividends[*].payableDate`), holding
   `Onto.FormatName(parsed($S))`: the formats-file name of the pattern that parsed
@@ -559,7 +565,7 @@ its codes under `Binding` and `Mapping`:
 | --- | --- |
 | Constraints | `Integral`, `IsoDuration` |
 | Codecs | `EpochDate`, `IntegerText`, `SplitText(Separator)`, `DateTimePattern(Pattern)`, `DecimalNumber`, `DecimalPlaces(Places)`, `Case(Case)` |
-| Transforms | `Handle`, `SourceHandle`, `Ref`, `Correspond`, `Coalesce`, `When`, `TextEquals`, `Valid`, `Read`, `Set`, `Field`, `Nullable`, `At`, `Given`, `Members`, `FormatName`, `QualifierConvert`, `ToInteger`, `ToVocabulary`, `HandleKey`, and the spec-04 built-in functions in PascalCase (`Concat`, `Trim`, `Multiply`, ...) |
+| Transforms | `Handle`, `SourceHandle`, `Ref`, `Correspond`, `Coalesce`, `When`, `WhenNone`, `TextEquals`, `TextIn`, `HasValue`, `AllOf`, `AnyOf`, `Unset`, `Valid`, `Read`, `Set`, `Field`, `Nullable`, `At`, `Given`, `Members`, `FormatName`, `QualifierConvert`, `ToInteger`, `ToVocabulary`, `HandleKey`, and the spec-04 built-in functions in PascalCase (`Concat`, `Trim`, `Multiply`, ...) |
 | Codes | `Binding.KeyMissing`, `Binding.TypeMismatch`, `Binding.PathUnsupported`, `Binding.InputEmpty`, `Binding.SnapshotOlder`, `Binding.ParentMissing`; `Mapping.InputConflicting`, `Mapping.ReferenceUnmapped`, `Mapping.ReferenceAmbiguous`, `Mapping.NotIntegral`, `Mapping.ValueUnmapped`, `Mapping.KeyReference`, `Mapping.ContextUnsupported`, `Mapping.PolicyUnsupported` |
 
 Each has examples. Built-in functions keep their spec-04 examples and add those
@@ -1315,9 +1321,8 @@ after reading the spec-04 feed:
 
 ## Deferred
 
-In the order they are expected to be added:
-
 1. **Registry-backed identities** (spec-05): minted handles, composite and alternate keys and
    alias lookups, through a host operation `IdentityResolve` in `HandlesResolve`.
-2. **Index steps before `[*]`** in scope paths (`a[0].b[*]`), which no hexa
-   selector can reach. Other index steps are read by tuple shapes.
+
+Index steps before `[*]` in scope paths, once deferred here, are read as a
+selector level of their own ([Selector](#selector)).

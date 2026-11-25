@@ -1138,6 +1138,53 @@ replay over HTTP compares reports without these messages, because a failed
 request's message names the server that answered it. Tests: `T06-018`,
 `tests/js/conformance.test.js`.
 
+### Conditions, unset values and set-valued maps (2026-11-25)
+
+Found mapping the AdviceLink CRM to AdviceOS (adviceos-data `TODO_ONTO.md`):
+presence functions stood in for alternatives, disjunction and non-zero tests
+(about 40 calls), and functions for maps giving several values or none.
+
+- **Unselected presence scopes report no line gaps.** `projectionGap` (Python
+  `unfold.py`, JS `mapping.js`) returns when the record's `present` is not
+  present: a scope its presence does not select demands nothing of its lines
+  (spec-04 Instances). Tests: `T06-011`.
+- **Conditions** (spec-04 "Conditions", `onto/conditions.py`): `when` and
+  `deleted` take tests `path:value`, `path:A|B` and `path` alone (having a
+  value, as `present=` reads one), joined by ` & ` and ` | ` (`&` first) and
+  grouped with parentheses; a test of a collection holds when a member is
+  listed. JSON `{path, value}`, `{path, values}`, `{path}`, `{all}`, `{any}`.
+  Templates use `Onto.TextEquals` (now membership-aware), `Onto.TextIn`,
+  `Onto.HasValue`, `Onto.AllOf` and `Onto.AnyOf`; scope selection and line applicability use
+  `conditionHolds` (Python and JS), and a conflict in any tested slot is a
+  conflicting input. Exclusive lines need tests of values of one single-valued
+  path sharing no value. Reversal translates each test's path; binding writing
+  restores only `path:value`, and reports other conditions lossy. A condition
+  value can no longer hold `:`, `|`, `&` or parentheses. Tests: `T04-010`,
+  `T06-020`, `T04-007`, `T06-005`.
+- **`{unset=V}`** on a binding attribute line: the value a source writes for
+  "not given" says nothing (`Onto.Unset`, compared as the attribute's canonical
+  text, so `0.00` is `0`). Tests: `T04-003`, `T06-008`.
+- **Set-valued maps** (spec-01 "Maps", spec-04): `- Value` body lines; a map
+  excluding a value, or listing one on several lines, gives sets
+  (`isSetValued`): the counterparts of a value, or of every member of a
+  collection. Statically a collection; lossy under reversal; bundles carry
+  `setValued` and `[value, null]` lines. Tests: `T01-001`, `T01-002`, `T04-005`,
+  `T06-021`.
+- Spec-06 "Deferred" no longer lists index steps before `[*]` (implemented
+  2026-11-18).
+
+Open, proposed, not decided:
+
+- **Composite keys** (spec-05). `key=A,B` is a primary key with an alternate
+  key; no policy derives a handle from several attributes together, though
+  spec-06 lists composite keys as deferred. adviceos-data needs one for numbers
+  unique within a scope: a company number within its country's register, a
+  policy or loan number within its provider (`AdviceOSIds`). A key read
+  through a reference (the provider) also meets `Mapping.KeyReference`.
+- **Declared response checks** (see "Views" in "Later work"): adviceos-data
+  implements the same checks twice, in Python (`recorded.py`) and JavaScript
+  (`advicelink.js`).
+
 ## Workspace hygiene
 
 The project now is a Git repository. Do not modify the original

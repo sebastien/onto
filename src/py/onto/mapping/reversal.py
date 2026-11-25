@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 
+from ..conditions import mapConditionPaths
 from ..expressions import Expression, keyedSteps, parseExpression
 from ..functions.model import BUILTIN_ARITIES, Function, FunctionLibrary
 from ..ontology.model import Decl, MapLine, Model, Ontology
@@ -185,13 +186,15 @@ class Reverser:
 		raise Lossy(f"'{'.'.join(steps)}' reads another instance without {{reverse}}")
 
 	def condition(self, when: dict, assigned: dict[str, str]) -> dict:
-		"""Translate a `when` path into the reverse input that assigns it, when a direct line does."""
-		if when["path"] == [{"root": True}]:
-			raise Lossy("the scope instance '$' is not read back by a direct line")
-		path = ".".join(keyedSteps(when["path"]))
-		if path not in assigned:
-			raise Lossy(f"condition '{path}' is not read back by a direct line")
-		return targetExpression(assigned[path]) | {"value": when["value"]}
+		"""Translate each test's path into the reverse input that assigns it, when a direct line does."""
+		def translate(steps: list) -> list:
+			if steps == [{"root": True}]:
+				raise Lossy("the scope instance '$' is not read back by a direct line")
+			path = ".".join(keyedSteps(steps))
+			if path not in assigned:
+				raise Lossy(f"condition '{path}' is not read back by a direct line")
+			return targetExpression(assigned[path])["path"]
+		return mapConditionPaths(when, translate)
 
 	def scope(self, scope: MappingScope) -> MappingScope | None:
 		candidates = self.mapping.header.get("candidates") is True

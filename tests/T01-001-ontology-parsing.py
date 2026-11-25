@@ -6,7 +6,7 @@ import re
 
 import pytest
 
-from onto.ontology import Decl, Model, Ontology, TypeExpr, formatOntology, loadOntology
+from onto.ontology import Decl, Model, Ontology, TypeExpr, formatOntology, loadOntology, normaliseOntology, printOntology
 from onto.text import FormatError, Source
 from tests.helpers import specExample
 
@@ -324,6 +324,19 @@ def testMaps():
 	assert "duplicate" in errors(f"{types}@map X F -> B\n  W broader M\n  W exact M\n")
 	assert "annotation" in errors(f"{types}@map X F -> B {{kind=event}}\n")
 	assert "syntax" in errors(f"{types}@map X F B\n")
+
+
+def testMapsGivingSeveralValuesOrNone():
+	"""spec-01 Maps: a value may have several counterparts, or none (`- Value`)."""
+	types = "@ontology A\nF = W|M|Z\nB = M|Y\n"
+	assert errors(f"{types}@map X F -> B\n  W narrower M\n  W narrower Y\n  - Z -- no counterpart\n") == []
+	assert "reference" in errors(f"{types}@map X F -> B\n  - Q\n")
+	assert "duplicate" in errors(f"{types}@map X F -> B\n  - W\n  W exact M\n")
+	assert "duplicate" in errors(f"{types}@map X F -> B\n  - W\n  - W\n")
+	text = f"{types}@map X F -> B\n  - Z -- no counterpart\n  W narrower Y\n  W narrower M\n"
+	printed = printOntology(normaliseOntology(loadOntology([Source("a.onto", text)])))
+	assert re.search(r"\n  - Z +-- no counterpart\n", printed)
+	assert printed.index("  W narrower M") < printed.index("  W narrower Y") < printed.index("  - Z")
 
 
 def testAssociationsAsParticipantsObjectsAndTypes():

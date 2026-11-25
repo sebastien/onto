@@ -15,7 +15,7 @@ from typing import Any
 from ..observations.formatter import ObservationPrinter
 from ..observations.model import Observations, ObservationsDocument, timestampValue, typedValueIdentity, valueIdentity, valueKey, canonicalNumber
 from ..observations.parser import ObservationResolver, jsonValue
-from ..ontology.model import Decl, Model, Ontology
+from ..ontology.model import Decl, Model, Ontology, isSetValued
 from ..text import Diagnostics, Loc, annotation
 from .formatter import valueText
 from .model import BUILTIN_ARITIES, Function, FunctionLibrary, FunctionResult, SignatureType
@@ -261,7 +261,9 @@ class FunctionEvaluator:
 					isNumericBuiltin = name in ("sum", "multiply", "subtract", "divide") or name == "date" and len(args) == 1
 					if len({typedValueIdentity(member, resolved) if resolved is not None else valueIdentity(member, isNumericBuiltin) for member in arg["set"]}) != len(arg["set"]):
 						raise ValueError("Duplicate collection members")
-			collections = [signature.collection for signature in function.args] if function else [name in ("join", "count") and index == 0 for index in range(len(args))]
+			# A set-valued map reads a collection whole: its result is the set of its members' counterparts.
+			collections = [signature.collection for signature in function.args] if function else [isSetValued(mapping)] if mapping is not None \
+				else [name in ("join", "count") and index == 0 for index in range(len(args))]
 			lifted = [isinstance(arg, dict) and "set" in arg and not whole for arg, whole in zip(args, collections)]
 			partial = any(lift and arg.get("partial", False) for arg, lift in zip(args, lifted))
 			combinations = [sorted(arg["set"], key=valueKey) if lift else [arg] for arg, lift in zip(args, lifted)]
@@ -282,17 +284,31 @@ class FunctionEvaluator:
 				result = self.implementations[name](*inputs)
 				result = self.typedValue(result, function.result)
 			elif mapping is not None:
-				arg = self.typedValue(args[0], SignatureType(path=mapping.mapFrom))
-				matches = {line.toValue for line in mapping.mapLines if line.fromValue == arg}
-				if len(matches) != 1:
-					raise ValueError("Missing or ambiguous value map entry")
-				result = self.typedValue(matches.pop(), SignatureType(path=mapping.mapTo), self.mapTargetModel(name))
+				result = self.mapValue(name, mapping, args[0])
 			else:
 				result = builtin(name, args)
 			return FunctionResult(deepcopy(result), partial=partial)
 		except Exception as error:
 			# Registered implementations signal domain failures with exceptions; KeyboardInterrupt/SystemExit still escape.
 			return FunctionResult(reason=str(error) or type(error).__name__, partial=partial)
+
+	def mapValue(self, name: str, mapping: Decl, value: Any) -> Any:
+		"""`@map` as a function: the counterpart of a value; a set-valued map gives the set of the counterparts of
+		a value, or of every member of a collection, an excluded value having none (spec-04 Maps)."""
+		setValued = isSetValued(mapping)
+		members = value["set"] if setValued and isinstance(value, dict) and "set" in value else [value]
+		found: list[str] = []
+		for member in members:
+			arg = self.typedValue(member, SignatureType(path=mapping.mapFrom))
+			lines = [line for line in mapping.mapLines if line.fromValue == arg]
+			values = [line.toValue for line in lines if line.toValue is not None]
+			if not lines or not setValued and len(values) != 1:
+				raise ValueError("Missing or ambiguous value map entry")
+			found += values
+		if not setValued:
+			return self.typedValue(found[0], SignatureType(path=mapping.mapTo), self.mapTargetModel(name))
+		result = {"set": sorted(set(found)), **({"partial": True} if isinstance(value, dict) and value.get("partial") else {})}
+		return self.typedValue(result, SignatureType(path=mapping.mapTo, collection=True), self.mapTargetModel(name))
 
 	def identity(self, value: Any, signature: SignatureType) -> Any:
 		"""Compare sets without order and numeric values without decimal spelling differences."""

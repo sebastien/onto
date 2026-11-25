@@ -10,7 +10,7 @@ import pytest
 
 from onto.ontology import Ontology, formatOntology, loadOntology, normaliseOntology, ontologyFromJson, ontologyToJson, printOntology
 from onto.text import FormatError, Source
-from tests.helpers import specExample
+from tests.helpers import schemaValidator, specExample
 
 # -----------------------------------------------------------------------------
 #
@@ -141,6 +141,16 @@ def testDomainsMapsAndContextsRoundTrip():
 		"ann": {"rule": "x26"},
 	}
 	assert next(item for item in data["decls"] if item["path"] == "A/Servicing")["ann"] == {"ctx": "A/Money/Check"}
+	back = ontologyFromJson(data)
+	assert ontologyToJson(back) == data
+	assert printed(back) == formatOntology([Source("t.onto", text)])
+
+
+def testMapExclusionsRoundTrip():
+	text = "@ontology A\nF = W|Z\nB = M|Y\n@map X F -> B\n  W narrower M\n  W narrower Y\n  - Z -- none\n"
+	data = toJson(text)
+	assert next(item for item in data["decls"] if item["kind"] == "map")["lines"][-1] == {"from": "Z", "doc": "none"}
+	schemaValidator("ontology").validate(data)
 	back = ontologyFromJson(data)
 	assert ontologyToJson(back) == data
 	assert printed(back) == formatOntology([Source("t.onto", text)])

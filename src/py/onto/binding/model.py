@@ -20,7 +20,7 @@ type Condition = dict[str, Any]
 
 BINDING_FORMAT = "onto.binding/1"
 HEADER_KEYS = ("rev", "name", "format", "scope", "null", "complete", "retract", "confirm")
-ANNOTATION_KEYS = ("id", "when", "src", "ctx", "valid", "deleted", "null", "reverse", "candidate", "reason")
+ANNOTATION_KEYS = ("id", "when", "src", "ctx", "valid", "deleted", "null", "unset", "reverse", "candidate", "reason")
 
 
 @dataclass(slots=True)
@@ -33,6 +33,7 @@ class BindingLine:
 	expr: Expression | None = None
 	when: Condition | None = None
 	null: str | None = None
+	unset: str | None = None  # `{unset=V}`: the value the source writes for "not given", canonical for the attribute
 	doc: str | None = None
 	loc: Loc | None = None
 

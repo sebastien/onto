@@ -208,7 +208,8 @@ class Printer:
 
 	def mapLine(self, line: MapLine, doc: bool = True, indent: str = "") -> str:
 		"""Render vocabulary map `line` after `indent`, optionally with its doc aligned."""
-		return withDoc(indent + self.AnnotationJoin([line.fromValue, line.match, line.toValue]), line.doc if doc else None)
+		text = f"- {line.fromValue}" if line.toValue is None else self.AnnotationJoin([line.fromValue, line.match, line.toValue])
+		return withDoc(indent + text, line.doc if doc else None)
 
 	def block(self, decl: Decl) -> list[str]:
 		"""A declaration and its body lines."""
@@ -419,7 +420,7 @@ def normaliseOntology(ontology: Ontology) -> Ontology:
 				",".join(line.facets) if isinstance(line.facets, list) else line.facets or "",
 			)))
 		if decl.kind == "map":
-			return replace(base, mapLines=sorted(decl.mapLines, key=lambda line: (line.fromValue, line.toValue, line.match)))
+			return replace(base, mapLines=sorted(decl.mapLines, key=lambda line: (line.fromValue, line.toValue or "", line.match or "")))
 		if decl.kind == "domain":
 			return base
 		normal = replace(base, attrs=normaliseAttrs(decl.attrs))

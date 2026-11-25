@@ -210,6 +210,34 @@ Kind = X|Y
 	assert evaluator.evaluate("O/Convert", ["C"])[0].reason
 
 
+def testSetValuedMapsGiveEveryCounterpartAndNoneForExcludedValues():
+	"""spec-04: a map listing a value twice, or excluding one, gives sets; over a collection, their union."""
+	ontology = loadOntology([Source("o", """@ontology O
+Scope = Mortgage|Insurance|Both|Other
+Area = Lending|Insurance
+@map Areas Scope -> Area
+  Both narrower Insurance
+  Both narrower Lending
+  Insurance exact Insurance
+  Mortgage exact Lending
+  - Other
+""")])
+	evaluator = FunctionEvaluator([ontology])
+	assert value_of(evaluator, "O/Areas", ["Both"]) == {"set": ["Insurance", "Lending"]}
+	assert value_of(evaluator, "O/Areas", ["Mortgage"]) == {"set": ["Lending"]}
+	assert value_of(evaluator, "O/Areas", ["Other"]) == {"set": []}
+	assert value_of(evaluator, "O/Areas", [{"set": ["Both", "Mortgage", "Other"]}]) == {"set": ["Insurance", "Lending"]}
+	assert value_of(evaluator, "O/Areas", [{"set": ["Mortgage"], "partial": True}]) == {"set": ["Lending"], "partial": True}
+	assert value_of(evaluator, "O/Areas", [None]) is None
+	assert evaluator.evaluate("O/Areas", [{"set": ["Mortgage", "Nope"]}])[0].reason
+
+
+def value_of(evaluator, name, args):
+	results = evaluator.evaluate(name, args)
+	assert len(results) == 1 and results[0].reason is None, results
+	return results[0].value
+
+
 def testConfigurationErrorsAreNotDomainGaps():
 	with pytest.raises(ValueError, match="Unknown"):
 		FunctionEvaluator().evaluate("Missing", ["1"])

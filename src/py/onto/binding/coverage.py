@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..conditions import conditionPaths
 from ..coverage import CoverageReport, CoverageRow, Elements, coverageRows, impliedKeys
 from ..expressions import Expression, printExpression
 from ..inventory.model import CONTAINER_TYPES, Inventory
@@ -106,7 +107,7 @@ class BindingCoverage:
 		typeName = self.elements.display(scope.type)
 		self.record(None, [scope.path["path"]], typeName, "direct", scope.doc)
 		conditions = documentPaths(scope.id) + documentPaths(scope.valid) + documentPaths(scope.ctx)
-		conditions += [scope.deleted["path"]] if scope.deleted else []
+		conditions += conditionPaths(scope.deleted)
 		self.record(steps, conditions, None, "condition")
 		for line in scope.lines:
 			key = self.elements.assigned(scope.type, line.target, line.facet, line.verb)
@@ -119,7 +120,7 @@ class BindingCoverage:
 			status = "direct" if expr is not None and "path" in expr else "transformed"
 			self.record(steps, documentPaths(expr), typeName + member, status, line.doc)
 			if line.when:
-				self.record(steps, [line.when["path"]], None, "condition")
+				self.record(steps, conditionPaths(line.when), None, "condition")
 
 	def report(self, inventory: Inventory | None) -> CoverageReport:
 		if self.binding.at is not None:

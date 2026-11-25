@@ -6,6 +6,7 @@ import json
 import re
 from typing import Any
 
+from ..conditions import conditionFromJson, parseCondition
 from ..expressions import Expression, expressionFromJson, parseExpression
 from ..functions.model import FUNCTIONS_FORMAT, FunctionDeclaration
 from ..functions.parser import readFunctionsJson, splitValues, parseFunctionDeclaration, parseFunctionExample
@@ -60,17 +61,8 @@ def documentPath(text: str) -> Expression:
 
 
 def condition(text: str, *, binding: bool = True) -> Condition:
-	"""Parse a path-and-value condition."""
-	for index in scanUnquoted(text):
-		if text[index] == ":":
-			path = parseExpression(text[:index].strip(), binding=binding)
-			if "path" not in path:
-				raise ValueError("A condition requires a path")
-			value = text[index + 1:].strip()
-			if not isToken(value):
-				raise ValueError("A condition value must be a token")
-			return {"path": path["path"], "value": value}
-	raise ValueError("A condition requires path:value")
+	"""Parse a condition: tests `path:value` (or `path:A|B`), joined by ` & ` and ` | ` (spec-04 Conditions)."""
+	return parseCondition(text, binding=binding)
 
 
 def annotationParts(text: str | None) -> list[str]:
@@ -109,7 +101,7 @@ def bindingAnnotations(text: str | None, allowed: tuple[str, ...]) -> dict[str, 
 			result[key] = parseExpression(value, binding=True, field=False)
 		elif key in ("when", "deleted"):
 			result[key] = condition(value)
-		elif key == "null" and value in ("absent", "unknown") or key == "reason" and value in ("ignore", "out-of-scope"):
+		elif key == "null" and value in ("absent", "unknown") or key == "reason" and value in ("ignore", "out-of-scope") or key == "unset" and isToken(value):
 			result[key] = value
 		else:
 			raise ValueError(f"Invalid binding annotation value '{key}'")
@@ -128,9 +120,7 @@ def readDoc(value: dict[str, Any]) -> str | None:
 
 def readCondition(data: Any, *, binding: bool = True) -> Condition:
 	"""Decode a condition from JSON data."""
-	value = jsonObject(data, ("path", "value"))
-	path = expressionFromJson({"path": value["path"]}, binding=binding)
-	return {"path": path["path"], "value": jsonString(value["value"])}
+	return conditionFromJson(data, binding=binding)
 
 
 def readBindingJson(data: Any) -> Binding:
@@ -179,7 +169,7 @@ def readBindingJson(data: Any) -> Binding:
 			if not isinstance(line, dict) or len(set(line) & {"target", "facet", "verb"}) != 1:
 				raise ValueError("A binding line needs exactly one target kind")
 			kind = next(key for key in ("target", "facet", "verb") if key in line)
-			line = jsonObject(line, (kind,) if kind == "facet" else (kind, "expr"), ("when", "doc") if kind == "facet" else ("when", "null", "doc"))
+			line = jsonObject(line, (kind,) if kind == "facet" else (kind, "expr"), ("when", "doc") if kind == "facet" else ("when", "null", "unset", "doc"))
 			name = jsonString(line[kind], isName if kind == "facet" else lambda text: bool(RE_ELEMENT_PATH.fullmatch(text)))
 			entry = BindingLine(**{kind: name}, doc=readDoc(line))
 			if "expr" in line:
@@ -190,6 +180,8 @@ def readBindingJson(data: Any) -> Binding:
 				if line["null"] not in ("absent", "unknown"):
 					raise ValueError("Invalid null policy")
 				entry.null = line["null"]
+			if "unset" in line:
+				entry.unset = jsonString(line["unset"])
 			scope.lines.append(entry)
 		binding.scopes.append(scope)
 	if not isinstance(value.get("exclusions", []), list):
@@ -243,7 +235,7 @@ def parseBinding(source: Source) -> BindingDocument:
 					parts = re.split(r"[ \t]+<-[ \t]+", body, maxsplit=1)
 					if len(parts) != 2 or not RE_ELEMENT_PATH.fullmatch(parts[0]):
 						raise ValueError("Invalid binding body line")
-					entry = BindingLine(target=parts[0], expr=parseExpression(parts[1], binding=True), **bindingAnnotations(annotations, ("when", "null")), doc=docText, loc=line.loc)
+					entry = BindingLine(target=parts[0], expr=parseExpression(parts[1], binding=True), **bindingAnnotations(annotations, ("when", "null", "unset")), doc=docText, loc=line.loc)
 				current.lines.append(entry)
 				continue
 			current = None

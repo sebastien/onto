@@ -6,6 +6,7 @@ from copy import deepcopy
 import json
 from typing import Any
 
+from ..conditions import printCondition
 from ..expressions import Expression, printExpression
 from ..functions.formatter import functionBlock, functionsToJson
 from ..functions.model import FunctionLibrary
@@ -59,7 +60,7 @@ def printBinding(binding: Binding) -> str:
 			if key in ("id", "valid", "ctx"):
 				value = exprText(value, field=False)
 			elif key in ("when", "deleted"):
-				value = exprText({"path": value["path"]}) + ":" + value["value"]
+				value = printCondition(value)
 			parts.append(f"{key}={value}")
 		return " {" + ", ".join(parts) + "}" if parts else ""
 
@@ -76,7 +77,7 @@ def printBinding(binding: Binding) -> str:
 		lines += ["", withDoc(f"{short(scope.type)} <- {exprText(scope.path)}" + annotations(scope, ("id", "ctx", "valid", "deleted")), scope.doc)]
 		for line in sorted(scope.lines, key=lineKey):
 			text = f"[{line.facet}]" if line.facet else f"{line.target or line.verb} <- {exprText(line.expr)}"
-			lines.append(withDoc("  " + text + annotations(line, ("when", "null")), line.doc))
+			lines.append(withDoc("  " + text + annotations(line, ("when", "null", "unset")), line.doc))
 	if binding.exclusions:
 		lines.append("")
 		for exclusion in sorted(binding.exclusions, key=lambda item: exprText(item.path)):
@@ -105,7 +106,7 @@ def bindingToJson(binding: Binding) -> dict[str, Any]:
 				value[key] = member
 		lines = []
 		for line in sorted(scope.lines, key=lineKey):
-			entry = {key: getattr(line, key) for key in ("target", "facet", "verb", "expr", "when", "null", "doc") if getattr(line, key) is not None}
+			entry = {key: getattr(line, key) for key in ("target", "facet", "verb", "expr", "when", "null", "unset", "doc") if getattr(line, key) is not None}
 			lines.append(entry)
 		if lines:
 			value["lines"] = lines

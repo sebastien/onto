@@ -9,6 +9,7 @@ from hexa.shapes import encode
 from ...binding.coverage import absolute, documentPaths
 from ...binding.model import Binding, bindingBy
 from ...binding.operations import bindingFromJson
+from ...conditions import conditionPaths
 from ...expressions import printExpression
 from ...formats.model import FormatChange, Formats
 from ...formats.operations import formatsUpdate
@@ -160,7 +161,7 @@ class HexaMappingOperator:
 			template = item.template()
 			handleTemplate = item.handleTemplate()
 			scope = ScopeProgram(item.name, item.scope.target, "", item.shape(), template, source=item.scope.source)
-			whenPaths = [item.when["path"]] if item.when else []
+			whenPaths = conditionPaths(item.when)
 			paths = [steps for info in item.lines for steps in info.inputs] + whenPaths
 			scopePaths = item.paths(item.scope.ctx) + item.paths(item.scope.valid) + item.paths(item.scope.present) + item.paths(item.scope.into) + whenPaths
 			contextualScope = any(segment.context for path in scopePaths for segment in item.segments(path))

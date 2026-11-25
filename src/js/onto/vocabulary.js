@@ -158,7 +158,38 @@ function readSet(value, spec) {
 	return { set: sortedByJson(uniqueByJson(members)), ...(isSet(value) && value.partial ? { partial: true } : {}) };
 }
 
-function textEquals(value, text) { return !isAbsent(value) && textOf(value) === text; }
+/** The texts a condition test compares: a value's, or each member's of a collection (spec-04 Conditions). */
+export function memberTexts(value) {
+	if (value === undefined || value === null || isAbsent(value)) return [];
+	if (Array.isArray(value)) return value.flatMap(memberTexts);
+	if (isSet(value)) return value.set.flatMap(memberTexts);
+	const text = textOf(value);
+	return text === null ? [] : [text];
+}
+
+/**
+ * Whether a condition holds, `valueAt(path)` reading a test's path (null when absent): the value, or a member
+ * of a collection, is one the test lists; `all` and `any` combine tests (spec-04 Conditions).
+ */
+export function conditionHolds(condition, valueAt) {
+	if (condition.all) return condition.all.every(item => conditionHolds(item, valueAt));
+	if (condition.any) return condition.any.some(item => conditionHolds(item, valueAt));
+	if (!Object.hasOwn(condition, "value") && !Object.hasOwn(condition, "values")) return hasValue(valueAt(condition.path));
+	return textIn(valueAt(condition.path), condition.values ?? [condition.value]);
+}
+
+/**
+ * A test of having a value: known and nonempty, as `present=` reads it (false and zero are values);
+ * a list of document values has one when a member does.
+ */
+export function hasValue(value) {
+	if (Array.isArray(value)) return value.some(hasValue);
+	return !(value === undefined || value === null || isAbsent(value) || isUnknown(value) || value === "" || isSet(value) && !value.set.length);
+}
+
+function textEquals(value, text) { return memberTexts(value).includes(text); }
+function textIn(value, texts) { return memberTexts(value).some(text => texts.includes(text)); }
+function unset(value, text) { return isAbsent(value) || textOf(value) === text ? ABSENT_VALUE : value; }
 function whenValue(condition, value) { return condition === true && !isAbsent(value) ? value : ABSENT_VALUE; }
 function whenNone(value, texts, result) { return !isAbsent(value) && texts.includes(textOf(value)) || isAbsent(result) ? ABSENT_VALUE : result; }
 function coalesce(...items) {
@@ -381,7 +412,21 @@ const Set_ = transform("Onto.Set", readSet, { inputs: [Any, Text], output: Any, 
 	examples: [{ input: [["b", "a", "b"], "Text"], output: { set: ["a", "b"] } }, { input: [["a", false], "Text"], gap: "TypeMismatch" }] });
 export { Set_ as Set };
 export const TextEquals = transform("Onto.TextEquals", textEquals, { inputs: [Any, Text], output: Bool,
-	examples: [{ input: ["F", "F"], output: true }, { input: [6, "6"], output: true }] });
+	examples: [{ input: ["F", "F"], output: true }, { input: [6, "6"], output: true }, { input: [{ set: ["A", "F"] }, "F"], output: true },
+		{ input: [ABSENT_VALUE, "F"], output: false }] });
+export const TextIn = transform("Onto.TextIn", textIn, { inputs: [Any, Any], output: Bool,
+	examples: [{ input: ["Home", ["Home", "Investment"]], output: true }, { input: ["Car", ["Home", "Investment"]], output: false },
+		{ input: [["Car", "Home"], ["Home"]], output: true }] });
+export const HasValue = transform("Onto.HasValue", hasValue, { inputs: [Any], output: Bool,
+	examples: [{ input: ["800000"], output: true }, { input: [false], output: true }, { input: [""], output: false },
+		{ input: [ABSENT_VALUE], output: false }, { input: [{ set: [] }], output: false }] });
+export const AllOf = transform("Onto.AllOf", (...items) => items.every(item => item === true), { inputs: [rest(Any)], output: Bool,
+	examples: [{ input: [true, true], output: true }, { input: [true, false], output: false }] });
+export const AnyOf = transform("Onto.AnyOf", (...items) => items.some(item => item === true), { inputs: [rest(Any)], output: Bool,
+	examples: [{ input: [false, true], output: true }, { input: [false, false], output: false }] });
+export const Unset = transform("Onto.Unset", unset, { inputs: [Any, Text], output: Any,
+	examples: [{ input: ["0", "0"], output: ABSENT_VALUE }, { input: ["120000", "0"], output: "120000" }, { input: [null, "0"], output: null },
+		{ input: [ABSENT_VALUE, "0"], output: ABSENT_VALUE }] });
 export const When = transform("Onto.When", whenValue, { inputs: [Any, Any], output: Any,
 	examples: [{ input: [true, "x"], output: "x" }, { input: [false, "x"], output: ABSENT_VALUE }] });
 export const WhenNone = transform("Onto.WhenNone", whenNone, { inputs: [Any, Any, Any], output: Any,
@@ -457,7 +502,7 @@ const BUILTIN_EXAMPLES = {
 for (const [name, examples] of Object.entries(BUILTIN_EXAMPLES)) builtinTransform(name, examples);
 
 export const CODECS = { EpochDate, IntegerText, SplitText, DateTimePattern, DecimalNumber, DecimalPlaces, Case };
-export const TRANSFORMS = Object.fromEntries([Read, Set_, TextEquals, When, WhenNone, Coalesce, Handle, KeyedHandle, SourceHandle, Ref, HandleKey, Correspond,
+export const TRANSFORMS = Object.fromEntries([Read, Set_, TextEquals, TextIn, HasValue, AllOf, AnyOf, Unset, When, WhenNone, Coalesce, Handle, KeyedHandle, SourceHandle, Ref, HandleKey, Correspond,
 	CorrespondAs, CorrespondEmitted, Single, Valid, At, FormatName, Field, Nullable, QualifierConvert, ToInteger, ToVocabulary, Given, Members,
 	...Object.values(BUILTIN_TRANSFORMS)].map(item => [item.name, item]));
 

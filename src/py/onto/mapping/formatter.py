@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from ..conditions import printCondition
 from ..expressions import printExpression
 from ..functions.formatter import functionBlock, functionsToJson
 from ..functions.model import FunctionLibrary
@@ -21,8 +22,8 @@ from .model import ANNOTATION_KEYS, HEADER_KEYS, MAPPING_FORMAT, QUALIFIER_KEYS,
 
 
 def lineKey(line: MappingLine) -> tuple[int, str, str]:
-	# Exclusive lines of one target: the default (no `when`) first, then by condition value.
-	return (0 if line.facet else 1, line.facet or line.target or line.verb or "", "" if line.when is None else "\x01" + str(line.when["value"]))
+	# Exclusive lines of one target: the default (no `when`) first, then by condition (one path, so by value).
+	return (0 if line.facet else 1, line.facet or line.target or line.verb or "", "" if line.when is None else "\x01" + printCondition(line.when, binding=False))
 
 
 def shortElement(path: str, short: Namer) -> str:
@@ -78,7 +79,7 @@ def printMapping(mapping: Mapping) -> str:
 			if key in ("ctx", "valid", "present", "into", *QUALIFIER_KEYS):
 				value = expressionText(value, left, localCalls)
 			elif key == "when":
-				value = printExpression({"path": value["path"]}) + ":" + value["value"]
+				value = printCondition(value, binding=False)
 			elif key == "as":
 				value = right(value)
 			parts.append(f"{key}={value}")

@@ -108,4 +108,31 @@ def test_a_missing_record_is_still_a_gap():
 	_, report = read({"id": 1, "ownerId": 7, "advisers": []})
 	assert [gap.target for gap in report.gaps] == ["Crm/Adviser"]
 
+
+DEPOSITS = loadOntology([Source("deposits.onto", "@ontology Deposits\nDeposit\n  Cash Number\n  Gift Number\n  Count Integer\n  Kind Text\n  Known Boolean\n")])
+DEPOSIT_BINDING = """@binding Deposits
+Deposit <- $ {id=id}
+  Cash <- cash {unset=0}
+  Count <- count {unset=0}
+  Gift <- gift {unset=0}
+  Kind <- kind {unset=None}
+  Known <- known {unset=false}
+"""
+
+
+@pytest.mark.parametrize(("document", "expected"), [
+	({"id": 1, "cash": 0.0, "count": "0", "gift": 25000, "kind": "None", "known": False}, ["Deposit_1.Gift 25000"]),
+	({"id": 1, "cash": 1e3, "count": 2, "gift": 0, "kind": "Cash", "known": True},
+		["Deposit_1.Cash 1000", "Deposit_1.Count 2", "Deposit_1.Kind Cash", "Deposit_1.Known true"]),
+	({"id": 1, "kind": "Cash"}, ["Deposit_1.Kind Cash"]),
+])
+def test_a_value_the_source_writes_for_not_given_says_nothing(document, expected):
+	# spec-04: `{unset=V}` reads V as an absent value: no claim, no gap
+	ops = HexaBindingOperator(DEPOSITS, mode="lenient")
+	program = ops.compile(loadBinding(DEPOSITS, Source("deposits.bind", DEPOSIT_BINDING)))
+	log, report = ops.result(program, asyncio.run(run(CLOCK, program.stages.BindingRead, [{"src": SRC, "document": document}])))
+	text = printObservationsLog(DEPOSITS, log)
+	assert report.gaps == []
+	assert sorted(line.strip().split(" {")[0] for line in text.splitlines() if line.strip().startswith("Deposit_1.")) == expected
+
 # EOF

@@ -225,7 +225,7 @@ def testFeatureFacadeAndTopLevelApiShareImplementations():
 	"Person <- people[*] {id=id, when=active:true}\n",
 	"Person <- people[*] {id=id}\n  Name <- name {src=name}\n",
 	"Person <- people[*] {id=id}\n  Name <- name {null=invalid}\n",
-	"Person <- people[*] {id=id}\n  Name <- name {when=name}\n",
+	"Person <- people[*] {id=id}\n  Name <- name {when=name:}\n",
 	"Person <- people[*] {id=id}\n    Name <- name\n",
 	"Person <- people[*] {id=id}\n\tName <- name\n",
 	"- unused\n", "- unused {reason=other}\n", "- ^.unused {reason=ignore}\n",
@@ -235,6 +235,12 @@ def testFeatureFacadeAndTopLevelApiShareImplementations():
 def testInvalidBindingDeclarationsAreRejected(body: str):
 	with pytest.raises(FormatError):
 		load(body)
+
+
+def testAFieldAloneTestsThatItHasAValue():
+	binding = load("Person <- people[*] {id=id}\n  Name <- name {when=name}\n")
+	assert binding.scopes[0].lines[0].when == {"path": ["name"]}
+	assert "  Name <- name {when=name}\n" in printBinding(binding)
 
 
 def testStructuredTargetsTakeTheirFieldsNotADocumentObject():
@@ -270,6 +276,31 @@ def testStrictJsonRejectsMalformedAndNonRoundTrippableBindings(change):
 	change(data)
 	with pytest.raises(FormatError):
 		bindingFromJson(ONTOLOGY, data)
+
+
+@pytest.mark.parametrize(("line", "printed"), [
+	("  Count <- count {unset=0.00}\n", "  Count <- count {unset=0}\n"),
+	("  Name <- name {null=unknown, unset=N/A}\n", "  Name <- name {null=unknown, unset=N/A}\n"),
+])
+def testUnsetValuesAreTypedAndCanonical(line: str, printed: str):
+	binding = load("Person <- people[*] {id=id}\n" + line)
+	assert printed in printBinding(binding)
+	data = bindingToJson(binding)
+	schemaValidator("mapping").validate(data)
+	assert bindingToJson(bindingFromJson(ONTOLOGY, data)) == data
+
+
+@pytest.mark.parametrize("line", [
+	"  Count <- count {unset=x}\n",
+	"  Count <- count {unset=1.5}\n",
+	"  Tags <- tags {unset=a}\n",
+	"  Owner <- ref(Person, ownerId) {unset=x}\n",
+	"  knows <- ref(Person, friendId) {unset=x}\n",
+	"  [Investor] {unset=x}\n",
+])
+def testUnsetIsRejectedOutsideSingleValuedScalarAttributes(line: str):
+	with pytest.raises(FormatError):
+		load("Person <- people[*] {id=id}\n" + line)
 
 
 # EOF

@@ -6,10 +6,13 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..conditions import conditionPaths
 from ..expressions import Expression
 from ..functions.model import BUILTIN_ARITIES, BUILTIN_RESULTS, Function, FunctionLibrary, FunctionsDocument
 from ..functions.operations import resolveSignature, resolveFunctions
-from ..ontology.model import Model, Ontology, ResolvedType, TypeExpr, isAssociation
+from ..observations.model import ObservationsDocument
+from ..observations.parser import ObservationResolver
+from ..ontology.model import Model, Ontology, ResolvedType, TypeExpr, isAssociation, isSetValued
 from ..text import Diagnostics, FormatError, Loc, Source, annotation
 from .formatter import bindingToJson, printBinding
 from .model import Binding, BindingDocument, BindingScope
@@ -38,6 +41,17 @@ def rootSteps(path: Expression) -> list[Any]:
 	"""Return `path` steps without an initial root marker."""
 	steps = path["path"]
 	return steps[1:] if steps[:1] == [{"root": True}] else steps
+
+
+def unsetValue(model: Model, attr: Any, text: str, loc: Loc | None) -> str:
+	"""`{unset=V}`: a value of the line's single-valued scalar attribute, in its canonical spelling."""
+	if attr is None or (attr.card or model.defaultCard) in ("*", "+"):
+		raise ValueError("unset requires a single-valued attribute target")
+	resolved = model.resolveType(attr.type, attr.ann)
+	if resolved.kind not in ("builtin", "vocab"):
+		raise ValueError("unset requires a scalar attribute")
+	value = ObservationResolver(model.ontology, ObservationsDocument()).scalar(text, resolved, loc or Loc("binding", 0))
+	return ("true" if value else "false") if isinstance(value, bool) else str(value)
 
 
 def enclosingPath(steps: list[Any], up: int, scopes: list[BindingScope]) -> list[Any]:
@@ -194,7 +208,7 @@ class ExpressionResolver:
 				expr["call"] = path
 				actual = self.resolve(args[0])
 				checkAssignment(self.model, (actual[0], False), self.model.resolveType(TypeExpr(path=decl.mapFrom)), True, name)
-				return self.model.resolveType(TypeExpr(path=decl.mapTo)), actual[1]
+				return self.model.resolveType(TypeExpr(path=decl.mapTo)), actual[1] or isSetValued(decl)
 		if len(args) != len(function.args):
 			raise ValueError(f"Invalid argument count for '{name}'")
 		lifted = False
@@ -306,8 +320,8 @@ def resolveBinding(ontology: Ontology, doc: BindingDocument, libraries: list[Fun
 				resolver.resolve(scope.valid)
 			if scope.ctx is not None:
 				context = resolver.resolve(scope.ctx)
-			if scope.deleted:
-				resolver.resolve({"path": scope.deleted["path"]})
+			for path in conditionPaths(scope.deleted):
+				resolver.resolve({"path": path})
 		except ValueError as error:
 			diag.error("expression", str(error), scope.loc)
 		targets: set[str] = set()
@@ -318,8 +332,8 @@ def resolveBinding(ontology: Ontology, doc: BindingDocument, libraries: list[Fun
 				if key in targets:
 					raise ValueError(f"Target '{name}' is assigned twice in one scope")
 				targets.add(key)
-				if line.when:
-					resolver.resolve({"path": line.when["path"]})
+				for path in conditionPaths(line.when):
+					resolver.resolve({"path": path})
 				facet = model.facets(scope.type).get(line.facet) if line.facet else model.facetOf(scope.type, name)
 				if facet and annotation(facet.ann, "ctx") and scope.ctx is None:
 					raise ValueError(f"Contextual facet '{facet.path}' requires a scope ctx expression")
@@ -333,6 +347,8 @@ def resolveBinding(ontology: Ontology, doc: BindingDocument, libraries: list[Fun
 					continue
 				inferred = resolver.resolve(line.expr)
 				attr = model.lookup(scope.type, name)
+				if line.unset is not None:
+					line.unset = unsetValue(model, attr, line.unset, line.loc)
 				if attr:
 					if error := model.elementPathError(scope.type, name):
 						raise ValueError(error)

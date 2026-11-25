@@ -89,6 +89,7 @@ RE_VIEW = re.compile(r"@view\s+([^\s()]+)(?:\(([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^
 RE_DOMAIN = re.compile(r"@domain\s+(\S+)")
 RE_MAP = re.compile(r"@map\s+(\S+)\s+(\S+)\s+->\s+(\S+)")
 RE_MAP_LINE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*)\s+([a-z]+)\s+([A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*)")
+RE_MAP_EXCLUSION = re.compile(r"-\s+([A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*)")
 RE_TYPE_DECL = re.compile(r"([^\s=(]+)\s*=\s*(.*)")
 RE_FACET_DECL = re.compile(r"(\S+)\s+of\s+(\S+)")
 RE_ARROW_DECL = re.compile(
@@ -220,13 +221,19 @@ class ViewPopulation:
 
 @dataclass(slots=True)
 class MapLine:
-	"""A value map line: `FromValue match ToValue`."""
+	"""A value map line: `FromValue match ToValue`, or `- FromValue` for a value with no counterpart."""
 
 	fromValue: str
-	match: str
-	toValue: str
+	match: str | None = None
+	toValue: str | None = None
 	doc: str | None = None
 	loc: Loc | None = None
+
+
+def isSetValued(decl: "Decl") -> bool:
+	"""A map that excludes a value, or gives a value several counterparts, gives a set (spec-01 Maps)."""
+	froms = [line.fromValue for line in decl.mapLines]
+	return any(line.toValue is None for line in decl.mapLines) or len(set(froms)) != len(froms)
 
 
 @dataclass(slots=True)

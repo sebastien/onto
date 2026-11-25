@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..conditions import conditionPaths
 from ..coverage import CoverageReport, Elements, coverageRows, impliedKeys, viewSelections
 from ..expressions import Expression
 from ..ontology.model import Model, Ontology
@@ -59,7 +60,7 @@ class MappingCoverage:
 
 	def scope(self, scope: MappingScope) -> None:
 		candidates = self.mapping.header.get("candidates") is True
-		conditions = expressionPaths(scope.when)
+		conditions = [path for item in conditionPaths(scope.when) for path in expressionPaths({"path": item})]
 		conditions += expressionPaths(scope.ctx) + expressionPaths(scope.valid) + expressionPaths(scope.present) + expressionPaths(scope.into)
 		self.record(scope, conditions, None, "condition", None)
 		targetType = self.target.display(scope.target)
@@ -74,7 +75,8 @@ class MappingCoverage:
 			for expr in line.qualifiers.values():
 				self.record(scope, expressionPaths(expr), targetType + member, "ambiguous" if status == "ambiguous" else "transformed", line.doc)
 			if line.when:
-				self.record(scope, expressionPaths(line.when), None, "ambiguous" if status == "ambiguous" else "condition", None)
+				paths = [path for item in conditionPaths(line.when) for path in expressionPaths({"path": item})]
+				self.record(scope, paths, None, "ambiguous" if status == "ambiguous" else "condition", None)
 
 	def keys(self) -> list[str]:
 		"""Source elements, restricted to the mapping's view when it has one."""

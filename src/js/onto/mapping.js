@@ -11,7 +11,7 @@ import { Location } from "hexa/shapes.js";
 import { Policy, collect, each, lift, pipe, project } from "hexa/combinators.js";
 import { Registry } from "./program.js";
 import { ClaimsBuilder, cleanValue, named, namedStage, registerFunctions } from "./stages.js";
-import { reasonCode, textOf } from "./vocabulary.js";
+import { conditionHolds, reasonCode, textOf } from "./vocabulary.js";
 import { clone, compareCodePoints, compareTimestamps, handleOf, isAbsent, isSet, isUnknown, parseInterval, valueKey } from "./values.js";
 
 // -----------------------------------------------------------------------------
@@ -104,19 +104,42 @@ const lineRecord = info => info.slot || info.key;
 const sourcePath = (info, paths) => 0 <= info.source && info.source < paths.length ? paths[info.source] : [];
 const activeLines = (plan, occurrence) => plan.lines.filter(info => info.contextual === (occurrence.context !== null && occurrence.context !== undefined));
 
+/** The values at segment `keys`, through references' `of` subtrees and the members of collections. */
+function valuesAt(tree, keys) {
+	let nodes = [tree];
+	for (const [index, key] of keys.entries()) {
+		const found = [];
+		for (const node of nodes) {
+			if (!isObject(node) || !Object.hasOwn(node, key)) continue;
+			const value = node[key];
+			if (index + 1 === keys.length) found.push(value);
+			else if (isSet(value)) for (const item of value.set) { if (isObject(item) && Object.hasOwn(item, "of")) found.push(item.of); }
+			else if (isObject(value) && Object.hasOwn(value, "of")) found.push(value.of);
+		}
+		nodes = found;
+	}
+	return nodes;
+}
+
+/** The tests of a condition, in order. */
+const conditionTests = condition => condition.all ?? condition.any ? (condition.all ?? condition.any).flatMap(conditionTests) : [condition];
+const conditionReader = (plan, occurrence) => path => valuesAt(occurrence.value, plan.segmentKeys.get(valueKey(path)));
+
+/** Whether a slot any test of `condition` reads holds conflicting claims. */
+function conditionConflicts(plan, occurrence, condition) {
+	const conflicts = occurrence.conflicts ?? {};
+	return conditionTests(condition).some(test => pointersOf(occurrence.value, plan.segmentKeys.get(valueKey(test.path))).some(pointer => Object.hasOwn(conflicts, pointer)));
+}
+
 function lineApplies(plan, occurrence, info) {
-	const condition = info.when ?? info.unless;
-	if (!condition) return true;
-	const value = valueAt(occurrence.value, plan.segmentKeys.get(valueKey(condition.path)));
-	if (value === null) return !info.when;
-	const text = textOf(value);
-	return info.when ? text === info.when.value : !info.unless.values.includes(text);
+	if (info.when) return conditionHolds(info.when, conditionReader(plan, occurrence));
+	if (info.unless) return !conditionHolds(info.unless, conditionReader(plan, occurrence));
+	return true;
 }
 
 function scopeSelected(plan, occurrence) {
 	if (!plan.when) return true;
-	const keys = plan.segmentKeys.get(valueKey(plan.when.path));
-	return !pointersOf(occurrence.value, keys).some(pointer => Object.hasOwn(occurrence.conflicts, pointer)) && textOf(valueAt(occurrence.value, keys)) === plan.when.value;
+	return !conditionConflicts(plan, occurrence, plan.when) && conditionHolds(plan.when, conditionReader(plan, occurrence));
 }
 
 // -----------------------------------------------------------------------------
@@ -444,6 +467,8 @@ class MappingEmitter {
 			if (variant === null) this.presenceGap(plan, occurrence, occurrence.value["@target"], reasonCode(entry.reason), record);
 			return;
 		}
+		// A scope its presence does not select demands nothing of its lines (spec-04 Instances).
+		if (plan.presence && record !== null && !isPresent(record.present)) return;
 		if (path.length < 2) return;
 		const [section, key] = path;
 		const info = plan.sectionLines.get(`${section}\u0000${key}`);
@@ -619,13 +644,11 @@ function mappingStages(program) {
 				if (plan.update) {
 					const conflictsOf = paths => paths.some(path => pointersOf(occurrence.value, path).some(pointer => Object.hasOwn(occurrence.conflicts ?? {}, pointer)));
 					if (plan.when) {
-						const keys = plan.segmentKeys.get(valueKey(plan.when.path));
-						if (conflictsOf([keys])) {
+						if (conditionConflicts(plan, occurrence, plan.when)) {
 							unresolved.push({ type: plan.target, handle, location: occurrence.location, reasons: [InputConflicting] });
 							continue;
 						}
-						const value = valueAt(occurrence.value, keys);
-						if (value === null || textOf(value) !== plan.when.value) continue;
+						if (!conditionHolds(plan.when, conditionReader(plan, occurrence))) continue;
 					}
 					if (conflictsOf(plan.presenceInputs)) {
 						unresolved.push({ type: plan.target, handle, location: occurrence.location, reasons: [InputConflicting] });
@@ -690,13 +713,11 @@ function mappingStages(program) {
 					if (occurrence === null) continue;
 					occurrence.targetContext = resolved.correspondence[context] ?? null;
 					if (plan.when) {
-						const keys = plan.segmentKeys.get(valueKey(plan.when.path));
-						if (pointersOf(occurrence.value, keys).some(pointer => Object.hasOwn(occurrence.conflicts, pointer))) {
+						if (conditionConflicts(plan, occurrence, plan.when)) {
 							skipped.push({ occurrence, target: plan.target, reason: InputConflicting, src: occurrence.exists.src, location: occurrence.location });
 							continue;
 						}
-						const value = valueAt(occurrence.value, keys);
-						if (value === null || textOf(value) !== plan.when.value) continue;
+						if (!conditionHolds(plan.when, conditionReader(plan, occurrence))) continue;
 					}
 					occurrences.push(occurrence);
 				}

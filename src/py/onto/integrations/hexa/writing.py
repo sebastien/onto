@@ -15,6 +15,7 @@ from hexa.combinators import Policy, collect, each, lift, project, stage
 from hexa.shapes import Any, Bool, DatePattern, Location, derive, loose, optional, slot, tolerant, via
 
 from ...binding.model import Binding, BindingLine, BindingScope
+from ...conditions import isSingleTest
 from ...expressions import Expression, printExpression
 from ...formats.model import Formats
 from ...inventory.model import Inventory
@@ -249,6 +250,8 @@ class WriteCompiler:
 		for line in sorted(scope.lines, key=lambda item: (0 if item.facet else 1, item.target or item.verb or item.facet or "")):
 			label = f"[{line.facet}]" if line.facet else line.target or line.verb or ""
 			try:
+				if line.when and not isSingleTest(line.when):
+					raise CompileError(V.BindingCodes.PathUnsupported, "A condition with alternatives or several tests cannot be written back")
 				if line.facet:
 					if not line.when:
 						continue

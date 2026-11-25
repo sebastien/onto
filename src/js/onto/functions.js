@@ -256,7 +256,9 @@ export class FunctionEvaluator {
 				const numericArg = fn ? fn.args[index].numeric : ["sum", "multiply", "subtract", "divide"].includes(name) || name === "date" && args.length === 1;
 				if (new Set(arg.set.map(member => valueIdentity(member, numericArg, fn?.args[index].numericRange))).size !== arg.set.length) throw new Error("Duplicate collection members");
 			});
-			const collections = fn ? fn.args.map(signature => signature.collection) : args.map((_, index) => ["join", "count"].includes(name) && index === 0);
+			// A set-valued map reads a collection whole: its result is the set of its members' counterparts.
+			const collections = fn ? fn.args.map(signature => signature.collection) : map ? [Boolean(map.setValued)]
+				: args.map((_, index) => ["join", "count"].includes(name) && index === 0);
 			const lifted = args.map((arg, index) => isSet(arg) && !collections[index]);
 			partial = args.some((arg, index) => lifted[index] && Boolean(arg.partial));
 			combinations = args.map((arg, index) => lifted[index] ? sortedByJson(arg.set, { ascii: false }) : [arg]);
@@ -276,17 +278,30 @@ export class FunctionEvaluator {
 			if (fn) {
 				const inputs = args.map((arg, index) => this.typed(arg, fn.args[index]));
 				result = this.typed(this.implementations[name](...inputs), fn.result);
-			} else if (map) {
-				const arg = this.typed(args[0], map.from);
-				const key = valueKey(arg);
-				const matches = new Map(map.lines.filter(([from]) => valueKey(from) === key).map(([, to]) => [valueKey(to), to]));
-				if (matches.size !== 1) throw new Error("Missing or ambiguous value map entry");
-				result = this.typed([...matches.values()][0], map.to);
-			} else result = builtin(name, args);
+			} else if (map) result = this.mapValue(map, args[0]);
+			else result = builtin(name, args);
 			return { value: clone(result), reason: null, partial };
 		} catch (error) {
 			return { value: null, reason: error?.message || String(error), partial };
 		}
+	}
+
+	/**
+	 * `@map` as a function: the counterpart of a value; a set-valued map gives the set of the counterparts of
+	 * a value, or of every member of a collection, an excluded value (`[value, null]`) having none.
+	 */
+	mapValue(map, value) {
+		const members = map.setValued && isSet(value) ? value.set : [value];
+		const found = new Map();
+		for (const member of members) {
+			const key = valueKey(this.typed(member, map.from));
+			const lines = map.lines.filter(([from]) => valueKey(from) === key);
+			const values = new Map(lines.filter(([, to]) => to !== null).map(([, to]) => [valueKey(to), to]));
+			if (!lines.length || !map.setValued && values.size !== 1) throw new Error("Missing or ambiguous value map entry");
+			for (const [itemKey, to] of values) found.set(itemKey, to);
+		}
+		if (!map.setValued) return this.typed([...found.values()][0], map.to);
+		return this.typed({ set: [...found.values()], ...(isSet(value) && value.partial ? { partial: true } : {}) }, { ...map.to, collection: true });
 	}
 }
 

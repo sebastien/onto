@@ -18,7 +18,7 @@ from hexa.template import compileTemplate
 
 from ...binding.model import bindingBy
 from ...functions.operations import resolveSignature
-from ...ontology.model import Attr, Model, ResolvedType, TypeExpr, ViewInput, isAssociation, isSymmetric
+from ...ontology.model import Attr, Model, ResolvedType, TypeExpr, ViewInput, isAssociation, isSetValued, isSymmetric
 from ...ontology.rooted import Field, Hop, RootedView
 from ...text import annotation, lastSegment
 from .compiler import BindingCompiler, MappingCompiler
@@ -194,9 +194,10 @@ def functionsJson(evaluator: AnyValue, used: set[str]) -> tuple[dict, dict]:
 				**({"nulls": True} if annotation(function.ann, "nulls") else {})}
 	for name, decl in evaluator.maps.items():
 		if name.replace("/", ".") in used:
+			# An excluded value's line is `[value, null]`; a set-valued map gives sets (spec-01 Maps).
 			maps[name] = {"from": typeJson(evaluator.model.resolveType(TypeExpr(path=decl.mapFrom))),
 				"to": typeJson(evaluator.mapTargetModel(name).resolveType(TypeExpr(path=decl.mapTo))),
-				"lines": [[line.fromValue, line.toValue] for line in decl.mapLines]}
+				"lines": [[line.fromValue, line.toValue] for line in decl.mapLines], **({"setValued": True} if isSetValued(decl) else {})}
 	return functions, maps
 
 

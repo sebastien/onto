@@ -369,6 +369,36 @@ Measurement qualifiers drive conversions that are exact and need no function:
 - `cur` and `period` never convert. A fixed `cur` or `period` differing from the
   target's is an error; an unknown (`?`) one is filled by the target's.
 
+### Conditions
+
+The `when` of a binding or mapping line or scope, and a binding scope's
+`deleted`, is a **condition**: tests of paths, combined.
+
+```ebnf
+condition   := conjunction (" | " conjunction)*
+conjunction := operand (" & " operand)*
+operand     := test | "(" condition ")"
+test        := path [":" value ("|" value)*]
+```
+
+- `Class:F` holds when the path's value is `F`, compared as text: as `text()`
+  spells it (canonical decimals, `true`/`false`), a reference by its handle.
+- `Kind:Home|Investment` holds when the value is one of the values listed.
+- A path alone holds when the path has a value, as `present=` reads one: absent,
+  `null`, `?`, empty text and empty collections have none, false and zero do.
+  `PurchasePrice | NewSecurity:true` holds for a purchase or for new security.
+- A test of a collection (a multi-valued attribute, a path through `[*]`)
+  holds when one of its members is listed: `Tags:Urgent`.
+- `a & b` holds when both hold and `a | b` when either does. `&` binds tighter
+  than `|`, and parentheses group: `Kind:Home|Investment & (Offered:true | Replaced:true)`.
+- An absent, `null` or `?` value matches no test, so a test of it fails.
+- Whitespace surrounds `&` and `|` between tests (as it does `??`), and does
+  not surround `|` between values. A value is a token without whitespace, `:`,
+  `|`, `&`, parentheses, braces, `,` or `=`, so `A:x|B:y` is an error rather
+  than the value `B:y`.
+- In a mapping, a conflicting slot read by any test makes the condition a
+  conflicting input ([Claims and metadata](#claims-and-metadata)).
+
 ## Bindings
 
 ```text
@@ -376,7 +406,7 @@ Measurement qualifiers drive conversions that are exact and need no function:
 @use <Namespace> as <Alias>
 @at <- <expr>
 @columns <field>, <field>, ...
-<Type> <- <path> {id=<expr>, valid=<expr>, ctx=<expr>, deleted=<path:value>} [-- doc]
+<Type> <- <path> {id=<expr>, valid=<expr>, ctx=<expr>, deleted=<condition>} [-- doc]
   <Attr> <- <expr> [{annotations}] [-- doc]
   <Facet.Attr> <- <expr> [{annotations}]
   [<Facet>] [{annotations}]
@@ -423,10 +453,10 @@ Body lines are evaluated from that value (the **record**).
   spec-02 interval. `ctx=expr` supplies the default context for contextual facet
   applicability and value claims produced by the body, never for existence or
   non-contextual claims (spec-02).
-- `deleted=path:value` marks deletions in a feed that reports them: a record
-  whose path's value, as text, equals `value` produces the retraction `- h`
-  instead of claims. This is how a `complete=none` (delta) feed removes
-  instances.
+- `deleted=condition` marks deletions in a feed that reports them: a record
+  for which the [condition](#conditions) holds (`deleted=status:Deleted|Merged`)
+  produces the retraction `- h` instead of claims. This is how a
+  `complete=none` (delta) feed removes instances.
 - A type may have several scope lines (instances from several places in the
   document); each is applied.
 
@@ -443,13 +473,20 @@ Body lines are evaluated from that value (the **record**).
 - An absent value produces no claim. `{null=absent}` on a line (or `null=absent`
   in the `@binding` header) makes JSON `null` claim `null` (confirmed absence), and `{null=unknown}`
   claim `?`. Otherwise `null` says nothing.
+- `{unset=V}` names the value a source writes for "not given": a value equal to
+  `V` says nothing, as an absent one does. `V` is a value of the line's
+  attribute, which is single-valued with a text, number, boolean, date or
+  vocabulary type, and it compares as one: with `Amount <- cash {unset=0}`, a
+  CRM's `0` or `0.00` gives no claim, and `120000` its amount. Writing does not
+  restore `V`.
 - `^` as a whole expression refers to the enclosing record's instance: in the
   example, a dividend's `Instrument`. Its scope line must exist.
 - `ref(Type, expr)` refers to the instance of `Type` with that key, whether or
   not the document contains it; until some document does, it is an
   [implicit instance](spec-02-observations.md#implicit-instances).
-- `{when=path:value}` applies the line only when the path's value, as text,
-  equals `value`.
+- `{when=condition}` applies the line only when the [condition](#conditions)
+  holds. Writing restores a single `path:value` test; a line with alternatives
+  or several tests is lossy under writing.
 
 ### Exclusions
 
@@ -465,8 +502,8 @@ deliberately not bound, for [coverage](#coverage). `reason` is required.
   <args> => <result>
 @map <Name> <From> -> <To> [{annotations}] [-- doc]
   <FromValue> <match> <ToValue> [-- doc]
-<FromType> -> <ToType> [{name=<Name>, into=<expr>, present=<expr>, when=<path:value>, ctx=<expr>, valid=<expr>}] [-- doc]
-  <target> <- <expr> [{when=<path:value>, src=<path>, as=<Type>, cur=<expr>, period=<expr>, reverse, candidate}] [-- doc]
+<FromType> -> <ToType> [{name=<Name>, into=<expr>, present=<expr>, when=<condition>, ctx=<expr>, valid=<expr>}] [-- doc]
+  <target> <- <expr> [{when=<condition>, src=<path>, as=<Type>, cur=<expr>, period=<expr>, reverse, candidate}] [-- doc]
   [<Facet>] [{annotations}]
 - <From path> {reason=<reason>} [-- doc]
 ```
@@ -497,7 +534,15 @@ and must not declare a local function or map, or exclude an element, twice.
 
 `@map` has its [spec-01 meaning](spec-01-ontology.md#maps). In a mapping it is
 also a function: `AssetClassFromCode(Class)` returns the `To` value of the line
-whose `From` value matches. Several lines for one value, or none, are a gap.
+whose `From` value matches; a value with no line is a gap. A **set-valued** map
+(spec-01: one that lists a value on several lines, or excludes one with
+`- Value`) returns a set: the `To` values of the lines matching its argument,
+or every member of a collection, an excluded value adding none. With
+`Both narrower Insurance`, `Both narrower Lending` and `- Other`, `Areas(Both)`
+is `[Insurance, Lending]` and `Areas(Other)` is `[]`. Its result is a
+collection, which only a multi-valued attribute receives; an empty one states
+that there are none, which `present=` can skip. Set-valued maps are lossy under
+reversal.
 
 ### Instances
 
@@ -559,8 +604,9 @@ state to an instance of `T`. Body lines give `T`'s values.
 - `$` alone reads the scope instance itself, as a reference translated like any
   other: in `Client -> Relationship`, `Client <- $` is the client's `Person`. Its
   claims take the scope instance's existence metadata.
-- `{when=path:value}` on the scope applies it only to matching instances;
-  `{ctx=expr}` and `{valid=expr}` set the target claims' context and validity.
+- `{when=condition}` on the scope applies it only to the instances for which the
+  [condition](#conditions) holds; `{ctx=expr}` and `{valid=expr}` set the target
+  claims' context and validity.
   Without `valid`, the existence claim keeps the source's.
 - `{name=ShortGoal}` distinguishes repeated source/target scopes. Repeated
   scopes for the same source and target types must all have distinct names.
@@ -598,17 +644,21 @@ state to an instance of `T`. Body lines give `T`'s values.
   identity scope without changing that scope's identity.
 - `{present=expr}` emits a scope only for a known, nonempty value. Absent,
   unknown, empty text and empty collections are skipped; **false and zero are
-  present**. Use `present=trim(Description)` to skip whitespace-only answers
-  while preserving the original description in its assignment. Conflicting
-  presence inputs or failed expressions report gaps rather than choosing a
-  declaration. This selection may be combined with `when`. Named and
-  presence-selected scopes are currently lossy under reversal.
+  present**: select a flag with `when=Flag:true`, and declare a source's
+  "not given" value in its binding (`{unset=0}`). Use `present=trim(Description)`
+  to skip whitespace-only answers while preserving the original description in
+  its assignment. Conflicting presence inputs or failed expressions report gaps
+  rather than choosing a declaration; a scope its presence does not select
+  demands nothing of its lines, which report no gaps. This selection may be
+  combined with `when`. Named and presence-selected scopes are currently lossy
+  under reversal.
 - Target attributes, facets and relations follow the forms of bindings
   (`Attr`, `Facet.Attr`, `[Facet]`, `verb`, `Role`).
 - A target is assigned by one line, or by **exclusive lines**: lines whose
-  `when` conditions read one path with distinct values, and at most one line
-  without `when`, the **default**, applied when no condition matches (including
-  when the path is absent). At most one of them applies to an instance:
+  `when` are tests of values of one single-valued path sharing no value
+  (`Kind:Home|Investment` and `Kind:Car`), and at most one line without `when`, the **default**, applied
+  when no condition matches (including when the path is absent). At most one of
+  them applies to an instance:
 
   ```onto
   GroupReview -> Review
@@ -880,7 +930,8 @@ A path through a reference (`Instrument.Isin`) reads another instance:
 
 `??`, literals, multi-argument functions and `$` metadata (except `$valid`, which
 reverses to the scope's `valid`) are not reversible. A `when` condition reverses
-only if its path is also assigned by a reversible line.
+only if each path it tests is also assigned by a reversible line; it keeps its
+values, alternatives and combination.
 
 A **derived** value is never projected back (A -> B -> A): a value the source
 computes, or one a rule derives, is not an input anyone writes. A line is lossy,
@@ -1184,7 +1235,7 @@ Warnings:
 5. Exclusions sorted by path.
 
 Annotations follow the order `id`, `name`, `into`, `present`, `when`, `src`, `as`, `ctx`, `valid`, `deleted`,
-`null`, `cur`, `period`, `reverse`, `candidate`, `reason`. Header keys follow the order of their
+`null`, `unset`, `cur`, `period`, `reverse`, `candidate`, `reason`. Header keys follow the order of their
 tables. Spacing, docs and comments follow
 spec-01; a declaration with a body is surrounded by blank lines.
 
@@ -1248,10 +1299,16 @@ A function library:
   or `{"root": true}` (`$`); `{"text": "..."}`, `{"number": "5.25"}`,
   `{"boolean": true}`, `{"null": true}` and `{"unknown": true}` literals;
   `{"call": name, "args": [...]}`; `{"coalesce": [...]}`; `{"meta": "valid"}`.
+- Conditions: a test is `{"path": [step, ...], "value": "F"}`,
+  `{"path": [...], "values": ["Home", "Investment"]}` for two values or more, or
+  `{"path": [...]}` alone for having a value; `{"all": [...]}` and
+  `{"any": [...]}` combine two conditions or more, never directly nesting their
+  own kind.
 - Bindings use `"ontology"` instead of `from`/`to`, scopes with `"type"` and a
   `"path"` expression, `"id"`, `"valid"` and `"ctx"` expressions, an optional
   `"deleted"` condition (the form of `when`), and optional `"at"` and
-  `"columns"`. `{"meta": "format"}` is `$format`.
+  `"columns"`. Attribute lines may carry `"unset"`, a string. `{"meta": "format"}`
+  is `$format`.
 - Header keys are strings, except `candidates` (a boolean) and `confirm` (an
   integer); `retract` is written as in the text (`"20%"`).
 - Absent optional members are omitted, never `null`.

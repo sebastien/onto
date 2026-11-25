@@ -8,7 +8,7 @@ and returns `ABSENT_VALUE`, the integration's marker for "no value, no gap", whi
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from decimal import Decimal as Exact, InvalidOperation
 import json
@@ -287,8 +287,57 @@ def readSet(value: AnyValue, spec: str) -> AnyValue:
 	return result | ({"partial": True} if isinstance(value, dict) and value.get("partial") else {})
 
 
+def memberTexts(value: AnyValue) -> list[str]:
+	"""The texts a condition test compares: a value's, or each member's of a collection (spec-04 Conditions)."""
+	if isAbsent(value) or value is None:
+		return []
+	if isinstance(value, list):
+		return [text for item in value for text in memberTexts(item)]
+	if isinstance(value, dict) and "set" in value:
+		return [text for item in value["set"] for text in memberTexts(item)]
+	text = textOf(value)
+	return [] if text is None else [text]
+
+
 def textEquals(value: AnyValue, text: str) -> bool:
-	return not isAbsent(value) and textOf(value) == text
+	return text in memberTexts(value)
+
+
+def textIn(value: AnyValue, texts: list[str]) -> bool:
+	return any(item in texts for item in memberTexts(value))
+
+
+def hasValue(value: AnyValue) -> bool:
+	"""A test of having a value: known and nonempty, as `present=` reads it (false and zero are values);
+	a list of document values has one when a member does."""
+	if isinstance(value, list):
+		return any(hasValue(item) for item in value)
+	return not (isAbsent(value) or value is None or value == UNKNOWN or value == "" or isinstance(value, dict) and "set" in value and not value["set"])
+
+
+def allOf(*conditions: AnyValue) -> bool:
+	return all(item is True for item in conditions)
+
+
+def anyOf(*conditions: AnyValue) -> bool:
+	return any(item is True for item in conditions)
+
+
+def conditionHolds(condition: dict, valueAt: Callable[[list], AnyValue]) -> bool:
+	"""Whether a condition holds, `valueAt(path)` reading a test's path (None when absent): the value, or a member
+	of a collection, is one the test lists; `all` and `any` combine tests (spec-04 Conditions)."""
+	if "all" in condition:
+		return all(conditionHolds(item, valueAt) for item in condition["all"])
+	if "any" in condition:
+		return any(conditionHolds(item, valueAt) for item in condition["any"])
+	if "value" not in condition and "values" not in condition:
+		return hasValue(valueAt(condition["path"]))
+	return textIn(valueAt(condition["path"]), condition["values"] if "values" in condition else [condition["value"]])
+
+
+def unset(value: AnyValue, text: str) -> AnyValue:
+	"""A binding line's `{unset=V}`: the value the source writes for "not given" says nothing, as an absent one."""
+	return ABSENT_VALUE if isAbsent(value) or textOf(value) == text else value
 
 
 def whenValue(condition: AnyValue, value: AnyValue) -> AnyValue:
@@ -650,7 +699,21 @@ Read = transform("Onto.Read", readValue, inputs=[Any, Text], output=Any, gaps=["
 Set = transform("Onto.Set", readSet, inputs=[Any, Text], output=Any, gaps=["TypeMismatch"],
 	examples=[{"input": [["b", "a", "b"], "Text"], "output": {"set": ["a", "b"]}}, {"input": [["a", False], "Text"], "gap": "TypeMismatch"}])
 TextEquals = transform("Onto.TextEquals", textEquals, inputs=[Any, Text], output=Bool,
-	examples=[{"input": ["F", "F"], "output": True}, {"input": [6, "6"], "output": True}])
+	examples=[{"input": ["F", "F"], "output": True}, {"input": [6, "6"], "output": True}, {"input": [{"set": ["A", "F"]}, "F"], "output": True},
+		{"input": [ABSENT_VALUE, "F"], "output": False}])
+TextIn = transform("Onto.TextIn", textIn, inputs=[Any, Any], output=Bool,
+	examples=[{"input": ["Home", ["Home", "Investment"]], "output": True}, {"input": ["Car", ["Home", "Investment"]], "output": False},
+		{"input": [["Car", "Home"], ["Home"]], "output": True}])
+HasValue = transform("Onto.HasValue", hasValue, inputs=[Any], output=Bool,
+	examples=[{"input": ["800000"], "output": True}, {"input": [False], "output": True}, {"input": [""], "output": False},
+		{"input": [ABSENT_VALUE], "output": False}, {"input": [{"set": []}], "output": False}])
+AllOf = transform("Onto.AllOf", allOf, inputs=[[Any, ...]], output=Bool,
+	examples=[{"input": [True, True], "output": True}, {"input": [True, False], "output": False}])
+AnyOf = transform("Onto.AnyOf", anyOf, inputs=[[Any, ...]], output=Bool,
+	examples=[{"input": [False, True], "output": True}, {"input": [False, False], "output": False}])
+Unset = transform("Onto.Unset", unset, inputs=[Any, Text], output=Any,
+	examples=[{"input": ["0", "0"], "output": ABSENT_VALUE}, {"input": ["120000", "0"], "output": "120000"}, {"input": [None, "0"], "output": None},
+		{"input": [ABSENT_VALUE, "0"], "output": ABSENT_VALUE}])
 When = transform("Onto.When", whenValue, inputs=[Any, Any], output=Any,
 	examples=[{"input": [True, "x"], "output": "x"}, {"input": [False, "x"], "output": ABSENT_VALUE}])
 WhenNone = transform("Onto.WhenNone", whenNone, inputs=[Any, Any, Any], output=Any,
@@ -727,8 +790,8 @@ for builtinName, builtinExamples in BUILTIN_EXAMPLES.items():
 
 CODECS = {"EpochDate": EpochDate, "IntegerText": IntegerText, "SplitText": SplitText, "DateTimePattern": DateTimePattern,
 	"DecimalNumber": DecimalNumber, "DecimalPlaces": DecimalPlaces, "Case": Case}
-TRANSFORMS = {item.name: item for item in (Read, Set, TextEquals, When, WhenNone, Coalesce, Handle, KeyedHandle, SourceHandle, Ref, HandleKey, Correspond, CorrespondAs, CorrespondEmitted, Single, Valid, At,
-	FormatName, Field, Nullable, QualifierConvert, ToInteger, ToVocabulary, Given, Members, *BUILTIN_TRANSFORMS.values())}
+TRANSFORMS = {item.name: item for item in (Read, Set, TextEquals, TextIn, HasValue, AllOf, AnyOf, Unset, When, WhenNone, Coalesce, Handle, KeyedHandle, SourceHandle, Ref, HandleKey, Correspond,
+	CorrespondAs, CorrespondEmitted, Single, Valid, At, FormatName, Field, Nullable, QualifierConvert, ToInteger, ToVocabulary, Given, Members, *BUILTIN_TRANSFORMS.values())}
 
 
 def builtin(name: str) -> AnyValue:
@@ -792,7 +855,8 @@ def vocabularyConformance() -> int:
 
 __all__ = [
 	"ABSENT_VALUE", "BindingCodes", "MappingCodes", "Integral", "IsoDuration", "EpochDate", "IntegerText", "SplitText",
-	"DateTimePattern", "DecimalNumber", "DecimalPlaces", "Case", "DatePattern", "DecimalText", "Read", "Set", "TextEquals", "When", "WhenNone",
+	"DateTimePattern", "DecimalNumber", "DecimalPlaces", "Case", "DatePattern", "DecimalText", "Read", "Set", "TextEquals", "TextIn", "HasValue", "AllOf", "AnyOf", "Unset",
+	"When", "WhenNone", "conditionHolds", "hasValue", "memberTexts",
 	"Coalesce", "Handle", "KeyedHandle", "SourceHandle", "Ref", "HandleKey", "Correspond", "CorrespondAs", "CorrespondEmitted", "Single", "Valid", "At", "FormatName", "Field", "Nullable",
 	"QualifierConvert", "ToInteger", "ToVocabulary", "Given", "Members", "TRANSFORMS", "CODECS", "builtin", "functionTransform", "functionCodec",
 	"reasonCode", "vocabularyConformance", "isAbsent", "decimalText", "documentValue", "encodeKey", "decodeKey",

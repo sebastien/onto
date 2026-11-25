@@ -16,13 +16,14 @@ from typing import Any as AnyValue
 from hexa.combinators import Policy, collect, each, lift, pipe, project, stage
 from hexa.shapes import Location
 
+from ...conditions import conditionPaths
 from ...observations.model import parseInterval
 from ...ontology.model import Model, TypeExpr
 from ...text import isToken
 from .compiler import LineInfo
 from .model import ScopeProgram
 from .stages import ClaimsBuilder, cleanValue, namedStage
-from .vocabulary import MappingCodes, handleOf, isAbsent, reasonCode, textOf
+from .vocabulary import MappingCodes, conditionHolds, handleOf, isAbsent, reasonCode, textOf
 
 # -----------------------------------------------------------------------------
 #
@@ -310,25 +311,50 @@ class Unfolder:
 		return {"value": tree, "location": location, "meta": meta, "conflicts": conflicts, "exists": existsMeta, "context": context}
 
 
+def valuesAt(tree: dict, keys: list[str]) -> list[AnyValue]:
+	"""The values at segment `keys`, through references' `of` subtrees and the members of collections."""
+	nodes: list[AnyValue] = [tree]
+	for index, key in enumerate(keys):
+		found = []
+		for node in nodes:
+			value = node.get(key) if isinstance(node, dict) else None
+			if value is None and not (isinstance(node, dict) and key in node):
+				continue
+			if index + 1 == len(keys):
+				found.append(value)
+			elif isinstance(value, dict) and "set" in value:
+				found += [item["of"] for item in value["set"] if isinstance(item, dict) and "of" in item]
+			elif isinstance(value, dict) and "of" in value:
+				found.append(value["of"])
+		nodes = found
+	return nodes
+
+
+def conditionReader(plan: MappingScopePlan, occurrence: dict):
+	"""Read a condition test's path in an occurrence tree."""
+	return lambda steps: valuesAt(occurrence["value"], plan.segmentKeys[tuple(steps)])
+
+
+def conditionConflicts(plan: MappingScopePlan, occurrence: dict, condition: dict) -> bool:
+	"""Whether a slot any test of `condition` reads holds conflicting claims."""
+	conflicts = occurrence.get("conflicts", {})
+	return any(pointer in conflicts for steps in conditionPaths(condition) for pointer in pointersOf(occurrence["value"], plan.segmentKeys[tuple(steps)]))
+
+
 def lineApplies(plan: MappingScopePlan, occurrence: dict, info: LineInfo) -> bool:
 	"""Whether a line's `when` holds, or a default's siblings' conditions all fail. An absent condition value
-	fails a `when` and holds for a default; conflicts are reported as conflicting inputs before this."""
-	condition = info.when or info.unless
-	if condition is None:
-		return True
-	value = valueAt(occurrence["value"], plan.segmentKeys[tuple(condition["path"])])
-	if value is None:
-		return info.when is None
-	text = textOf(value)
-	return text == info.when["value"] if info.when else text not in info.unless["values"]
+	fails a test and holds for a default; conflicts are reported as conflicting inputs before this."""
+	if info.when is not None:
+		return conditionHolds(info.when, conditionReader(plan, occurrence))
+	if info.unless is not None:
+		return not conditionHolds(info.unless, conditionReader(plan, occurrence))
+	return True
 
 
 def scopeSelected(plan: MappingScopePlan, occurrence: dict) -> bool:
 	if plan.when is None:
 		return True
-	keys = plan.segmentKeys[tuple(plan.when["path"])]
-	return not any(pointer in occurrence["conflicts"] for pointer in pointersOf(occurrence["value"], keys)) and (
-		textOf(valueAt(occurrence["value"], keys)) == plan.when["value"])
+	return not conditionConflicts(plan, occurrence, plan.when) and conditionHolds(plan.when, conditionReader(plan, occurrence))
 
 
 def pointersOf(tree: dict, steps: list[str]) -> list[str]:
@@ -532,6 +558,8 @@ class MappingEmitter:
 			if variant is None:
 				self.presenceGap(plan, occurrence, occurrence["value"]["@target"], reasonCode(entry["reason"]), record)
 			return
+		if plan.presence and record is not None and not isPresent(record.get("present")):
+			return  # a scope its presence does not select demands nothing of its lines (spec-04 Instances)
 		if len(path) < 2:
 			return
 		section, key = path[0], path[1]
@@ -680,12 +708,10 @@ def mappingStages(program: AnyValue, plans: list[MappingScopePlan], mode: str) -
 							presenceOccurrences.append(candidate)
 				if plan.update:
 					if plan.when:
-						keys = plan.segmentKeys[tuple(plan.when["path"])]
-						if any(pointer in occurrence.get("conflicts", {}) for pointer in pointersOf(occurrence["value"], keys)):
+						if conditionConflicts(plan, occurrence, plan.when):
 							unresolved.append({"type": plan.target, "handle": handle, "location": occurrence["location"], "reasons": [str(MappingCodes.InputConflicting)]})
 							continue
-						value = valueAt(occurrence["value"], keys)
-						if value is None or textOf(value) != plan.when["value"]:
+						if not conditionHolds(plan.when, conditionReader(plan, occurrence)):
 							continue
 					if any(pointer in occurrence.get("conflicts", {}) for path in plan.presenceInputs for pointer in pointersOf(occurrence["value"], path)):
 						unresolved.append({"type": plan.target, "handle": handle, "location": occurrence["location"], "reasons": [str(MappingCodes.InputConflicting)]})
@@ -744,12 +770,10 @@ def mappingStages(program: AnyValue, plans: list[MappingScopePlan], mode: str) -
 						continue
 					occurrence["targetContext"] = resolved["correspondence"].get(context)
 					if plan.when is not None:
-						keys = plan.segmentKeys[tuple(plan.when["path"])]
-						if any(pointer in occurrence["conflicts"] for pointer in pointersOf(occurrence["value"], keys)):
+						if conditionConflicts(plan, occurrence, plan.when):
 							skipped.append({"occurrence": occurrence, "target": plan.target, "reason": str(MappingCodes.InputConflicting), "src": occurrence["exists"]["src"], "location": occurrence["location"]})
 							continue
-						value = valueAt(occurrence["value"], keys)
-						if value is None or textOf(value) != plan.when["value"]:
+						if not conditionHolds(plan.when, conditionReader(plan, occurrence)):
 							continue
 					occurrences.append(occurrence)
 			scopes.append({"name": plan.name, "occurrences": occurrences, "skipped": skipped})

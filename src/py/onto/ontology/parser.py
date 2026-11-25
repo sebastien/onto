@@ -54,6 +54,7 @@ from .model import (
 	RE_FACET_DECL,
 	RE_INPUT,
 	RE_MAP,
+	RE_MAP_EXCLUSION,
 	RE_MAP_LINE,
 	RE_ONTOLOGY,
 	RE_PARTICIPANT,
@@ -263,9 +264,11 @@ def parseRootedLine(decl: Decl, line: Line, ctx: OntologyParseContext) -> None:
 
 def parseMapLine(line: Line, ctx: OntologyParseContext) -> MapLine | None:
 	text, doc = splitDoc(line.text)
+	if excluded := RE_MAP_EXCLUSION.fullmatch(text):
+		return MapLine(fromValue=excluded.group(1), doc=doc, loc=line.loc)
 	match = RE_MAP_LINE.fullmatch(text)
 	if not match or match.group(2) not in MATCHES:
-		ctx.diag.error("syntax", f"Invalid map line '{line.text}' (Value exact|broader|narrower|related Value)", line.loc)
+		ctx.diag.error("syntax", f"Invalid map line '{line.text}' (Value exact|broader|narrower|related Value, or - Value)", line.loc)
 		return None
 	return MapLine(fromValue=match.group(1), match=match.group(2), toValue=match.group(3), doc=doc, loc=line.loc)
 
@@ -669,6 +672,10 @@ def viewPopulationFromJson(value: Any, what: str) -> ViewPopulation:
 
 
 def mapLineFromJson(value: Any, what: str) -> MapLine:
+	if isinstance(value, dict) and "match" not in value and "to" not in value:
+		# `- FromValue`: the value has no counterpart
+		data = readJsonMembers(value, what, ("from",), ("doc",))
+		return MapLine(readJsonString(data["from"], what), doc=readOptionalMember(data, "doc", readJsonString, what))
 	data = readJsonMembers(value, what, ("from", "match", "to"), ("doc",))
 	return MapLine(readJsonString(data["from"], what), readJsonString(data["match"], what), readJsonString(data["to"], what), readOptionalMember(data, "doc", readJsonString, what))
 

@@ -163,4 +163,55 @@ def test_unnamed_duplicate_targets_and_ambiguous_incoming_references_fail(text):
 	with pytest.raises(FormatError):
 		loadMapping(SOURCE, TARGET, Source("bad.map", text))
 
+
+# -----------------------------------------------------------------------------
+#
+# UNSELECTED SCOPES
+#
+# -----------------------------------------------------------------------------
+
+
+KINDS_SOURCE = loadOntology([Source("k.onto", """@ontology K
+Kind = Home|Car
+Row
+  Kind Kind
+  Value Text
+""")])
+KINDS_TARGET = loadOntology([Source("l.onto", """@ontology L
+Kind = Property|Vehicle
+Asset
+  Kind Kind
+""")])
+KINDS_MAPPING = """@mapping K -> L
+@map Kinds Kind -> Kind
+  Home exact Property
+Row -> Asset {present=Value}
+  Kind <- Kinds(Kind)
+"""
+
+
+def kindsMapped(fields):
+	mapping = loadMapping(KINDS_SOURCE, KINDS_TARGET, Source("k.map", KINDS_MAPPING))
+	ops = HexaMappingOperator(KINDS_SOURCE, KINDS_TARGET, mode="lenient")
+	program = ops.compile(mapping)
+	obs = loadObservations(KINDS_SOURCE, Source("o.obs", "@obs K at=2026-11-25\n@src f=fixture\n@src f\nRow_1:Row\n" + fields))
+	result = asyncio.run(run({"ClockRead": lambda context: "2026-11-25"}, program.stages.MappingRead, observationsToJson(reconcileObservations(KINDS_SOURCE, obs))))
+	log, report = ops.result(program, result)
+	return observationsToJson(log), report
+
+
+def test_an_unselected_scope_reports_no_gaps_for_its_lines():
+	# spec-04: a scope `present=` does not select emits nothing and demands nothing of its lines
+	log, report = kindsMapped("  Kind Car\n")
+	assert not report.gaps and not report.stale
+	assert not any(item["type"] == "L/Asset" for item in log["instances"].values())
+
+
+def test_a_selected_scope_still_reports_its_lines_gaps():
+	log, report = kindsMapped("  Kind Car\n  Value 5\n")
+	assert [gap.target for gap in report.gaps] == ["L/Asset.Kind"]
+	log, report = kindsMapped("  Kind Home\n  Value 5\n")
+	assert not report.gaps
+	assert [claim["v"] for claim in log["claims"] if claim.get("p") == "Kind"] == ["Property"]
+
 # EOF

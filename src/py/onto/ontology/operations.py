@@ -243,15 +243,19 @@ def validateMap(model: Model, decl: Decl, diag: Diagnostics, targetModel: Model 
 		return set(resolved.values or [])
 
 	fromValues, toValues = vocabulary(decl.mapFrom, model), vocabulary(decl.mapTo, targetModel or model)
-	pairs: set[tuple[str, str]] = set()
+	pairs: set[tuple[str, str | None]] = set()
+	excluded = {line.fromValue for line in decl.mapLines if line.toValue is None}
 	for line in decl.mapLines:
 		if fromValues is not None and line.fromValue not in fromValues:
 			diag.error("reference", f"Unknown value '{line.fromValue}' of '{decl.mapFrom}'", line.loc)
-		if toValues is not None and line.toValue not in toValues:
+		if toValues is not None and line.toValue is not None and line.toValue not in toValues:
 			diag.error("reference", f"Unknown value '{line.toValue}' of '{decl.mapTo}'", line.loc)
+		if line.toValue is not None and line.fromValue in excluded:
+			diag.error("duplicate", f"Map value '{line.fromValue}' is both excluded and mapped", line.loc)
 		pair = (line.fromValue, line.toValue)
 		if pair in pairs:
-			diag.error("duplicate", f"Duplicate map line '{line.fromValue} {line.toValue}'", line.loc)
+			label = f"- {line.fromValue}" if line.toValue is None else f"{line.fromValue} {line.toValue}"
+			diag.error("duplicate", f"Duplicate map line '{label}'", line.loc)
 		pairs.add(pair)
 
 

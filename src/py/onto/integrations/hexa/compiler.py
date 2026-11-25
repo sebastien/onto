@@ -12,6 +12,7 @@ from hexa.shapes import Any, Bool, DateOnly, DatePattern, DateTime, Decimal, Dec
 
 from ...binding.model import Binding, BindingLine, BindingScope
 from ...binding.operations import enclosingPath, enclosingScope, rootSteps
+from ...conditions import conditionPaths, mapConditionPaths, testValues
 from ...expressions import Expression, keyedSteps, printExpression
 from ...formats.model import Formats
 from ...functions.model import BUILTIN_RESULTS, FunctionLibrary
@@ -203,6 +204,19 @@ def functionEvaluator(ontology: Ontology, libraries: list[FunctionLibrary], func
 	return FunctionEvaluator([ontology], libraries, functions, maps, implementations)
 
 
+def conditionValue(condition: dict, pathValue) -> AnyValue:
+	"""A condition as a template boolean (spec-04 Conditions): `pathValue(steps)` reads a test's path.
+
+	A single value keeps `Onto.TextEquals`, so that programs with simple conditions compile as before."""
+	for key, combine in (("all", V.AllOf), ("any", V.AnyOf)):
+		if key in condition:
+			return derive(combine, *[conditionValue(item, pathValue) for item in condition[key]])
+	value = pathValue(condition["path"])
+	if "value" in condition:
+		return derive(V.TextEquals, value, condition["value"])
+	return derive(V.TextIn, value, list(condition["values"])) if "values" in condition else derive(V.HasValue, value)
+
+
 # -----------------------------------------------------------------------------
 #
 # OPERATIONS
@@ -375,13 +389,13 @@ class ScopeCompiler:
 		scope = self.scope
 		for expr in (scope.id, scope.valid, scope.ctx):
 			self.countReads(expr)
-		if scope.deleted:
-			self.countReads({"path": scope.deleted["path"]})
+		for path in conditionPaths(scope.deleted):
+			self.countReads({"path": path})
 		for line in scope.lines:
 			if line.expr is not None and not self.isEnclosing(line.expr):
 				self.countReads(line.expr)
-			if line.when:
-				self.countReads({"path": line.when["path"]})
+			for path in conditionPaths(line.when):
+				self.countReads({"path": path})
 			if self.nullPolicy(line) and line.expr is not None and len(paths := self.linePaths(line.expr)) == 1:
 				self.nullPolicies[paths[0]] = self.nullPolicy(line)
 		for line in scope.lines:
@@ -579,7 +593,7 @@ class ScopeCompiler:
 		return derive(V.Ref, parent.type, self.expression(expr))
 
 	def condition(self, when: dict, value: AnyValue) -> AnyValue:
-		return derive(V.When, derive(V.TextEquals, self.pathValue(when["path"]), when["value"]), value)
+		return derive(V.When, conditionValue(when, self.pathValue), value)
 
 	def lineValue(self, line: BindingLine) -> AnyValue:
 		"""Compile a binding line, including null policy and condition."""
@@ -607,6 +621,10 @@ class ScopeCompiler:
 					value = derive(V.Nullable, value, optional(position.nulls), policy)
 				if len(position.codecs) > 1:
 					self.formats[self.fieldPath(paths[0])] = derive(V.FormatName, parsed(position.slot))
+		if line.unset is not None:
+			# Compared with the read value's text: numbers as the canonical decimals reading gives
+			spec = typeSpec(self.model, self.attribute(line))
+			value = derive(V.Unset, value, V.decimalText(line.unset) if spec in ("Integer", "Decimal", "Duration:unit") else line.unset)
 		if line.when:
 			value = self.condition(line.when, value)
 		return value
@@ -633,7 +651,7 @@ class ScopeCompiler:
 		if scope.ctx is not None:
 			record["ctx?"] = self.expression(scope.ctx)
 		if scope.deleted:
-			record["deleted?"] = derive(V.TextEquals, self.pathValue(scope.deleted["path"]), scope.deleted["value"])
+			record["deleted?"] = conditionValue(scope.deleted, self.pathValue)
 		record |= {"values": values, "facets": facets, "links": links, "formats": {key + "?": value for key, value in self.formats.items()},
 			"source": Location, "origin?": optional(Origin)}
 		return record
@@ -772,7 +790,7 @@ class LineInfo:
 	contextType: str | None = None
 	qualifiers: tuple[str, ...] = ()
 	slot: str = ""  # the record key, when exclusive lines share the target `key`
-	when: dict | None = None  # the line's condition `{path, value}`
+	when: dict | None = None  # the line's condition (spec-04 Conditions), paths with keyed steps
 	unless: dict | None = None  # a default's: `{path, values}` of its exclusive siblings
 
 	@property
@@ -971,20 +989,22 @@ class MappingScopeCompiler:
 			return [path for index, arg in enumerate(expr["args"]) if not (expr["call"] == "ref" and index == 0) for path in self.paths(arg)]
 		if "coalesce" in expr:
 			return [path for item in expr["coalesce"] for path in self.paths(item)]
+		if "all" in expr or "any" in expr:
+			return [keyedSteps(path) for path in conditionPaths(expr)]
 		return []
 
 	def condition(self, when: dict, value: AnyValue) -> AnyValue:
-		return derive(V.When, derive(V.TextEquals, self.pathValue(when["path"])[0], when["value"]), value)
+		return derive(V.When, conditionValue(when, lambda steps: self.pathValue(steps)[0]), value)
 
 	def compiledCondition(self, condition: dict | None) -> dict | None:
 		"""Use the same member steps as expression inputs and reach."""
-		return {**condition, "path": keyedSteps(condition["path"])} if condition else None
+		return mapConditionPaths(condition, keyedSteps) if condition else None
 
 	def lineValue(self, line: AnyValue, exclusive: dict | None = None) -> tuple[AnyValue, LineInfo]:
 		"""`exclusive`, for the default of exclusive lines: the `{path, values}` of its siblings' conditions."""
 		read = self.paths(line.expr)
 		when, exclusive = self.compiledCondition(line.when), self.compiledCondition(exclusive)
-		inputs = read + [path for expr in line.qualifiers.values() for path in self.paths(expr)] + ([when["path"]] if when else [])
+		inputs = read + [path for expr in line.qualifiers.values() for path in self.paths(expr)] + conditionPaths(when)
 		inputs += [exclusive["path"]] if exclusive else []
 		# The source input comes from the expression (`{src=Path}`, else its first path), never from `when`.
 		source = 0 if read else -1
@@ -1043,7 +1063,7 @@ class MappingScopeCompiler:
 			# Exclusive lines of one target (spec-04): one record key each; the default applies when no condition matches.
 			group = groups[f"[{line.facet}]" if line.facet else line.target or line.verb]
 			conditions = [item.when for item in group if item.when]
-			exclusive = {"path": conditions[0]["path"], "values": [when["value"] for when in conditions]} if len(group) > 1 and not line.when else None
+			exclusive = {"path": conditions[0]["path"], "values": [value for when in conditions for value in testValues(when)]} if len(group) > 1 and not line.when else None
 			value, info = self.lineValue(line, exclusive)
 			if len(group) > 1:
 				info.slot = f"{info.key}#{group.index(line)}"
@@ -1113,7 +1133,7 @@ class MappingScopeCompiler:
 		tree: dict = {}
 		paths = [path for line in self.scope.lines for path in self.paths(line.expr) + self.paths(line.when)]
 		paths += [path for line in self.scope.lines for expr in line.qualifiers.values() for path in self.paths(expr)]
-		paths += self.paths(self.scope.valid) + self.paths(self.scope.ctx) + self.paths(self.scope.present) + self.paths(self.scope.into) + ([self.when["path"]] if self.when else [])
+		paths += self.paths(self.scope.valid) + self.paths(self.scope.ctx) + self.paths(self.scope.present) + self.paths(self.scope.into) + conditionPaths(self.when)
 		for steps in paths:
 			node = tree
 			for segment in self.segments(steps):
