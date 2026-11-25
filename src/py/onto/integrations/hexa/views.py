@@ -376,24 +376,32 @@ class HexaViewOperator:
 		def supplies(step, candidates):
 			return any(deps <= self.footprints[step] and not self.refutes(step, conditions) for _, _, deps, conditions in candidates)
 
-		def register(key, candidates):
-			supplier = next((s for s in steps if supplies(s, candidates)), None)
+		def register(key, candidates, rows=None):
+			"""Choose the first read supplying the obligation, the reads keyed as the read of its rows (`rows`) first."""
+			order = sorted(steps, key=lambda s: rows is not None and self.reads[s].key != self.reads[rows].key)
+			supplier = next((s for s in order if supplies(s, candidates)), None)
 			matches[key] = [{"resolved": True, "supplier": supplier}] if candidates else []
+			return supplier
 
-		# A shared target type need not have the same source rows in two populations.
+		# A shared target type need not have the same source rows in two populations, nor the same read: rows reached
+		# backwards are those of the read stating their link. A read keyed otherwise reads other rows (notes filed under
+		# another key), and failing, would hide these rows' facts; among reads of their key, catalogue order decides.
 		rowTypes = {view.root: set(self.sourceModel.lineage(view.input.path))}
+		rowReads = {view.root: None}
 		for alias, path in view.paths.items():
 			for hop in (h for h in path if h.population == alias):
 				candidates = inputs[hop.field]
 				if hop.test is None:
 					candidates = [c for c in candidates if c[int(hop.reverse)] in rowTypes[hop.parent]]
 					rowTypes[alias] = {c[int(not hop.reverse)] for c in candidates}
+					supplier = register(hop.key, candidates, None if hop.reverse else rowReads[hop.parent])
+					rowReads[alias] = supplier if hop.reverse else None
 				else:
 					candidates = [c for c in candidates if c[0] in rowTypes[alias] and (
 						not hop.ancestor or c[1] in rowTypes[hop.ancestor])]
-				register(hop.key, candidates)
+					register(hop.key, candidates, rowReads[alias])
 		for key, (alias, f) in view.selections.items():
-			register(key, [c for c in inputs[f] if c[0] in rowTypes[alias]])
+			register(key, [c for c in inputs[f] if c[0] in rowTypes[alias]], rowReads[alias])
 		return matches
 
 	def checkValue(self, param: ViewInput, value) -> None:

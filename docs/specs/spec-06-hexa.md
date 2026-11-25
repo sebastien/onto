@@ -46,9 +46,12 @@ builds on them.
 `HexaViewOperator(mapper, mapping, reads, access)` discovers
 [rooted views](spec-01-ontology.md#rooted-views) in `mapper.toOntology`.
 It traces each selected population back through the mapping's typed source
-references, then chooses the first admitted read whose bindings supply the
-source row, guards, value and qualifiers. A binding on a specialisation supplies
-the inherited source slots too. Onto submits the ordered proof obligations
+references, then chooses for each obligation the first admitted read whose
+bindings supply the source row, guards, value and qualifiers. The rows of a
+population reached backwards (`<-`) are those of the read stating their link,
+and the reads keyed as that one come first for their obligations: a read of
+another key reads other rows, and failing, would hide these rows' facts.
+A binding on a specialisation supplies the inherited source slots too. Onto submits the ordered proof obligations
 for each projection up to its first static gap. Hexa's `SelectionRequest`
 deduplicates their read steps and adds prerequisite reads before any I/O.
 Reads and their input providers are shared across views.
@@ -68,7 +71,9 @@ discovered key needs one provider.
 type satisfy, e.g. `{"Exchange/Listing": "Venue:XNYS"}`. Tests can list
 alternative values for a single-valued attribute or be joined by `&`. The
 planner skips a read for a mapping candidate if its declared selection rules
-out the candidate's condition; it does not reorder eligible reads.
+out the candidate's condition. Reads of one binding requested by different keys
+(notes filed under a client, or under a matter) then each serve the mapping
+lines their rows satisfy, and with them their own populations.
 
 `request` is the template of the read's HTTP request, the argument of hexa's
 `RequestSend` ([hexa.http](../../../hexa/docs/specs/spec-005-shape_pipelines_stages.md#http-requests)):

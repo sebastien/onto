@@ -1207,6 +1207,29 @@ own, so the views selected both.
 
 Tests: `T06-022`.
 
+### Reads selected by their request (2026-11-26)
+
+Found adding comment-list reads to adviceos-data's diary note (`TODO_ONTO.md`,
+"Rooted-view reads are chosen by source rows only"): notes filed under a
+client, a mortgage, a lender deal or a needs analysis share one binding, and the
+planner took the first read of a note's rows for every filing, so a client's
+notes were planned from the mortgage's list and never read.
+
+- **`ViewRead.selects`** (spec-06 "Rooted retrieval"): per source entity, a
+  condition its rows satisfy, values of single-valued attributes joined by `&`
+  (`readSelection`). The planner skips a read for a candidate whose scope or
+  line condition the selection refutes (`refutes`, with `conditionOutcome`: a
+  condition holds, fails or may hold, knowing some paths' values).
+- **Rows reached backwards** are those of the read stating their link, and the
+  reads keyed as that one come first for their obligations: a read of another
+  key reads other rows, and failing, hid them. Among reads of one key,
+  catalogue order still decides (T06-022's reverse-hop test).
+- A candidate's footprint now counts the paths of compound conditions, which
+  `paths` skipped: adviceos-data's `HasOverseasDepositFunds` was planned from
+  the needs analysis's Goals section instead of its NewMortgage section.
+
+Tests: `T04-010`, `T06-023`.
+
 ## Workspace hygiene
 
 The project now is a Git repository. Do not modify the original

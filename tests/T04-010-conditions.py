@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from jsonschema import ValidationError
 
-from onto.conditions import conditionFromJson, conditionPaths, parseCondition, printCondition
+from onto.conditions import conditionFromJson, conditionOutcome, conditionPaths, parseCondition, printCondition
 from tests.helpers import schemaValidator
 
 # -----------------------------------------------------------------------------
@@ -131,5 +131,37 @@ def test_schema_rejects_direct_nesting_of_the_same_operator(operator):
 	assert validator.is_valid({operator: [test, test]})
 	with pytest.raises(ValidationError):
 		validator.validate(data)
+
+
+# -----------------------------------------------------------------------------
+#
+# OUTCOMES
+#
+# -----------------------------------------------------------------------------
+
+
+# What a read selects: `Key` is ClientId, `Kind` Home or Investment, `Note` nothing; anything else is unknown.
+KNOWN = {"Key": {"ClientId"}, "Kind": {"Home", "Investment"}, "Note": set()}
+
+
+@pytest.mark.parametrize(("text", "outcome"), [
+	("Key:ClientId", True),
+	("Key:MortgageApplicationId", False),
+	("Key:ClientId|GroupId", True),
+	("Kind:Home", None),  # Home or Investment: it may be Home
+	("Kind:Car", False),
+	("Key", True),  # a known value is a value
+	("Note", False),  # known to have none
+	("Note:x", False),
+	("Status:Active", None),  # not known
+	("Key:ClientId & Status:Active", None),
+	("Key:GroupId & Status:Active", False),  # one test fails the conjunction
+	("Key:GroupId | Status:Active", None),
+	("Key:GroupId | Kind:Car", False),
+	("Key:ClientId | Status:Active", True),  # one test settles the alternative
+	("(Key:GroupId | Kind:Car) & Status:Active", False),
+])
+def test_a_condition_holds_fails_or_may_hold_knowing_some_values(text, outcome):
+	assert conditionOutcome(parseCondition(text, binding=False), lambda path: KNOWN.get(".".join(path))) is outcome
 
 # EOF
