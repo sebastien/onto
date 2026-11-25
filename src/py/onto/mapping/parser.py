@@ -5,7 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from ..binding.parser import annotationParts, bindingHeader, condition, qualifyPath, readCondition, readDoc
+from ..binding.parser import annotationParts, bindingHeader, qualifyPath, readDoc
+from ..conditions import conditionFromJson, parseCondition
 from ..expressions import expressionFromJson, parseExpression
 from ..functions.model import FUNCTIONS_FORMAT, FunctionDeclaration
 from ..functions.parser import readFunctionsJson, parseFunctionDeclaration, parseFunctionExample
@@ -63,7 +64,7 @@ def mappingAnnotations(text: str | None, allowed: tuple[str, ...]) -> dict[str, 
 		elif key == "name" and isName(value):
 			result[key] = value
 		elif key == "when":
-			result[key] = condition(value, binding=False)
+			result[key] = parseCondition(value, binding=False)
 		elif key == "src" and RE_ATTR_PATH.fullmatch(value):
 			result[key] = value
 		elif key == "as" and isPath(value):
@@ -123,7 +124,7 @@ def readMappingJson(data: Any) -> Mapping:
 		item = jsonObject(item, ("source", "target"), ("when", "ctx", "valid", "doc", "lines", "name", "present", "into"))
 		scope = MappingScope(jsonString(item["source"], isPath), jsonString(item["target"], isPath), doc=readDoc(item))
 		if "when" in item:
-			scope.when = readCondition(item["when"], binding=False)
+			scope.when = conditionFromJson(item["when"], binding=False)
 		if "name" in item:
 			scope.name = jsonString(item["name"], isName)
 		for key in ("ctx", "valid", "present", "into"):
@@ -143,7 +144,7 @@ def readMappingJson(data: Any) -> Mapping:
 			if "qualifiers" in line:
 				entry.qualifiers = {key: expressionFromJson(expr) for key, expr in jsonObject(line["qualifiers"], (), QUALIFIER_KEYS).items()}
 			if "when" in line:
-				entry.when = readCondition(line["when"], binding=False)
+				entry.when = conditionFromJson(line["when"], binding=False)
 			if "src" in line:
 				entry.src = jsonString(line["src"], lambda text: bool(RE_ATTR_PATH.fullmatch(text)))
 			if "as" in line:

@@ -13,7 +13,7 @@ from ..functions.parser import readFunctionsJson, splitValues, parseFunctionDecl
 from ..observations.parser import jsonObject, jsonString
 from ..ontology.model import RE_ELEMENT_PATH
 from ..text import Diagnostics, Loc, Source, isName, isPath, isToken, parseArguments, scanUnquoted, sourceLines, splitAnnotations, splitDoc
-from .model import BINDING_FORMAT, HEADER_KEYS, Binding, BindingDocument, BindingExclusion, BindingLine, BindingScope, Condition
+from .model import BINDING_FORMAT, HEADER_KEYS, Binding, BindingDocument, BindingExclusion, BindingLine, BindingScope
 
 # -----------------------------------------------------------------------------
 #
@@ -60,11 +60,6 @@ def documentPath(text: str) -> Expression:
 	return expr
 
 
-def condition(text: str, *, binding: bool = True) -> Condition:
-	"""Parse a condition: tests `path:value` (or `path:A|B`), joined by ` & ` and ` | ` (spec-04 Conditions)."""
-	return parseCondition(text, binding=binding)
-
-
 def annotationParts(text: str | None) -> list[str]:
 	"""Split annotations without splitting nested expressions."""
 	if text is None or not text.strip():
@@ -100,8 +95,14 @@ def bindingAnnotations(text: str | None, allowed: tuple[str, ...]) -> dict[str, 
 		if key in ("id", "valid", "ctx"):
 			result[key] = parseExpression(value, binding=True, field=False)
 		elif key in ("when", "deleted"):
-			result[key] = condition(value)
-		elif key == "null" and value in ("absent", "unknown") or key == "reason" and value in ("ignore", "out-of-scope") or key == "unset" and isToken(value):
+			result[key] = parseCondition(value)
+		elif key == "unset":
+			if value.startswith('"'):
+				jsonString(json.loads(value), lambda _: True)
+			elif not isToken(value):
+				raise ValueError("unset requires a token or a quoted text value")
+			result[key] = value  # keep the literal spelling until the target type is known
+		elif key == "null" and value in ("absent", "unknown") or key == "reason" and value in ("ignore", "out-of-scope"):
 			result[key] = value
 		else:
 			raise ValueError(f"Invalid binding annotation value '{key}'")
@@ -116,11 +117,6 @@ def readDoc(value: dict[str, Any]) -> str | None:
 	if not isinstance(doc, str) or not doc or "\r" in doc or "\n" in doc:
 		raise ValueError("Invalid doc string")
 	return doc
-
-
-def readCondition(data: Any, *, binding: bool = True) -> Condition:
-	"""Decode a condition from JSON data."""
-	return conditionFromJson(data, binding=binding)
 
 
 def readBindingJson(data: Any) -> Binding:
@@ -162,7 +158,7 @@ def readBindingJson(data: Any) -> Binding:
 			if key in item:
 				setattr(scope, key, expressionFromJson(item[key], binding=True, field=False))
 		if "deleted" in item:
-			scope.deleted = readCondition(item["deleted"])
+			scope.deleted = conditionFromJson(item["deleted"])
 		if not isinstance(item.get("lines", []), list):
 			raise ValueError("Scope lines must be an array")
 		for line in item.get("lines", []):
@@ -175,13 +171,13 @@ def readBindingJson(data: Any) -> Binding:
 			if "expr" in line:
 				entry.expr = expressionFromJson(line["expr"], binding=True)
 			if "when" in line:
-				entry.when = readCondition(line["when"])
+				entry.when = conditionFromJson(line["when"])
 			if "null" in line:
 				if line["null"] not in ("absent", "unknown"):
 					raise ValueError("Invalid null policy")
 				entry.null = line["null"]
 			if "unset" in line:
-				entry.unset = jsonString(line["unset"])
+				entry.unset = jsonString(line["unset"], lambda _: True)
 			scope.lines.append(entry)
 		binding.scopes.append(scope)
 	if not isinstance(value.get("exclusions", []), list):
@@ -286,6 +282,6 @@ def parseBinding(source: Source) -> BindingDocument:
 	return doc
 
 
-__all__ = ["parseBinding", "qualifyPath", "bindingHeader", "condition", "annotationParts", "readDoc", "readCondition", "readBindingJson"]
+__all__ = ["parseBinding", "qualifyPath", "bindingHeader", "annotationParts", "readDoc", "readBindingJson"]
 
 # EOF

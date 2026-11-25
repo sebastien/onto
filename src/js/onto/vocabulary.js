@@ -178,13 +178,14 @@ export function conditionHolds(condition, valueAt) {
 	return textIn(valueAt(condition.path), condition.values ?? [condition.value]);
 }
 
-/**
- * A test of having a value: known and nonempty, as `present=` reads it (false and zero are values);
- * a list of document values has one when a member does.
- */
+/** Whether `value` is known and nonempty (false and zero are present). */
+export function isPresent(value) {
+	return !(value === null || isAbsent(value) || isUnknown(value) || value === "" || isSet(value) && !value.set.length);
+}
+
+/** A condition sees a list of document values as present when a member is present. */
 export function hasValue(value) {
-	if (Array.isArray(value)) return value.some(hasValue);
-	return !(value === undefined || value === null || isAbsent(value) || isUnknown(value) || value === "" || isSet(value) && !value.set.length);
+	return Array.isArray(value) ? value.some(hasValue) : isPresent(value);
 }
 
 function textEquals(value, text) { return memberTexts(value).includes(text); }

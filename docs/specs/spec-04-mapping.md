@@ -398,6 +398,7 @@ test        := path [":" value ("|" value)*]
   than the value `B:y`.
 - In a mapping, a conflicting slot read by any test makes the condition a
   conflicting input ([Claims and metadata](#claims-and-metadata)).
+  `$` in a mapping test reads the scope instance, compared by its source handle.
 
 ## Bindings
 
@@ -478,15 +479,15 @@ Body lines are evaluated from that value (the **record**).
   attribute, which is single-valued with a text, number, boolean, date or
   vocabulary type, and it compares as one: with `Amount <- cash {unset=0}`, a
   CRM's `0` or `0.00` gives no claim, and `120000` its amount. Writing does not
-  restore `V`.
+  restore `V`. Quote text with spaces or delimiters, or empty text (`unset=""`).
 - `^` as a whole expression refers to the enclosing record's instance: in the
   example, a dividend's `Instrument`. Its scope line must exist.
 - `ref(Type, expr)` refers to the instance of `Type` with that key, whether or
   not the document contains it; until some document does, it is an
   [implicit instance](spec-02-observations.md#implicit-instances).
 - `{when=condition}` applies the line only when the [condition](#conditions)
-  holds. Writing restores a single `path:value` test; a line with alternatives
-  or several tests is lossy under writing.
+  holds. Writing restores a single `path:value` test on a plain field path;
+  other conditions are lossy under writing.
 
 ### Exclusions
 

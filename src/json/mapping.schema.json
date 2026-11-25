@@ -793,7 +793,8 @@
               "type": "array",
               "minItems": 2,
               "items": {
-                "$ref": "#/$defs/when"
+                "$ref": "#/$defs/when",
+                "not": { "required": ["all"] }
               }
             }
           }
@@ -809,7 +810,8 @@
               "type": "array",
               "minItems": 2,
               "items": {
-                "$ref": "#/$defs/when"
+                "$ref": "#/$defs/when",
+                "not": { "required": ["any"] }
               }
             }
           }
@@ -853,7 +855,7 @@
               "$ref": "#/$defs/nullMode"
             },
             "unset": {
-              "$ref": "#/$defs/token",
+              "type": "string",
               "description": "Bindings: the value the source writes for \"not given\", which says nothing"
             },
             "reverse": {

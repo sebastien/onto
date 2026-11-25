@@ -207,9 +207,26 @@ def testValues(test: Condition) -> list[str]:
 	return list(test["values"]) if "values" in test else [test["value"]] if "value" in test else []
 
 
-def isSingleTest(condition: Condition | None) -> bool:
-	"""One test of one value, `path:value`: the form writing can restore."""
+def isSingleValueTest(condition: Condition | None) -> bool:
+	"""Whether `condition` is a single test with exactly one expected value."""
 	return condition is not None and "path" in condition and "value" in condition
+
+
+def conditionOutcome(condition: Condition, known) -> bool | None:
+	"""Whether `condition` holds (True), cannot hold (False) or may hold (None), knowing only the values some
+	paths can have: `known(path)` gives them as a set, or None when they could be anything."""
+	if "path" not in condition:
+		key = "all" if "all" in condition else "any"
+		outcomes = [conditionOutcome(item, known) for item in condition[key]]
+		decisive = key == "any"  # The outcome that settles the operator on its own: True for `any`, False for `all`.
+		return decisive if decisive in outcomes else (not decisive) if all(item is (not decisive) for item in outcomes) else None
+	values = known(condition["path"])
+	if values is None:
+		return None
+	listed = set(testValues(condition))
+	if not values or not listed:
+		return bool(values)  # Known to have no value, or a test of having one.
+	return True if values <= listed else False if not values & listed else None
 
 
 def mapConditionPaths(condition: Condition, change) -> Condition:
@@ -220,6 +237,6 @@ def mapConditionPaths(condition: Condition, change) -> Condition:
 	return {**condition, "path": change(condition["path"])}
 
 
-__all__ = ["Condition", "conditionFromJson", "conditionPaths", "conditionTests", "isSingleTest", "mapConditionPaths", "parseCondition", "printCondition", "testValues"]
+__all__ = ["Condition", "conditionFromJson", "conditionOutcome", "conditionPaths", "conditionTests", "isSingleValueTest", "mapConditionPaths", "parseCondition", "printCondition", "testValues"]
 
 # EOF

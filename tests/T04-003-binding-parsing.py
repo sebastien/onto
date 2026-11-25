@@ -281,6 +281,9 @@ def testStrictJsonRejectsMalformedAndNonRoundTrippableBindings(change):
 @pytest.mark.parametrize(("line", "printed"), [
 	("  Count <- count {unset=0.00}\n", "  Count <- count {unset=0}\n"),
 	("  Name <- name {null=unknown, unset=N/A}\n", "  Name <- name {null=unknown, unset=N/A}\n"),
+	('  Name <- name {unset=""}\n', '  Name <- name {unset=""}\n'),
+	('  Name <- name {unset="not given, see note"}\n', '  Name <- name {unset="not given, see note"}\n'),
+	('  Name <- name {unset="\\"none\\""}\n', '  Name <- name {unset="\\"none\\""}\n'),
 ])
 def testUnsetValuesAreTypedAndCanonical(line: str, printed: str):
 	binding = load("Person <- people[*] {id=id}\n" + line)

@@ -758,7 +758,16 @@ A flat view cannot include a rooted view because it provides no seed.
   children; aliases are distinct and local to the view.
 - `through alias` uses the binary relation's `context`, `subjectRole` and
   `objectRole`. Both endpoints must be proved by the **same** association
-  handle. Its alias can be used in projections or further traversals.
+  handle, and the role claims must overlap in validity. Its alias can be used
+  in projections or further traversals.
+- A link of a relation with a `context` is one fact, whether a relation claim
+  or an instance of the association with both selected roles states it:
+  without `through`, `branch -> hasPatron` (and `branch.hasPatron`) reaches a
+  patron a visit names as well as one a `hasPatron` claim states. `through`
+  reaches only the links an association states, since a relation claim has no
+  association to bind. When both selectors name one role, only relation claims
+  state the link. A link inferred from role claims is valid only during their
+  overlap, whether or not the traversal uses `through`.
 - Append `where member=value` to filter the reached handle. `true`/`false`,
   vocabulary values and single-token text test a scalar. `@ancestor` tests a
   reference against an already-bound ancestor on **this** path. Missing or

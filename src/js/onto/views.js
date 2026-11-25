@@ -28,7 +28,7 @@ import { loadMappingProgram } from "./mapping.js";
 import { Model, unkeyed } from "./model.js";
 import { observationsFromJson, reconcileObservations, sourceState, sourceToken } from "./observations.js";
 import { requestFor, requestSource, requestTemplate } from "./requests.js";
-import { RE_NAME, RE_PATH, activeHandles, jsonEqual, observationStatus, pyJson, referenceHandles, valueKey } from "./values.js";
+import { RE_NAME, RE_PATH, activeHandles, intersectIntervals, jsonEqual, observationStatus, pyJson, referenceHandles, valueKey } from "./values.js";
 
 // -----------------------------------------------------------------------------
 //
@@ -49,6 +49,8 @@ codes("ViewRead", "UnreadableResponse");
 // -----------------------------------------------------------------------------
 
 const hopKey = hop => hop.population + (hop.test !== undefined ? "?" : "");
+/** Whether a row's claims include a conflicting one. */
+const conflicted = (claim, subjectRoleClaim = null) => Boolean(claim.conflict || subjectRoleClaim?.conflict);
 const unwrap = raw => raw && raw.ledger && Object.hasOwn(raw, "value") ? raw.value : raw;
 
 /** The code of a read unavailable for `reason`: `ViewRead.<reason>`, or `ViewRead.UnreadableResponse`. */
@@ -130,9 +132,22 @@ export function describeHop(hop) {
 }
 
 function describeWitness(state, witness) {
-	const hop = witness.hop, data = { from: witness.subject, source: sourceToken(state, witness.claim) ?? null };
+	const hop = witness.hop, data = { from: witness.subject, source: sourceToken(state, witness.claim) ?? null, ...describeAssociation(witness.claim, witness.subjectRoleClaim) };
 	if (hop.test !== undefined) return { ...data, where: hop.field.path, value: witness.value };
 	return { ...data, via: hop.field.path, to: witness.value, ...(hop.reverse ? { reverse: true } : {}), ...(hop.proves ? { proves: hop.proves } : {}) };
+}
+
+/** The link's shared validity; false for disjoint role claims, null for an unbounded link. */
+function roleValidity(claim, subjectRoleClaim) {
+	const valids = [subjectRoleClaim.valid, claim.valid].filter(value => value !== undefined);
+	return valids.length ? intersectIntervals(valids) ?? false : null;
+}
+
+/** The association witnessing a link and the validity both role claims support. */
+function describeAssociation(claim, subjectRoleClaim) {
+	if (!subjectRoleClaim) return {};
+	const valid = roleValidity(claim, subjectRoleClaim);
+	return { through: claim.s, ...(valid ? { valid } : {}) };
 }
 
 /** `datetime.now(timezone.utc).isoformat(timespec="seconds")`. */
@@ -173,22 +188,57 @@ class Evidence {
 		Object.assign(this, { model, state, index: new Map() });
 	}
 
+	/**
+	 * `[subject, value, claim, subjectRoleClaim]` for the claims that address `field`. A link is stated by its relation's claims
+	 * and, when the relation has a context, by each instance of that association with both of its selected roles:
+	 * `claim` is the role reaching the value and `subjectRoleClaim` the role holding the field's subject.
+	 */
 	rows(field) {
 		const key = valueKey(field);
 		if (!this.index.has(key)) {
 			const rows = [];
-			const symmetric = field.relation && this.model.relations[field.relation]?.symmetric;
+			const symmetric = Boolean(field.relation && this.model.relations[field.relation]?.symmetric);
+			const [context, startRole, endRole] = field.context ?? [];
+			const roles = startRole !== endRole ? new Map() : null;
 			for (const claim of this.state.claims) {
 				if (claim.ctx !== undefined && claim.ctx !== null) continue; // These views request unqualified facts.
 				if (field.relation && claim.rel === field.relation) {
 					const [subject, other] = field.roles.map(role => claim.roles[role]);
-					if (this.isA(subject, field.owner) && (other === "?" || this.isA(other, field.other))) rows.push([subject, other === "?" ? { unknown: true } : { ref: other }, claim]);
-					if (subject !== other && symmetric && this.isA(other, field.owner)) rows.push([other, { ref: subject }, claim]);
-				} else if (!field.relation && Object.hasOwn(claim, "p") && memberMatches(claim.p, field.member) && this.isA(claim.s, field.owner)) rows.push([claim.s, claim.v, claim]);
+					if (this.isA(subject, field.owner) && (other === "?" || this.isA(other, field.other))) rows.push([subject, other === "?" ? { unknown: true } : { ref: other }, claim, null]);
+					if (subject !== other && symmetric && this.isA(other, field.owner)) rows.push([other, { ref: subject }, claim, null]);
+				} else if (!field.relation && Object.hasOwn(claim, "p") && memberMatches(claim.p, field.member) && this.isA(claim.s, field.owner)) rows.push([claim.s, claim.v, claim, null]);
+				else if (roles && (claim.p === startRole || claim.p === endRole) && this.isA(claim.s, context)) {
+					const held = valueKey([claim.s, claim.p]);
+					if (!roles.has(held)) roles.set(held, [claim.s, claim.p, []]);
+					roles.get(held)[2].push(claim);
+				}
+			}
+			for (const [handle, role, held] of roles?.values() ?? []) {
+				if (role !== startRole) continue;
+				for (const subjectRoleClaim of held) {
+					for (const claim of roles.get(valueKey([handle, endRole]))?.[2] ?? []) {
+						if (roleValidity(claim, subjectRoleClaim) === false) continue;
+						rows.push(...this.associationRows(field, subjectRoleClaim, claim));
+						if (symmetric) rows.push(...this.associationRows(field, claim, subjectRoleClaim, true));
+					}
+				}
 			}
 			this.index.set(key, rows);
 		}
 		return this.index.get(key);
+	}
+
+	/** The links for one orientation of a role pair; skip self-links in the mirrored orientation. */
+	associationRows(field, subjectRoleClaim, claim, reverse = false) {
+		const rows = [], others = referenceHandles(claim.v).filter(handle => this.isA(handle, field.other));
+		for (const subject of referenceHandles(subjectRoleClaim.v)) {
+			if (!this.isA(subject, field.owner)) continue;
+			if (observationStatus(claim.v) === "unknown") rows.push([subject, { unknown: true }, claim, subjectRoleClaim]);
+			for (const other of others) {
+				if (!reverse || subject !== other) rows.push([subject, { ref: other }, claim, subjectRoleClaim]);
+			}
+		}
+		return rows;
 	}
 
 	isA(handle, kind) {
@@ -198,13 +248,13 @@ class Evidence {
 	/** Retain every matching filter claim, or explain why none proves the filter. */
 	test(hop, bindings) {
 		const subject = bindings[hop.population];
-		const checks = this.rows(hop.field).filter(([handle]) => handle === subject).map(([, value, claim]) => [value, claim]);
-		if (checks.some(([, claim]) => claim.conflict)) return [[], "conflict"];
+		const checks = this.rows(hop.field).filter(([handle]) => handle === subject);
+		if (checks.some(([, , claim, roleClaim]) => conflicted(claim, roleClaim))) return [[], "conflict"];
 		const ancestor = ancestorOf(hop), witnesses = [];
-		for (const [value, claim] of checks) {
-			if (ancestor ? referenceHandles(value).includes(bindings[ancestor]) : jsonEqual(value, hop.test)) witnesses.push({ claim, hop, subject, value });
+		for (const [, value, claim, subjectRoleClaim] of checks) {
+			if (ancestor ? referenceHandles(value).includes(bindings[ancestor]) : jsonEqual(value, hop.test)) witnesses.push({ claim, hop, subject, value, subjectRoleClaim });
 		}
-		const states = new Set(checks.map(([value]) => observationStatus(value)));
+		const states = new Set(checks.map(([, value]) => observationStatus(value)));
 		const status = states.has("unknown") ? "unknown" : states.size === 1 && states.has("absent") ? "absent" : states.size === 1 && states.has("supplied") ? "notMatched" : "missing";
 		return [witnesses, status];
 	}
@@ -226,17 +276,20 @@ class Evidence {
 				}
 				let status = "missing";
 				const branches = [], rejected = [];
-				for (const [subject, value, claim] of this.rows(hop.field)) {
+				for (const [subject, value, claim, roleClaim] of this.rows(hop.field)) {
+					// An explicit `through` finishes with the second role; the previous hop proved the first.
+					const subjectRoleClaim = hop.proves ? trail.at(-1).claim : roleClaim;
+					if (hop.proves && (subject !== handle || roleValidity(claim, subjectRoleClaim) === false)) continue;
 					const found = observationStatus(value);
 					if (!hop.reverse && subject === handle && found !== "supplied") {
-						status = claim.conflict ? "conflict" : found;
+						status = conflicted(claim, subjectRoleClaim) ? "conflict" : found;
 						continue;
 					}
 					for (const other of referenceHandles(value)) {
 						const [start, end] = hop.reverse ? [other, subject] : [subject, other];
 						if (start !== handle || !this.isA(end, view.populations[hop.population].type)) continue;
-						if (claim.conflict) { status = "conflict"; continue; }
-						const bound = { ...bindings, [hop.population]: end }, witness = { claim, hop, subject: handle, value: end };
+						if (conflicted(claim, subjectRoleClaim)) { status = "conflict"; continue; }
+						const bound = { ...bindings, [hop.population]: end }, witness = { claim, hop, subject: handle, value: end, subjectRoleClaim };
 						if (guard) {
 							let reason = blocked(guard, bound), proofs = [];
 							if (!reason) [proofs, reason] = this.test(guard, bound);
@@ -552,23 +605,26 @@ export class ViewOperator {
 			for (const [bindings, trail] of reached) {
 				const handle = bindings[alias], seen = new Set();
 				const reason = blocked(supplier, alias, bindings, field.other ?? "");
-				for (const [subject, value, claim] of reason === null ? graph.rows(field) : []) {
+				for (const [subject, value, claim, roleClaim] of reason === null ? graph.rows(field) : []) {
 					if (subject !== handle) continue;
 					if (returnsToParent && value?.ref !== bindings[incoming.parent]) continue; // Returning a filing/review link back to the root must preserve that root.
 					if (child) {
-						const edge = trail.at(-2).claim; // The last witness is the object filter, immediately after its incoming edge.
-						if (value?.ref !== bindings[child] || Object.hasOwn(edge, "rel") && edge !== claim) continue;
+						const edge = trail.at(-2); // The last witness is the object filter, immediately after its incoming edge.
+						if (value?.ref !== bindings[child] || edge.subjectRoleClaim !== roleClaim
+							|| (Object.hasOwn(edge.claim, "rel") || roleClaim) && edge.claim !== claim) continue;
 					}
 					if (selected !== null) {
-						selected.add(claim);
-						for (const witness of trail) selected.add(witness.claim);
+						for (const item of [claim, roleClaim]) if (item) selected.add(item);
+						for (const witness of trail) for (const item of [witness.claim, witness.subjectRoleClaim]) if (item) selected.add(item);
 						continue;
 					}
-					const member = claim.p ?? field.member;
+					// An association's role claim states a link, not a member of the field.
+					const member = roleClaim ? field.member : claim.p ?? field.member;
 					facts.push({ field: spelling, population: alias, subject: handle, value, source: sourceToken(state, claim) ?? null,
 						path: trail.map(witness => describeWitness(state, witness)), ...(member !== field.member ? { member } : {}),
-						...Object.fromEntries(["cur", "unit", "period", "scale", "valid", "at", "ctx", "conflict"].filter(name => Object.hasOwn(claim, name)).map(name => [name, claim[name]])) });
-					seen.add(claim.conflict ? "conflict" : value && typeof value === "object" && value.partial ? "partial" : observationStatus(value));
+						...Object.fromEntries(["cur", "unit", "period", "scale", "valid", "at", "ctx", "conflict"].filter(name => Object.hasOwn(claim, name)).map(name => [name, claim[name]])),
+						...describeAssociation(claim, roleClaim), ...(conflicted(claim, roleClaim) ? { conflict: true } : {}) });
+					seen.add(conflicted(claim, roleClaim) ? "conflict" : value && typeof value === "object" && value.partial ? "partial" : observationStatus(value));
 				}
 				if (selected === null) {
 					coverage.push({ field: spelling, population: alias, subject: handle, statuses: [...(seen.size ? seen : new Set([reason ?? "missing"]))].sort(),

@@ -155,13 +155,20 @@ def test_derived_targets_are_read_but_never_written():
 	assert document == {"rows": [{"name": "A"}]}
 
 
-def test_conditions_with_alternatives_or_several_tests_are_not_written_back():
-	"""Writing restores a line's `path:value` condition; it cannot choose among alternatives."""
+@pytest.mark.parametrize(("condition", "reason"), [
+	("kind:A|B", "Only a single path:value condition can be written back"),
+	("kind", "Only a single path:value condition can be written back"),
+	("tags[*]:Urgent", "Only plain field paths in conditions can be written back"),
+	("tags[0]:Urgent", "Only plain field paths in conditions can be written back"),
+	("$.status:Active", "Only plain field paths in conditions can be written back"),
+])
+def test_nonwritable_conditions_are_reported_as_lossy(condition, reason):
 	ontology = loadOntology([Source("w.onto", "@ontology Cond rev=v1\nRow\n  Name Text\n  Kind Text\n")])
-	binding = loadBinding(ontology, Source("w.bind", "@binding Cond\nRow <- rows[*] {id=id}\n  Kind <- kind\n  Name <- name {when=kind:A|B}\n"))
-	state = readState(ontology, binding, {"rows": [{"id": "1", "name": "N", "kind": "A"}]})
+	binding = loadBinding(ontology, Source("w.bind", "@binding Cond\nRow <- rows[*] {id=id}\n  Kind <- kind\n  Name <- name {when=" + condition + "}\n"))
+	state = readState(ontology, binding, {"status": "Active", "rows": [{"id": "1", "name": "N", "kind": "A", "tags": ["Urgent"]}]})
+	assert any(claim.get("p") == "Name" for claim in state["claims"])
 	document, report, _ = write(ontology, binding, state)
-	assert [(item["line"], item["reason"]) for item in report.lossy] == [("Name", "Binding.PathUnsupported: A condition with alternatives or several tests cannot be written back")]
+	assert [(item["line"], item["reason"]) for item in report.lossy] == [("Name", f"Binding.PathUnsupported: {reason}")]
 	assert document == {"rows": [{"kind": "A"}]}
 
 

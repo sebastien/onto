@@ -231,7 +231,8 @@ def inputJson(item: ViewInput) -> dict:
 
 def fieldJson(item: Field) -> dict:
 	return {"owner": item.owner, "member": item.member, "path": item.path,
-		**{key: value for key in ("other", "relation") if (value := getattr(item, key))}, **({"roles": list(item.roles)} if item.roles else {})}
+		**{key: value for key in ("other", "relation") if (value := getattr(item, key))}, **({"roles": list(item.roles)} if item.roles else {}),
+		**({"context": list(item.context)} if item.context else {})}
 
 
 def hopJson(hop: Hop) -> dict:

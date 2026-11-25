@@ -224,6 +224,21 @@ export function parseInterval(text) {
 	return [start, end];
 }
 
+/** Intersect validity intervals, keeping their bound spellings; null for no inputs or disjoint bounds. */
+export function intersectIntervals(valids) {
+	if (!valids.length) return null;
+	if (new Set(valids).size === 1) return valids[0];
+	let start = null, end = null, startText = "", endText = "";
+	for (const text of valids) {
+		const [left, right = left] = text.split("..");
+		const [low, high] = parseInterval(text);
+		if (low !== null && (start === null || compareTimestamps(low, start) > 0)) [start, startText] = [low, left];
+		if (high !== null && (end === null || compareTimestamps(high, end) < 0)) [end, endText] = [high, right];
+	}
+	if (start !== null && end !== null && compareTimestamps(start, end) > 0) return null;
+	return startText === endText ? startText : `${startText}..${endText}`;
+}
+
 /** The handles in a reference value or in the members of a set. */
 export function referenceHandles(value) {
 	if (!isObject(value)) return [];

@@ -102,6 +102,30 @@ def test_a_conflict_in_any_tested_path_is_a_gap():
 	assert proposals(log) == 0
 
 
+@pytest.mark.parametrize("lines", [
+	"  Label <- Kind {when=Kind:Home & Offered:true}\n",
+	"  Label <- Kind {when=Kind:Home}\n  Label <- Kind\n",
+])
+def test_a_condition_conflict_cannot_be_replayed_as_source_variants(lines):
+	log, report = mapped("  Kind Home\n  Offered true\n@src g=other\n@src g\nAsset_1.Kind Car\n",
+		"@mapping S -> T\nAsset -> Property\n" + lines)
+	assert not values(log, "Label")
+	assert [(gap.target, gap.reason) for gap in report.gaps] == [("T/Property.Label", "Mapping.InputConflicting")] * lines.count("Label")
+
+
+@pytest.mark.parametrize(("scope", "line", "emits_label"), [
+	("{when=$}", "", True),
+	("{when=$:Asset_1}", "", True),
+	("{when=$:Other}", "", False),
+	("", "{when=$:Asset_1 & Offered:true}", True),
+	("", "{when=$:Other}", False),
+])
+def test_mapping_conditions_can_read_the_scope_instance(scope, line, emits_label):
+	log, report = mapped("  Offered true\n", f'@mapping S -> T\nAsset -> Property {scope}\n  Label <- "Matched" {line}\n')
+	assert not report.gaps
+	assert values(log, "Label") == (["Matched"] if emits_label else [])
+
+
 def test_conditions_print_and_round_trip():
 	mapping = loadMapping(SOURCE, TARGET, Source("m", MAPPING))
 	text = printMapping(mapping)

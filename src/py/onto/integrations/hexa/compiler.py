@@ -830,12 +830,16 @@ class MappingScopeCompiler:
 		self.lines: list[LineInfo] = []
 		self.roots: dict[str, AnyValue] = {}
 		self.when = self.compiledCondition(scope.when)
+		if ["@self"] in conditionPaths(self.when):
+			self.root("@self")
 		self.sourceRefs: dict[str, tuple[str, list[str]]] = {}  # `@ref<n>` -> (source type, key path): `ref(S, Key)`
 
 	# --- paths ---------------------------------------------------------------
 
 	def segments(self, steps: list[str]) -> list[Segment]:
 		"""Walk attribute `steps` from the scope's source type, through facets, structures and references."""
+		if steps == ["@self"]:
+			return [Segment("@self", "self")]
 		steps = keyedSteps(steps)
 		result: list[Segment] = []
 		current, index = self.scope.source, 0
@@ -883,6 +887,8 @@ class MappingScopeCompiler:
 	def pathValue(self, steps: list[str]) -> tuple[AnyValue, list[Segment]]:
 		"""Compile a source path and return its value and resolved segments."""
 		segments = self.segments(steps)
+		if steps == ["@self"]:
+			return optional(self.root("@self")), segments
 		value = optional(self.position(segments[0]))
 		if len(segments) > 1:
 			navigation: list[str] = []
@@ -989,16 +995,14 @@ class MappingScopeCompiler:
 			return [path for index, arg in enumerate(expr["args"]) if not (expr["call"] == "ref" and index == 0) for path in self.paths(arg)]
 		if "coalesce" in expr:
 			return [path for item in expr["coalesce"] for path in self.paths(item)]
-		if "all" in expr or "any" in expr:
-			return [keyedSteps(path) for path in conditionPaths(expr)]
 		return []
 
 	def condition(self, when: dict, value: AnyValue) -> AnyValue:
 		return derive(V.When, conditionValue(when, lambda steps: self.pathValue(steps)[0]), value)
 
 	def compiledCondition(self, condition: dict | None) -> dict | None:
-		"""Use the same member steps as expression inputs and reach."""
-		return mapConditionPaths(condition, keyedSteps) if condition else None
+		"""Use occurrence-tree keys for `$` and the same keyed steps as expressions for member paths."""
+		return mapConditionPaths(condition, lambda path: ["@self"] if path == SELF else keyedSteps(path)) if condition else None
 
 	def lineValue(self, line: AnyValue, exclusive: dict | None = None) -> tuple[AnyValue, LineInfo]:
 		"""`exclusive`, for the default of exclusive lines: the `{path, values}` of its siblings' conditions."""
@@ -1118,7 +1122,7 @@ class MappingScopeCompiler:
 		attr = self.target.lookup(self.scope.target, key)
 		value = self.convert(value, actual, attr)
 		if line.when:
-			value = self.condition(line.when, value)
+			value = self.condition(self.compiledCondition(line.when), value)
 		# spec-05: a record without its key keeps a source-qualified handle; it never becomes a gap
 		return {"handle": derive(V.KeyedHandle, short, value, optional(self.root("@scope")), optional(self.root("@handle")), self.scope.source)}
 
@@ -1131,10 +1135,12 @@ class MappingScopeCompiler:
 	def reach(self) -> dict:
 		"""Every path the scope reads: `{key: {segment, children}}`, references continuing under their type."""
 		tree: dict = {}
-		paths = [path for line in self.scope.lines for path in self.paths(line.expr) + self.paths(line.when)]
+		paths = [path for line in self.scope.lines for path in self.paths(line.expr) + conditionPaths(self.compiledCondition(line.when))]
 		paths += [path for line in self.scope.lines for expr in line.qualifiers.values() for path in self.paths(expr)]
 		paths += self.paths(self.scope.valid) + self.paths(self.scope.ctx) + self.paths(self.scope.present) + self.paths(self.scope.into) + conditionPaths(self.when)
 		for steps in paths:
+			if steps == ["@self"]:
+				continue  # the occurrence supplies this root separately from the attribute subtree
 			node = tree
 			for segment in self.segments(steps):
 				node = node.setdefault(segment.key, {"segment": segment, "children": {}})["children"]

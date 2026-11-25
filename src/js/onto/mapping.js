@@ -11,8 +11,8 @@ import { Location } from "hexa/shapes.js";
 import { Policy, collect, each, lift, pipe, project } from "hexa/combinators.js";
 import { Registry } from "./program.js";
 import { ClaimsBuilder, cleanValue, named, namedStage, registerFunctions } from "./stages.js";
-import { conditionHolds, reasonCode, textOf } from "./vocabulary.js";
-import { clone, compareCodePoints, compareTimestamps, handleOf, isAbsent, isSet, isUnknown, parseInterval, valueKey } from "./values.js";
+import { conditionHolds, isPresent, reasonCode, textOf } from "./vocabulary.js";
+import { clone, compareCodePoints, compareTimestamps, handleOf, intersectIntervals as intersect, isAbsent, isSet, isUnknown, valueKey } from "./values.js";
 
 // -----------------------------------------------------------------------------
 //
@@ -39,21 +39,6 @@ function metaOf(claim, sources) {
 	return result;
 }
 
-/** Intersect `valid` intervals, preserving their bound spelling; null for no inputs or disjoint bounds. */
-function intersect(valids) {
-	if (!valids.length) return null;
-	if (new Set(valids).size === 1) return valids[0];
-	let start = null, end = null, startText = "", endText = "";
-	for (const text of valids) {
-		const [left, right] = text.includes("..") ? [text.slice(0, text.indexOf("..")), text.slice(text.indexOf("..") + 2)] : [text, text];
-		const [low, high] = parseInterval(text);
-		if (low !== null && (start === null || compareTimestamps(low, start) > 0)) [start, startText] = [low, left];
-		if (high !== null && (end === null || compareTimestamps(high, end) < 0)) [end, endText] = [high, right];
-	}
-	if (start !== null && end !== null && compareTimestamps(start, end) > 0) return null;
-	return startText === endText ? startText : `${startText}..${endText}`;
-}
-
 /** Follow `keys` through references' `of` subtrees; return null when a step is missing. */
 function valueAt(tree, keys) {
 	let node = tree;
@@ -63,11 +48,6 @@ function valueAt(tree, keys) {
 		if (index + 1 < keys.length) node = isObject(node) ? node.of ?? null : null;
 	}
 	return node ?? null;
-}
-
-/** A known nonempty value; false and zero are present. */
-function isPresent(value) {
-	return !(value === null || value === undefined || isAbsent(value) || isUnknown(value) || value === "" || isSet(value) && !value.set.length);
 }
 
 function setAt(tree, pointer, value) {
@@ -127,6 +107,7 @@ const conditionReader = (plan, occurrence) => path => valuesAt(occurrence.value,
 
 /** Whether a slot any test of `condition` reads holds conflicting claims. */
 function conditionConflicts(plan, occurrence, condition) {
+	if (!condition) return false;
 	const conflicts = occurrence.conflicts ?? {};
 	return conditionTests(condition).some(test => pointersOf(occurrence.value, plan.segmentKeys.get(valueKey(test.path))).some(pointer => Object.hasOwn(conflicts, pointer)));
 }
@@ -396,7 +377,8 @@ class MappingEmitter {
 			const value = section[lineRecord(info)];
 			const [paths, conflicting] = this.inputs(occurrence, info, variant ? variant[0] : null);
 			const target = info.section === "facets" ? `${plan.target}[${info.key}]` : `${plan.target}.${info.key}`;
-			if (conflicting.length && variant === null && valueKey(conflicting) === valueKey(sourcePath(info, paths).slice(-1)) && !this.contextConflicts(plan, occurrence).size) continue;
+			if (conflicting.length && variant === null && valueKey(conflicting) === valueKey(sourcePath(info, paths).slice(-1))
+				&& !this.contextConflicts(plan, occurrence).size && !conditionConflicts(plan, occurrence, info.when ?? info.unless)) continue;
 			if (conflicting.length) {
 				this.gap(target, InputConflicting, occurrence, handle);
 				this.markStale(plan, occurrence, info, handle, InputConflicting, record, variant);
@@ -525,7 +507,7 @@ function variantsOf(occurrence, plan, emitter) {
 	const result = [];
 	for (const [pointer, claims] of Object.entries(occurrence.conflicts)) {
 		const lines = activeLines(plan, occurrence).filter(info => {
-			if (info.contextType && emitter.contextConflicts(plan, occurrence).size) return false;
+			if (conditionConflicts(plan, occurrence, info.when ?? info.unless) || info.contextType && emitter.contextConflicts(plan, occurrence).size) return false;
 			const [paths] = emitter.inputs({ ...occurrence, scope: plan.name }, info);
 			const chosen = sourcePath(info, paths);
 			return chosen.length && chosen.at(-1) === pointer;

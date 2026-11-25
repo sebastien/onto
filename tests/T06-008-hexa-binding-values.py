@@ -135,4 +135,16 @@ def test_a_value_the_source_writes_for_not_given_says_nothing(document, expected
 	assert report.gaps == []
 	assert sorted(line.strip().split(" {")[0] for line in text.splitlines() if line.strip().startswith("Deposit_1.")) == expected
 
+
+@pytest.mark.parametrize("sentinel", ["", "not given, see note"])
+def test_a_quoted_text_sentinel_suppresses_only_the_matching_value(sentinel):
+	text = DEPOSIT_BINDING.replace("{unset=None}", f'{{unset="{sentinel}"}}')
+	ops = HexaBindingOperator(DEPOSITS, mode="lenient")
+	program = ops.compile(loadBinding(DEPOSITS, Source("deposits.bind", text)))
+	cases = [{"src": SRC, "document": {"id": identifier, "kind": kind}} for identifier, kind in [(1, sentinel), (2, "Cash")]]
+	log, report = ops.result(program, asyncio.run(run(CLOCK, program.stages.BindingRead, cases)))
+	assert not report.gaps
+	assert "Deposit_1.Kind" not in printObservationsLog(DEPOSITS, log)
+	assert "Deposit_2.Kind Cash" in printObservationsLog(DEPOSITS, log)
+
 # EOF

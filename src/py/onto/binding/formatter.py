@@ -11,7 +11,7 @@ from ..expressions import Expression, printExpression
 from ..functions.formatter import functionBlock, functionsToJson
 from ..functions.model import FunctionLibrary
 from ..ontology.formatter import Namer
-from ..text import isName, withDoc
+from ..text import isName, isToken, withDoc
 from .model import ANNOTATION_KEYS, BINDING_FORMAT, HEADER_KEYS, Binding, BindingLine
 
 # -----------------------------------------------------------------------------
@@ -61,6 +61,8 @@ def printBinding(binding: Binding) -> str:
 				value = exprText(value, field=False)
 			elif key in ("when", "deleted"):
 				value = printCondition(value)
+			elif key == "unset" and (not isToken(value) or any(char in value for char in '"[]()')):
+				value = json.dumps(value)
 			parts.append(f"{key}={value}")
 		return " {" + ", ".join(parts) + "}" if parts else ""
 

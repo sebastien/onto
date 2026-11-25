@@ -17,13 +17,13 @@ from hexa.combinators import Policy, collect, each, lift, pipe, project, stage
 from hexa.shapes import Location
 
 from ...conditions import conditionPaths
-from ...observations.model import parseInterval
+from ...observations.model import intersectIntervals as intersect
 from ...ontology.model import Model, TypeExpr
 from ...text import isToken
 from .compiler import LineInfo
 from .model import ScopeProgram
 from .stages import ClaimsBuilder, cleanValue, namedStage
-from .vocabulary import MappingCodes, conditionHolds, handleOf, isAbsent, reasonCode, textOf
+from .vocabulary import MappingCodes, conditionHolds, handleOf, isAbsent, isPresent, reasonCode, textOf
 
 # -----------------------------------------------------------------------------
 #
@@ -82,26 +82,6 @@ def metaOf(claim: dict, sources: dict[str, str]) -> dict:
 	return result
 
 
-def intersect(valids: list[str]) -> str | None:
-	"""The intersection of `valid` intervals, spelled with the bounds it keeps; None when unbounded or empty."""
-	if not valids:
-		return None
-	if len(set(valids)) == 1:
-		return valids[0]
-	start, end = None, None
-	startText, endText = "", ""
-	for text in valids:
-		left, _, right = text.partition("..") if ".." in text else (text, "", text)
-		low, high = parseInterval(text)
-		if low is not None and (start is None or low > start):
-			start, startText = low, left
-		if high is not None and (end is None or high < end):
-			end, endText = high, right
-	if start is not None and end is not None and start > end:
-		return None
-	return startText if startText == endText else f"{startText}..{endText}"
-
-
 def valueAt(tree: dict, keys: list[str]) -> AnyValue:
 	"""The value at segment `keys`, through references' `of` subtrees; None when absent or plural."""
 	node: AnyValue = tree
@@ -112,11 +92,6 @@ def valueAt(tree: dict, keys: list[str]) -> AnyValue:
 		if index + 1 < len(keys):
 			node = node.get("of") if isinstance(node, dict) else None
 	return node
-
-
-def isPresent(value: AnyValue) -> bool:
-	"""A known nonempty value; false and zero are present."""
-	return not (value is None or isAbsent(value) or value == {"unknown": True} or value == "" or isinstance(value, dict) and "set" in value and not value["set"])
 
 
 def setAt(tree: dict, pointer: str, value: AnyValue) -> dict:
@@ -335,7 +310,7 @@ def conditionReader(plan: MappingScopePlan, occurrence: dict):
 	return lambda steps: valuesAt(occurrence["value"], plan.segmentKeys[tuple(steps)])
 
 
-def conditionConflicts(plan: MappingScopePlan, occurrence: dict, condition: dict) -> bool:
+def conditionConflicts(plan: MappingScopePlan, occurrence: dict, condition: dict | None) -> bool:
 	"""Whether a slot any test of `condition` reads holds conflicting claims."""
 	conflicts = occurrence.get("conflicts", {})
 	return any(pointer in conflicts for steps in conditionPaths(condition) for pointer in pointersOf(occurrence["value"], plan.segmentKeys[tuple(steps)]))
@@ -480,7 +455,8 @@ class MappingEmitter:
 			value = record.get(info.section, {}).get(info.record)
 			paths, conflicting = self.inputs(occurrence, info, variant[0] if variant else None)
 			target = f"{plan.target}[{info.key}]" if info.section == "facets" else f"{plan.target}.{info.key}"
-			if conflicting and variant is None and conflicting == info.sourcePath(paths)[-1:] and not self.contextConflicts(plan, occurrence):
+			if conflicting and variant is None and conflicting == info.sourcePath(paths)[-1:] \
+				and not self.contextConflicts(plan, occurrence) and not conditionConflicts(plan, occurrence, info.when or info.unless):
 				continue
 			if conflicting:
 				self.gap(target, str(MappingCodes.InputConflicting), occurrence, handle)
@@ -624,7 +600,7 @@ def variantsOf(occurrence: dict, plan: MappingScopePlan, emitter: MappingEmitter
 	for pointer, claims in occurrence["conflicts"].items():
 		lines = []
 		for info in plan.activeLines(occurrence):
-			if info.contextType and emitter.contextConflicts(plan, occurrence):
+			if conditionConflicts(plan, occurrence, info.when or info.unless) or info.contextType and emitter.contextConflicts(plan, occurrence):
 				continue
 			paths, _ = emitter.inputs({**occurrence, "scope": plan.name}, info)
 			chosen = info.sourcePath(paths)

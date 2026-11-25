@@ -307,12 +307,14 @@ def textIn(value: AnyValue, texts: list[str]) -> bool:
 	return any(item in texts for item in memberTexts(value))
 
 
-def hasValue(value: AnyValue) -> bool:
-	"""A test of having a value: known and nonempty, as `present=` reads it (false and zero are values);
-	a list of document values has one when a member does."""
-	if isinstance(value, list):
-		return any(hasValue(item) for item in value)
+def isPresent(value: AnyValue) -> bool:
+	"""Whether `value` is known and nonempty (false and zero are present)."""
 	return not (isAbsent(value) or value is None or value == UNKNOWN or value == "" or isinstance(value, dict) and "set" in value and not value["set"])
+
+
+def hasValue(value: AnyValue) -> bool:
+	"""A condition sees a list of document values as present when a member is present."""
+	return any(hasValue(item) for item in value) if isinstance(value, list) else isPresent(value)
 
 
 def allOf(*conditions: AnyValue) -> bool:
@@ -856,7 +858,7 @@ def vocabularyConformance() -> int:
 __all__ = [
 	"ABSENT_VALUE", "BindingCodes", "MappingCodes", "Integral", "IsoDuration", "EpochDate", "IntegerText", "SplitText",
 	"DateTimePattern", "DecimalNumber", "DecimalPlaces", "Case", "DatePattern", "DecimalText", "Read", "Set", "TextEquals", "TextIn", "HasValue", "AllOf", "AnyOf", "Unset",
-	"When", "WhenNone", "conditionHolds", "hasValue", "memberTexts",
+	"When", "WhenNone", "conditionHolds", "hasValue", "isPresent", "memberTexts",
 	"Coalesce", "Handle", "KeyedHandle", "SourceHandle", "Ref", "HandleKey", "Correspond", "CorrespondAs", "CorrespondEmitted", "Single", "Valid", "At", "FormatName", "Field", "Nullable",
 	"QualifierConvert", "ToInteger", "ToVocabulary", "Given", "Members", "TRANSFORMS", "CODECS", "builtin", "functionTransform", "functionCodec",
 	"reasonCode", "vocabularyConformance", "isAbsent", "decimalText", "documentValue", "encodeKey", "decodeKey",

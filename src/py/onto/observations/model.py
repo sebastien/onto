@@ -288,4 +288,24 @@ def parseInterval(text: str) -> tuple[Fraction | None, Fraction | None]:
 	return start, end
 
 
+def intersectIntervals(valids: list[str]) -> str | None:
+	"""Intersect validity intervals, keeping their bound spellings; None for no inputs or disjoint bounds."""
+	if not valids:
+		return None
+	if len(set(valids)) == 1:
+		return valids[0]
+	start, end = None, None
+	startText, endText = "", ""
+	for text in valids:
+		left, _, right = text.partition("..") if ".." in text else (text, "", text)
+		low, high = parseInterval(text)
+		if low is not None and (start is None or low > start):
+			start, startText = low, left
+		if high is not None and (end is None or high < end):
+			end, endText = high, right
+	if start is not None and end is not None and start > end:
+		return None
+	return startText if startText == endText else f"{startText}..{endText}"
+
+
 # EOF

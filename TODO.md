@@ -1185,6 +1185,28 @@ Open, proposed, not decided:
   implements the same checks twice, in Python (`recorded.py`) and JavaScript
   (`advicelink.js`).
 
+### Links a context association states (2026-11-25)
+
+Found writing adviceos-data's statement-of-position view (`TODO_ONTO.md`): its
+mapping states a client holding an asset as an `isHeldBy` link and a
+liability's holder as a `Finance/Holding`, and each view path reached only its
+own, so the views selected both.
+
+- A link of a relation with a `context` is stated by a relation claim or by an
+  instance of the association with both selected roles (spec-01 "Rooted
+  views"). `Field.context` names the association and its roles holding the
+  field's two ends (`linkContext`), and `through` uses it. Rooted evidence
+  (Python `observations/rooted.py`, JS `views.js`) pairs role claims of one
+  instance with overlapping validity. Its witness keeps both, retrieval
+  returns both, and a fact or path step names the association (`through`).
+  A conflict in either claim is a conflict. The planner looks for writers of
+  both roles targeting the same mapped association, and bundled fields carry
+  `context`.
+- A context whose selectors name one role stays with relation claims, as
+  `through` refuses it.
+
+Tests: `T06-022`.
+
 ## Workspace hygiene
 
 The project now is a Git repository. Do not modify the original

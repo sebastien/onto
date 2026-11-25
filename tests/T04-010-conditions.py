@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import pytest
+from jsonschema import ValidationError
 
 from onto.conditions import conditionFromJson, conditionPaths, parseCondition, printCondition
+from tests.helpers import schemaValidator
 
 # -----------------------------------------------------------------------------
 #
@@ -119,5 +121,15 @@ def test_json_round_trips(data):
 def test_invalid_json_is_rejected(data):
 	with pytest.raises(ValueError):
 		conditionFromJson(data, binding=False)
+
+
+@pytest.mark.parametrize("operator", ["all", "any"])
+def test_schema_rejects_direct_nesting_of_the_same_operator(operator):
+	test = {"path": ["Price"]}
+	data = {operator: [test, {operator: [test, test]}]}
+	validator = schemaValidator("mapping").evolve(schema={"$ref": "#/$defs/when"})
+	assert validator.is_valid({operator: [test, test]})
+	with pytest.raises(ValidationError):
+		validator.validate(data)
 
 # EOF

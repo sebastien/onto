@@ -24,6 +24,8 @@ class Field:
 	other: str = ""  # Type of the referenced handle (binary links and association roles).
 	relation: str = ""
 	roles: tuple[str, ...] = ()
+	# A link whose relation has a context: the association and its roles holding the owner and the other end.
+	context: tuple[str, str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +60,16 @@ def memberMatches(member: str, asked: str) -> bool:
 	return member == asked or member.startswith(asked + ".")
 
 
+def linkContext(relation: Decl, roles: tuple[str, str]) -> tuple[str, str, str] | None:
+	"""The association a relation's `context` names and its roles holding `roles`' participants, in order; none
+	without both role selectors."""
+	ann = dict(relation.ann)
+	if not {"context", "subjectRole", "objectRole"} <= ann.keys():
+		return None
+	selectors = {p.role: ann[k] for p, k in zip(relation.participants, ("subjectRole", "objectRole"))}
+	return ann["context"], selectors[roles[0]], selectors[roles[1]]
+
+
 def fieldFor(model: Model, owner: str, member: str, *, target: str | None = None, endpoint: str = "") -> Field:
 	"""Resolve a member, respecting a selected binary endpoint or a traversal's narrowed destination."""
 	short = lambda p: p.removeprefix(f"{model.ontology.namespace}/")
@@ -74,7 +86,7 @@ def fieldFor(model: Model, owner: str, member: str, *, target: str | None = None
 		a, b = r.participants[::-1] if inverse else r.participants
 		if not target and len(model.verbs(owner, member)) > 1:
 			path += "." + short(b.type)
-		return Field(owner, member, path, b.type, r.path, (a.role, b.role))
+		return Field(owner, member, path, b.type, r.path, (a.role, b.role), linkContext(r, (a.role, b.role)))
 	attr = model.lookup(owner, member)
 	if not attr or target:
 		raise ValueError(f"unknown view field {path}")
@@ -145,13 +157,11 @@ class RootedView:
 				raise ValueError(f"{alias}: {field.path} cannot reach {b}")
 			path = self.paths[parent]
 			if population.through:
-				rel = model.get(field.relation)
-				ann = dict(rel.ann) if rel else {}
-				if not {"context", "subjectRole", "objectRole"} <= ann.keys():
+				if not field.context:
 					raise ValueError(f"{alias}: {field.path} needs a context with both role selectors")
-				context = ann["context"]
-				selectors = {p.role: ann[k] for p, k in zip(rel.participants, ("subjectRole", "objectRole"))}
-				start, end = (selectors[r] for r in (field.roles[::-1] if population.reverse else field.roles))
+				context, start, end = field.context
+				if population.reverse:
+					start, end = end, start
 				if start == end:
 					raise ValueError(f"{alias}: through requires distinct context roles")
 				witness = ViewPopulation(population.through, context, parent, start, reverse=True)

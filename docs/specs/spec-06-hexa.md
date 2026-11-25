@@ -54,7 +54,7 @@ deduplicates their read steps and adds prerequisite reads before any I/O.
 Reads and their input providers are shared across views.
 
 The adapter configures `ViewRead(input, bindings, provides=None, request=None,
-source=None)` per step.
+source=None, selects=None)` per step.
 Both `input` and `provides` are `ViewInput(name, path, attr)` values, for
 example `ViewInput("id", "Exchange/Issuer", "Id")`. Steps match on the full
 source attribute, not `name`: a view may call this argument `issuerId`.
@@ -63,6 +63,12 @@ ontology, and checks the mapping's instance correspondence to the root before
 exposing the view. Starting from that source key, `provides` determines the
 reachable reads. Providers precede consumers; ties use catalogue order. A
 discovered key needs one provider.
+
+`selects` optionally declares a condition the read's rows of a source entity
+type satisfy, e.g. `{"Exchange/Listing": "Venue:XNYS"}`. Tests can list
+alternative values for a single-valued attribute or be joined by `&`. The
+planner skips a read for a mapping candidate if its declared selection rules
+out the candidate's condition; it does not reorder eligible reads.
 
 `request` is the template of the read's HTTP request, the argument of hexa's
 `RequestSend` ([hexa.http](../../../hexa/docs/specs/spec-005-shape_pipelines_stages.md#http-requests)):
@@ -144,7 +150,12 @@ not depend on the order in which effects complete.
 - `await operator.retrieve(view, seed, fields=None)` returns an **Onto
   `Observations`** document. Its claims are the selected leaves and the
   original link and filter witnesses for successful paths, deduplicated
-  across fields. Handles, source identities and qualifiers are retained.
+  across fields. A link an association states
+  ([Rooted views](spec-01-ontology.md#rooted-views)) is witnessed by both of
+  its role claims, and a report names that association as `through` on the
+  fact or path step, with `valid` set to the interval both role claims support
+  if bounded. Retrieval keeps the original intervals, handles, source
+  identities and qualifiers.
   Use `printObservationsCompact(target, result)` for `.obs` text grouped by
   entity or `printObservationsLog(target, result)` for the flat audit log.
   No proven leaves means a document with no claims.

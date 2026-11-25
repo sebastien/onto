@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..conditions import Condition
 from ..expressions import Expression
 from ..functions.model import Function, FunctionDeclaration
 from ..text import Diagnostic, Loc
@@ -15,8 +16,6 @@ from ..text import Diagnostic, Loc
 #
 # -----------------------------------------------------------------------------
 
-
-type Condition = dict[str, Any]
 
 BINDING_FORMAT = "onto.binding/1"
 HEADER_KEYS = ("rev", "name", "format", "scope", "null", "complete", "retract", "confirm")

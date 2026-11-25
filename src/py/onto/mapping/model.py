@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..conditions import Condition
 from ..expressions import Expression
 from ..functions.model import Function, FunctionDeclaration
 from ..ontology.model import Decl
@@ -16,8 +17,6 @@ from ..text import Diagnostic, Loc
 #
 # -----------------------------------------------------------------------------
 
-
-type Condition = dict[str, Any]
 
 MAPPING_FORMAT = "onto.mapping/1"
 HEADER_KEYS = ("from", "to", "view", "scope", "referential", "candidates", "retract", "confirm")
