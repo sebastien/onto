@@ -1,0 +1,132 @@
+---
+identity: "project:learnings"
+created: 2026-11-25T19:32:35.209779+00:00
+updated: 2026-11-25T19:48:18.108106+00:00
+agent_nodes: {authoritative-specs: {role: guidance, core: true, topic: implementation}, test-first-green: {role: guidance, core: true, topic: testing}, python-style: {role: guidance, core: false, topic: python}, feature-package-layout: {role: guidance, core: false, topic: architecture}, dependency-boundary: {role: guidance, core: true, topic: dependencies}, delegation-authorization: {role: guidance, core: true, topic: workflow}, hexa-boundary: {role: guidance, core: false, topic: integrations}, read-only-inspiration: {role: guidance, core: false, topic: sources}, temporary-files: {role: guidance, core: false, topic: workspace}, accurate-support-claims: {role: guidance, core: false, topic: communication}, knowledge-placement: {role: guidance, core: true, topic: knowledge-management}}
+---
+{
+  "version": 1,
+  "memory": {
+    "root": "root",
+    "nodes": {
+      "accurate-support-claims": {
+        "title": "State implemented support accurately",
+        "text": "Do not advertise support for specification features that are not implemented, notably spec-05 registries/minted handles/alternate keys and spec-03 overlays.",
+        "children": [],
+        "sources": [
+          "identity==\"project:observations\" item=k-e0d26dde98642c6c967af2725c362bbb2a7c294e2432fb2a4c3dedf3bd2f20f8"
+        ],
+        "review": false
+      },
+      "authoritative-specs": {
+        "title": "Treat specifications as authoritative",
+        "text": "When implementing behaviour, treat docs/specs/ as authoritative. If a spec is ambiguous or appears wrong, stop and ask the user; report mismatches rather than diverging or silently weakening the spec.",
+        "children": [],
+        "sources": [
+          "identity==\"project:observations\" item=k-1bc032dde0ae8e7ee6fcf2a11780d761e68259cb974f545058e06f8b9326061c"
+        ],
+        "review": false
+      },
+      "delegation-authorization": {
+        "title": "Require authorization before delegation",
+        "text": "Do not delegate project work to subagents unless the user explicitly authorizes delegation.",
+        "children": [],
+        "sources": [
+          "identity==\"project:observations\" item=k-58529a5d0f20320c465ae48faa59ab0b96c3d9a6e8b04f5967a45c634f48e680"
+        ],
+        "review": false
+      },
+      "dependency-boundary": {
+        "title": "Keep runtime dependencies minimal",
+        "text": "For runtime code, use only the Python >= 3.14 standard library. hexa is allowed only in its optional integration and must never be imported by onto core; pytest and jsonschema are development/test-only.",
+        "children": [],
+        "sources": [
+          "identity==\"project:observations\" item=k-f6aaa38952166655ca48a174c7588b6c011ac6838530d3d4f6d4473f3da8a770"
+        ],
+        "review": false
+      },
+      "feature-package-layout": {
+        "title": "Use the feature-package layout",
+        "text": "When adding a format, organize it under src/py/onto/{feature}/ with model.py, parser.py, formatter.py, operations.py (operations under an Operator class holding context), and public __init__.py. Optional integrations go under src/py/onto/integrations/{name}/ and load their library only when imported. Canonical layout: domain/pattern:FeaturePackage.",
+        "children": [],
+        "sources": [
+          "identity==\"project:observations\" item=k-7a136b2f2cc9d5426d49e3d9a7ab97a2f566d49556bf0ddcd8f5847a0e60c2b6"
+        ],
+        "review": false
+      },
+      "hexa-boundary": {
+        "title": "Keep hexa domain-free",
+        "text": "Maintain the one-way dependency boundary: onto may depend on hexa, but hexa must remain domain-free and never depend on onto. Adapt in onto's integration rather than changing hexa, and ask the user before modifying sibling repository ../hexa.",
+        "children": [],
+        "sources": [
+          "identity==\"project:observations\" item=k-4c2d81c36912f76db8c26f75a3aae92bf740d39ad9a35b8f75623396cd7a3592"
+        ],
+        "review": false
+      },
+      "knowledge-placement": {
+        "title": "Put durable knowledge in the knowledge store",
+        "text": "Store durable design knowledge (architecture, components, patterns, and rationale-backed decisions) in .memo/domain; maintain decisions in domain/collection:Decisions with DEC codes, status, and date, and conventions in usage/guide:Conventions. Keep TODO.md for open work only, with one-line proposals linking proposed decision entries. Do not narrate completed progress in TODO.md; git history retains it.",
+        "children": [],
+        "sources": [
+          "identity==\"project:observations\" item=k-21079e58423c1ecaa5fc181bacc7e8cd959f337377e7362cd1b6c7a1d75647a1"
+        ],
+        "review": false
+      },
+      "python-style": {
+        "title": "Follow project Python style",
+        "text": "When writing Python, use tabs, module docstrings, types first, camelCase functions/methods/fields, PascalCase classes, UPPER_CASE constants, logical section headers, and explicit # EOF.",
+        "children": [],
+        "sources": [
+          "identity==\"project:observations\" item=k-f6e65ddc94b91b8b77ba340d5a986885284242b05b4c20fe257fec91862ef8d8"
+        ],
+        "review": false
+      },
+      "read-only-inspiration": {
+        "title": "Preserve read-only source material",
+        "text": "Do not modify the original reference implementation at /home/sebastien/Workspace/AdviceLink/advicelink-scratchpad/2026-11-DataModel-V2/ or the stock-exchange inspiration model at /home/sebastien/Workspace/Recovery/repos/NZX/nzxcom-apis/src/py/nzxcomapis/model. Keep examples in specs and docs generic (for example Finance or Exchange), not specific to that exchange.",
+        "children": [],
+        "sources": [
+          "identity==\"project:observations\" item=k-f1237e57e82228b98ed539d3f480584cc4775f2d08ddfa0a8b237ca062ab7c22"
+        ],
+        "review": false
+      },
+      "root": {
+        "title": "",
+        "text": "Project-wide guidance: follow docs/specs as authoritative; write tests first and keep make test green; follow the established Python conventions and feature-package layout; keep runtime dependencies and hexa integration boundaries strict; do not delegate without user authorization; preserve designated inspiration sources as read-only and use /tmp/opencode for temporary work; describe only implemented spec support; and keep durable design knowledge in .memo/domain while TODO.md tracks open work only.",
+        "children": [
+          "authoritative-specs",
+          "test-first-green",
+          "python-style",
+          "feature-package-layout",
+          "dependency-boundary",
+          "delegation-authorization",
+          "hexa-boundary",
+          "read-only-inspiration",
+          "temporary-files",
+          "accurate-support-claims",
+          "knowledge-placement"
+        ],
+        "sources": [],
+        "review": false
+      },
+      "temporary-files": {
+        "title": "Use approved temporary directory",
+        "text": "For temporary work files, prefer /tmp/opencode.",
+        "children": [],
+        "sources": [
+          "identity==\"project:observations\" item=k-5686faf41e6d303d273dfb39e65ed318659deae17031a27f975423a5ebc398df"
+        ],
+        "review": false
+      },
+      "test-first-green": {
+        "title": "Test first and keep tests green",
+        "text": "For implementation work, write tests first and keep each step green with make test (pytest via uv). Name tests tests/T{spec}-{n}-{feature}-{name}.py, avoid network by replaying journals, and skip hexa-dependent tests when hexa is unavailable. Use domain/pattern:SpecExamplesAsTests as canonical test guidance.",
+        "children": [],
+        "sources": [
+          "identity==\"project:observations\" item=k-55268cda66b251f4dedef86a11dc229ca759dea64f8ddf67d1f91291da620890"
+        ],
+        "review": false
+      }
+    }
+  }
+}

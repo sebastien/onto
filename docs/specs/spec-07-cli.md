@@ -594,12 +594,10 @@ with `ONTO_DEBUG=1`, which shows the traceback.
 - Re-running bindings and mappings against a store (retractions, held
   retractions, approval): they need the host's store
   ([spec-06](spec-06-hexa.md#run)); `onto run` is one-shot.
-- `onto diff OLD NEW`: the semantic diff of spec-01 [Changes](spec-01-ontology.md#changes).
 - `onto overlay`: overlays (spec-03).
 - `onto formats update`: learning value formats from documents (spec-04,
   [Formats](spec-04-mapping.md#formats)), which needs a binding run.
-- Identity sidecars (`.ids`, spec-01) and registries (`.reg`, spec-05), which
-  have no readers yet.
+- Registries (`.reg`, spec-05), which have no reader yet.
 - A workspace configuration file: the search path and headers suffice until a
   project shows otherwise.
 - A watch mode and a language server.

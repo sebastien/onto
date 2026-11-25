@@ -4,3 +4,6 @@ __pycache__/
 dist/
 node_modules/
 build/
+# Memo logs are directories named NAME.log/; keep them even when a global
+# ignore excludes *.log.
+!/.agents/memo/**/*.log

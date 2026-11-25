@@ -90,8 +90,8 @@ step 5.
 
 - A finding needs the rule, the place and the consequence: what goes wrong when
   a new value, source, country or product line arrives.
-- Check the rule's DO form is expressible. For ranges, partial dates and
-  multiple supertypes onto has only a workaround (see `rules/values.md` 2.4 and
+- Check the rule's DO form is expressible. For partial dates and multiple
+  supertypes onto has only a workaround (see `rules/values.md` 2.4 and
   `rules/relations.md` 7.2): report the workaround, not the ideal.
 - An element with `{check=…}` or `{status=assumed}` is already flagged by its
   author: report it as an open decision, not a defect.

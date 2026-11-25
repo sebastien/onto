@@ -1,0 +1,99 @@
+{
+  "series": {
+    "DEC": {
+      "next": 23,
+      "reservations": {
+        "1": {
+          "identity": "onto:decision:run-semantics",
+          "state": "assigned"
+        },
+        "10": {
+          "identity": "onto:decision:function-semantics",
+          "state": "assigned"
+        },
+        "11": {
+          "identity": "onto:decision:partial-dates",
+          "state": "assigned"
+        },
+        "12": {
+          "identity": "onto:decision:multiple-supertypes",
+          "state": "assigned"
+        },
+        "13": {
+          "identity": "onto:decision:history-concept",
+          "state": "assigned"
+        },
+        "14": {
+          "identity": "onto:decision:facet-participant-condition",
+          "state": "assigned"
+        },
+        "15": {
+          "identity": "onto:decision:vocabulary-extensions",
+          "state": "assigned"
+        },
+        "16": {
+          "identity": "onto:decision:writing-format-precedence",
+          "state": "assigned"
+        },
+        "17": {
+          "identity": "onto:decision:index-steps-as-tuples",
+          "state": "assigned"
+        },
+        "18": {
+          "identity": "onto:decision:typed-correspondence",
+          "state": "assigned"
+        },
+        "19": {
+          "identity": "onto:decision:source-qualified-handles",
+          "state": "assigned"
+        },
+        "2": {
+          "identity": "onto:decision:referential-identities",
+          "state": "assigned"
+        },
+        "20": {
+          "identity": "onto:decision:read-gap-detail",
+          "state": "assigned"
+        },
+        "21": {
+          "identity": "onto:decision:declared-response-checks",
+          "state": "assigned"
+        },
+        "22": {
+          "identity": "onto:decision:composite-keys",
+          "state": "assigned"
+        },
+        "3": {
+          "identity": "onto:decision:inverse-and-formats",
+          "state": "assigned"
+        },
+        "4": {
+          "identity": "onto:decision:identity-log-order",
+          "state": "assigned"
+        },
+        "5": {
+          "identity": "onto:decision:gaps-json-only",
+          "state": "assigned"
+        },
+        "6": {
+          "identity": "onto:decision:collection-log-order",
+          "state": "assigned"
+        },
+        "7": {
+          "identity": "onto:decision:type-only-declarations",
+          "state": "assigned"
+        },
+        "8": {
+          "identity": "onto:decision:hexa-execution",
+          "state": "assigned"
+        },
+        "9": {
+          "identity": "onto:decision:concrete-signatures",
+          "state": "assigned"
+        }
+      },
+      "width": 4
+    }
+  },
+  "version": 1
+}
