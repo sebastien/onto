@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onto.example/schemas/store.schema.json",
+  "title": "Store file, JSON form (spec-08)",
+  "description": "Structural schema for store files. Types, links, mappings and index columns are checked by loading the document against its ontology and mappings, not by this schema.",
+  "type": "object",
+  "required": ["format", "name", "partitions"],
+  "additionalProperties": false,
+  "properties": {
+    "format": { "const": "onto.store/1" },
+    "name": { "$ref": "#/$defs/name" },
+    "header": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "rev": { "$ref": "#/$defs/token" },
+        "edit": { "$ref": "#/$defs/token" }
+      }
+    },
+    "uses": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "$ref": "#/$defs/path" }
+    },
+    "systems": { "type": "array", "items": { "$ref": "#/$defs/system" } },
+    "partitions": { "type": "array", "items": { "$ref": "#/$defs/partition" } },
+    "exclusions": { "type": "array", "items": { "$ref": "#/$defs/exclusion" } },
+    "indexes": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/index" } }
+  },
+  "$defs": {
+    "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+    "path": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)*$" },
+    "member": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$" },
+    "token": { "type": "string", "pattern": "^[^\\s{},=]+$" },
+    "doc": { "type": "string", "minLength": 1, "pattern": "^[^\\n\\r]*$" },
+    "duration": {
+      "type": "string",
+      "pattern": "^P(?=\\d|T\\d)(\\d+Y)?(\\d+M)?(\\d+W)?(\\d+D)?(T(?=\\d)(\\d+H)?(\\d+M)?(\\d+(\\.\\d+)?S)?)?$"
+    },
+    "age": { "anyOf": [{ "const": "never" }, { "$ref": "#/$defs/duration" }] },
+    "system": {
+      "type": "object",
+      "required": ["from", "to"],
+      "additionalProperties": false,
+      "properties": {
+        "from": { "$ref": "#/$defs/path" },
+        "to": { "$ref": "#/$defs/path" },
+        "scope": { "$ref": "#/$defs/token" },
+        "doc": { "$ref": "#/$defs/doc" }
+      }
+    },
+    "root": {
+      "type": "object",
+      "required": ["name", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/name" },
+        "type": { "$ref": "#/$defs/path" }
+      }
+    },
+    "population": {
+      "type": "object",
+      "required": ["name", "type", "parent", "via"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/name" },
+        "type": { "$ref": "#/$defs/path" },
+        "parent": { "$ref": "#/$defs/name" },
+        "via": { "$ref": "#/$defs/member" },
+        "reverse": { "const": true },
+        "through": { "$ref": "#/$defs/name" },
+        "orphaned": { "$ref": "#/$defs/age" },
+        "archived": { "$ref": "#/$defs/age" },
+        "grace": { "$ref": "#/$defs/duration" },
+        "privacy": { "const": "kept" },
+        "doc": { "$ref": "#/$defs/doc" }
+      }
+    },
+    "partition": {
+      "type": "object",
+      "required": ["kind", "root"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "$ref": "#/$defs/name" },
+        "root": { "$ref": "#/$defs/root" },
+        "populations": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/population" } },
+        "orphaned": { "$ref": "#/$defs/age" },
+        "archived": { "$ref": "#/$defs/age" },
+        "grace": { "$ref": "#/$defs/duration" },
+        "doc": { "$ref": "#/$defs/doc" }
+      }
+    },
+    "exclusion": {
+      "type": "object",
+      "required": ["type", "path"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "$ref": "#/$defs/path" },
+        "path": { "$ref": "#/$defs/member" },
+        "reason": { "$ref": "#/$defs/token" },
+        "doc": { "$ref": "#/$defs/doc" }
+      }
+    },
+    "column": {
+      "type": "object",
+      "required": ["population", "path"],
+      "additionalProperties": false,
+      "properties": {
+        "population": { "$ref": "#/$defs/name" },
+        "path": { "$ref": "#/$defs/member" },
+        "doc": { "$ref": "#/$defs/doc" }
+      }
+    },
+    "index": {
+      "type": "object",
+      "required": ["name", "kind", "columns"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/name" },
+        "kind": { "$ref": "#/$defs/name" },
+        "columns": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "$ref": "#/$defs/column" } },
+        "doc": { "$ref": "#/$defs/doc" }
+      }
+    }
+  }
+}
