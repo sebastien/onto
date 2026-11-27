@@ -245,12 +245,16 @@ def parseRootedLine(decl: Decl, line: Line, ctx: OntologyParseContext) -> None:
 	"""Parse a typed population or a projection on one. Names are local to this view."""
 	name = r"[A-Za-z_][A-Za-z0-9_]*"
 	member = rf"{name}(?:\.{name})*"
+	# NOTE: A population line may end with limit hints, `{page=N}` (spec-01 Rooted views).
+	text, annotations = splitAnnotations(line.text)
 	if found := re.fullmatch(rf"({name}):\s*(\S+)(?:\s*=\s*({name})\s+(->|<-)\s+({member})"
-		rf"(?:\s+through\s+({name}))?(?:\s+where\s+({member})=(@?[\w/]+))?)?", line.text, re.ASCII):
+		rf"(?:\s+through\s+({name}))?(?:\s+where\s+({member})=(@?[\w/]+))?)?", text, re.ASCII):
 		alias, typeName, parent, direction, via, through, where, value = found.groups()
 		if path := resolvePath(typeName, ctx, line.loc):
 			decl.viewPopulations.append(ViewPopulation(alias, path, parent or "", via or "", direction == "<-", through or "",
-				where or "", {"true": True, "false": False}.get(value, value)))
+				where or "", {"true": True, "false": False}.get(value, value), tuple(parseAnnotations(annotations, line.loc, ctx.diag))))
+	elif annotations is not None:
+		ctx.diag.error("syntax", f"Only population lines take annotations: '{line.text}'", line.loc)
 	elif found := re.fullmatch(rf"(\?\s+)?({name})\.({member})(?:\s*:\s*(\S+))?", line.text):
 		if not decl.viewPopulations:
 			ctx.diag.error("view", "The first body line of a rooted view must declare its target root", line.loc)
@@ -433,17 +437,18 @@ def parseDirective(line: Line, position: int, ctx: OntologyParseContext, ontolog
 		if existing is None:
 			ontology.uses.append((alias, namespace))
 		return None
-	if match := RE_VIEW.fullmatch(text):
+	viewText, viewAnnotations = splitAnnotations(text) if text.startswith("@view") else (text, None)
+	if match := RE_VIEW.fullmatch(viewText):
 		path = resolvePath(match.group(1), ctx, loc)
 		if not path:
 			return None
 		param = None
 		if match.group(2):
-			owner = resolvePath(match.group(3), ctx, loc)
+			owner = resolvePath(match.group(4), ctx, loc)
 			if not owner:
 				return None
-			param = ViewInput(match.group(2), owner, match.group(4))
-		decl = Decl(kind="view", path=path, doc=doc, loc=loc, viewInput=param)
+			param = ViewInput(match.group(2), owner, match.group(5), many=bool(match.group(3)))
+		decl = Decl(kind="view", path=path, doc=doc, loc=loc, viewInput=param, ann=parseAnnotations(viewAnnotations, loc, ctx.diag))
 		if not declare(decl):
 			return None
 
@@ -655,7 +660,7 @@ def viewLineFromJson(value: Any, what: str) -> ViewLine:
 
 
 def viewPopulationFromJson(value: Any, what: str) -> ViewPopulation:
-	data = readJsonMembers(value, what, ("name", "type"), ("parent", "via", "reverse", "through", "where", "equals"))
+	data = readJsonMembers(value, what, ("name", "type"), ("parent", "via", "reverse", "through", "where", "equals", "ann"))
 	strings = {k: readJsonString(data[k], what) for k in ("name", "type", "parent", "via", "through", "where") if k in data}
 	if any(not isName(strings[k]) for k in ("name", "parent", "through") if k in strings) or any(
 		not RE_ATTR_PATH.fullmatch(strings[k]) for k in ("via", "where") if k in strings):
@@ -665,10 +670,10 @@ def viewPopulationFromJson(value: Any, what: str) -> ViewPopulation:
 	test = data.get("equals")
 	if isinstance(test, str) and (not re.fullmatch(r"@?[\w/]+", test, re.ASCII) or test in ("true", "false")):
 		raise ValueError(f"{what}: expected a filter token or boolean")
-	if ("parent" in data) != ("via" in data) or "parent" not in data and data.keys() - {"name", "type"}:
-		raise ValueError(f"{what}: a root has only name and type; a traversal needs parent and via")
+	if ("parent" in data) != ("via" in data) or "parent" not in data and data.keys() - {"name", "type", "ann"}:
+		raise ValueError(f"{what}: a root has only name, type and annotations; a traversal needs parent and via")
 	return ViewPopulation(strings.pop("name"), strings.pop("type"), reverse=readOptionalMember(data, "reverse", readJsonFlag, what, False),
-		equals=data.get("equals"), **strings)
+		equals=data.get("equals"), ann=tuple(readOptionalMember(data, "ann", annFromJson, what, [])), **strings)
 
 
 def mapLineFromJson(value: Any, what: str) -> MapLine:
@@ -715,8 +720,9 @@ def declFromJson(value: Any, what: str) -> Decl:
 		lines = readJsonArray(data["lines"], what)
 		if "input" in data or "populations" in data:
 			readJsonMembers(data, what, ("input", "populations"), None)
-			param = readJsonMembers(data["input"], f"{what}.input", ("name", "path", "attr"))
-			decl.viewInput = ViewInput(*(readJsonString(param[k], f"{what}.input.{k}") for k in ("name", "path", "attr")))
+			param = readJsonMembers(data["input"], f"{what}.input", ("name", "path", "attr"), ("many",))
+			decl.viewInput = ViewInput(*(readJsonString(param[k], f"{what}.input.{k}") for k in ("name", "path", "attr")),
+				many=readOptionalMember(param, "many", readJsonFlag, f"{what}.input", False))
 			decl.viewPopulations = [viewPopulationFromJson(v, what) for v in readJsonArray(data["populations"], what, True)]
 			for item in lines:
 				v = readJsonMembers(item, what, ("population", "member"), ("optional", "target"))

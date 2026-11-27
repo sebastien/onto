@@ -210,9 +210,11 @@
               "properties": {
                 "name": { "$ref": "#/$defs/name" },
                 "path": { "$ref": "#/$defs/path" },
-                "attr": { "$ref": "#/$defs/name" }
+                "attr": { "$ref": "#/$defs/name" },
+                "many": { "const": true }
               }
             },
+            "ann": { "$ref": "#/$defs/ann" },
             "populations": {
               "type": "array", "minItems": 1, "items": {
                 "type": "object", "required": ["name", "type"], "additionalProperties": false,
@@ -222,7 +224,8 @@
                   "parent": { "$ref": "#/$defs/name" }, "via": { "$ref": "#/$defs/attrPath" },
                   "reverse": { "const": true }, "through": { "$ref": "#/$defs/name" },
                   "where": { "$ref": "#/$defs/attrPath" },
-                  "equals": { "anyOf": [{ "type": "boolean" }, { "type": "string", "pattern": "^@?[A-Za-z0-9_/]+$", "not": { "enum": ["true", "false"] } }] }
+                  "equals": { "anyOf": [{ "type": "boolean" }, { "type": "string", "pattern": "^@?[A-Za-z0-9_/]+$", "not": { "enum": ["true", "false"] } }] },
+                  "ann": { "$ref": "#/$defs/ann" }
                 }
               }
             },

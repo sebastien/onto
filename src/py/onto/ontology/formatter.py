@@ -179,7 +179,9 @@ class Printer:
 			return self.AnnotationJoin([f"{self.typeName(decl.path)} of {short(decl.subject)}"] + self.tail(decl.ann))
 		if decl.kind == "view":
 			param = decl.viewInput
-			return f"@view {short(decl.path)}" + (f"({param.name}: {short(param.path)}.{param.attr})" if param else "")
+			many = "* " if param and param.many else ""
+			return self.AnnotationJoin([f"@view {short(decl.path)}" + (f"({param.name}: {many}{short(param.path)}.{param.attr})" if param else "")]
+				+ self.tail(decl.ann))
 		if decl.kind == "domain":
 			return self.AnnotationJoin([f"@domain {short(decl.path)}"] + [])
 		if decl.kind == "map":
@@ -224,7 +226,7 @@ class Printer:
 				if population.where:
 					value = str(population.equals).lower() if isinstance(population.equals, bool) else population.equals
 					line += f" where {population.where}={value}"
-				body.append(line)
+				body.append(self.AnnotationJoin([line] + self.tail(list(population.ann))))
 			body += [f"  {'? ' if l.optional else ''}{l.path}.{l.member}" + (f": {self.short(l.target)}" if l.target else "") for l in decl.viewLines]
 		elif decl.kind == "view":
 			body = [f"  {self.viewLine(line)}" for line in decl.viewLines]
@@ -311,10 +313,12 @@ def encodeOntology(ontology: Ontology, ids: dict[str, str] | None) -> dict[str, 
 		if item.kind == "view":
 			if item.viewInput:
 				populations = [compact({"name": p.name, "type": p.type, "parent": p.parent or None, "via": p.via or None,
-					"reverse": p.reverse or None, "through": p.through or None, "where": p.where or None, "equals": p.equals}) for p in item.viewPopulations]
+					"reverse": p.reverse or None, "through": p.through or None, "where": p.where or None, "equals": p.equals,
+					"ann": annToJson(list(p.ann))}) for p in item.viewPopulations]
 				lines = [compact({"population": l.path, "member": l.member, "target": l.target, "optional": l.optional or None}) for l in item.viewLines]
 				p = item.viewInput
-				return compact({**common, "input": {"name": p.name, "path": p.path, "attr": p.attr}, "populations": populations, "lines": lines, "doc": item.doc})
+				return compact({**common, "input": {"name": p.name, "path": p.path, "attr": p.attr, **({"many": True} if p.many else {})},
+					"populations": populations, "lines": lines, "ann": annToJson(item.ann), "doc": item.doc})
 			lines = [compact({"path": line.path, "facets": line.facets, "member": line.member}) for line in item.viewLines]
 			return compact({**common, "lines": lines, "doc": item.doc})
 		if item.kind == "domain":

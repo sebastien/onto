@@ -122,6 +122,15 @@ class RootedView:
 		if not param or not (isName(param.name) and isPath(param.path) and isName(param.attr)) or not decl.viewPopulations or not decl.viewLines:
 			raise ValueError("a rooted view needs a named source key, a root population and projected fields")
 		self.input, self.root = param, decl.viewPopulations[0].name
+		# Limit hints (spec-09 "Limits and pages"): a list view's page size and largest page, and its populations' pages.
+		self.many = param.many
+		hints = {key: int(value) for key, value in decl.ann if key in ("page", "max") and isinstance(value, str) and value.isdigit()}
+		if hints and not self.many:
+			raise ValueError("only a list view (a * parameter) takes page and max")
+		if "page" in hints and "max" in hints and hints["page"] > hints["max"]:
+			raise ValueError("page is no larger than max")
+		self.page, self.max = hints.get("page"), hints.get("max")
+		self.pages = {population.name: population.page for population in decl.viewPopulations if population.page is not None}
 		self.populations: dict[str, ViewPopulation] = {}
 		self.paths: dict[str, tuple[Hop, ...]] = {}
 		self.guardedLinks = {}

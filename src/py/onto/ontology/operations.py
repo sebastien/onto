@@ -83,6 +83,8 @@ def checkAnnotations(model: Model, ann: Annotations, places: set[str], loc: Loc 
 			diag.error("annotation", "deps must be candidate", loc)
 		elif key == "elided" and not (isinstance(value, str) and value.isdigit()):
 			diag.error("annotation", "elided must be a count", loc)
+		elif key in ("page", "max") and not (isinstance(value, str) and value.isdigit() and int(value) > 0):
+			diag.error("annotation", "page and max are positive integers", loc)
 		elif key in ("key", "part", "ordered", "hierarchical", "history") and value is not True:
 			diag.error("annotation", f"{key} is a flag", loc)
 		elif key == "id" and value not in IDENTIFIERS:
@@ -517,6 +519,8 @@ def checkOntology(model: Model, diag: Diagnostics, keyModels: Sequence[Model] = 
 		elif decl.kind == "relation":
 			validateRelation(model, decl, diag)
 		elif decl.kind == "view":
+			for population in decl.viewPopulations:
+				checkAnnotations(model, list(population.ann), {"population"}, decl.loc, diag)
 			if decl.viewInput is not None:
 				try:
 					RootedView(model, decl)

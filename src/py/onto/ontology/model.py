@@ -58,6 +58,9 @@ ANNOTATION_PLACES: dict[str, set[str] | None] = {
 	"src": None,
 	"check": None,
 	"elided": {"vocabulary"},
+	# Limit hints of rooted views (spec-09 "Limits and pages"): a list view's page size and largest page, a population's page.
+	"page": {"view", "population"},
+	"max": {"view"},
 }
 ANNOTATION_KEYS = list(ANNOTATION_PLACES)
 HEADER_KEYS = ["rev", "src", "card", "cards", "rel", "layering"]
@@ -80,13 +83,14 @@ DECL_MEMBERS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
 	"relation": (("participants",), ("arrow", "attrs", "ann", "doc")),
 	"domain": ((), ("doc",)),
 	"map": (("from", "to", "lines"), ("ann", "doc")),
-	"view": (("lines",), ("doc", "input", "populations")),
+	"view": (("lines",), ("doc", "input", "populations", "ann")),
 }
 
 RE_COUNTS = re.compile(r"[?1*+]:[?1*+]")
 RE_ONTOLOGY = re.compile(r"@ontology\s+(\S+)(.*)")
 RE_USE = re.compile(r"@use\s+(\S+)\s+as\s+(\S+)")
-RE_VIEW = re.compile(r"@view\s+([^\s()]+)(?:\(([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^\s().]+)\.([A-Za-z_][A-Za-z0-9_]*)\))?")
+# NOTE: Groups: the view, its parameter, `*` for a list view, the source key's owner and attribute.
+RE_VIEW = re.compile(r"@view\s+([^\s()]+)(?:\(([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(\*)?\s*([^\s().*]+)\.([A-Za-z_][A-Za-z0-9_]*)\))?")
 RE_DOMAIN = re.compile(r"@domain\s+(\S+)")
 RE_MAP = re.compile(r"@map\s+(\S+)\s+(\S+)\s+->\s+(\S+)")
 RE_MAP_LINE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*)\s+([a-z]+)\s+([A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*)")
@@ -181,11 +185,13 @@ class ViewLine:
 
 @dataclass(slots=True, frozen=True)
 class ViewInput:
-	"""A caller's argument name and the source key it denotes, independent of the target identity."""
+	"""A caller's argument name and the source key it denotes, independent of the target identity; `many` for a list
+	view's parameter, every key a query selects."""
 
 	name: str
 	path: str
 	attr: str
+	many: bool = False
 
 	@property
 	def key(self) -> str:
@@ -218,6 +224,13 @@ class ViewPopulation:
 	through: str = ""
 	where: str = ""
 	equals: str | bool | None = None
+	ann: tuple[tuple[str, str | bool], ...] = ()
+
+	@property
+	def page(self) -> int | None:
+		"""The limit hint `{page=N}`: the population is read `N` instances at a time."""
+		value = next((value for key, value in self.ann if key == "page"), None)
+		return int(value) if isinstance(value, str) and value.isdigit() else None
 
 
 @dataclass(slots=True)
