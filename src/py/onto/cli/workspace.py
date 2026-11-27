@@ -537,6 +537,8 @@ class Workspace:
 						context.mappings.append(self.load(found))
 					except FormatError as error:
 						raise self.located(entry, "cli.context", f"mapping {key} has errors") from error
+					# NOTE: A mapping's referential tells which of its handles are derived from keys (spec-09 "Origins").
+					context.referentials += [item for item in self.context(found).referentials if item not in context.referentials]
 		if entry.kind in CONTEXT_KINDS:
 			context.ontologies, context.libraries = self.optional(uses, entry, CONTEXT_KINDS[entry.kind], set(entry.needs))
 		self.contexts[gid] = context

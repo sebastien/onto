@@ -26,7 +26,7 @@ from ..mapping import Mapping, mappingCoverage, mappingReverse, mappingToJson, p
 from ..observations import Observations, mergeObservationLogs, observationsFromJson, observationsToJson, printObservationsCompact, printObservationsLog, printObservationsState, reconcileObservations
 from ..ontology import Ontology, loadOntology, normaliseOntology, ontologyDiff, ontologyFromJson, ontologyToJson, printOntology, printOntologyDiff
 from ..referential import Referential, printReferential, referentialToJson
-from ..store import Store, printStore, storeToJson
+from ..store import Store, StoreOperator, printStore, storeToJson
 from ..text import Diagnostic, FormatError, Loc, Source, annotation, layoutText
 from .usage import UsageError
 from .workspace import STDIN, Entry, Workspace
@@ -591,6 +591,16 @@ class Commands:
 		finally:
 			sys.path[:] = path
 		return merged
+
+	def cmdStore(self) -> Result:
+		"""`store bundle` prints the store bundle of one store."""
+		entry = one(self.ws, self.args, ("store",))
+		store = load(self.ws, entry) if entry else None
+		if store is None:
+			return Result(checked=1)
+		context = self.ws.context(entry)
+		data = StoreOperator([context.ontology], context.mappings, context.referentials).bundle(store)
+		return Result(text=json.dumps(data, ensure_ascii=False, indent=2) + "\n", data=data, checked=1)
 
 	def cmdFn(self) -> Result:
 		"""`fn ls` lists signatures; `fn test` runs examples of implemented functions."""

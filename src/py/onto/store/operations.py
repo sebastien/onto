@@ -8,6 +8,7 @@ from typing import Any
 from ..mapping.model import Mapping
 from ..ontology.model import Model, Ontology, isAssociation
 from ..ontology.rooted import Field, fieldFor
+from ..referential.model import Referential
 from ..referential.operations import modelFor
 from ..text import Diagnostics, Source, annotation
 from .formatter import printStore, storeToJson
@@ -194,11 +195,13 @@ class StoreChecker:
 
 
 class Operator:
-	"""Store files and their checks, sharing the store's ontology (the first of `ontologies`) and its @system mappings."""
+	"""Store files, their checks and bundles, sharing the store's ontology (the first of `ontologies`), its @system
+	mappings and their referentials."""
 
-	def __init__(self, ontologies: list[Ontology], mappings: list[Mapping] | None = None):
+	def __init__(self, ontologies: list[Ontology], mappings: list[Mapping] | None = None, referentials: list[Referential] | None = None):
 		self.ontologies = list(ontologies)
 		self.mappings = list(mappings or [])
+		self.referentials = list(referentials or [])
 
 	def parse(self, sources: list[Source]) -> Store:
 		"""Parse one store's files and aliases."""
@@ -227,6 +230,13 @@ class Operator:
 	def fromJson(self, data: Any, name: str = "store.json") -> Store:
 		"""Decode and check the JSON form."""
 		return self.validate(storeFromJson(data, name))
+
+	def bundle(self, store: Store) -> dict[str, Any]:
+		"""Compile a checked store into its `onto.store-bundle/1`."""
+		# NOTE: Imported here: the bundle compiler resolves populations with this module.
+		from .bundle import storeBundle
+
+		return storeBundle(self.ontologies, store, self.mappings, self.referentials)
 
 
 # -----------------------------------------------------------------------------

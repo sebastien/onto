@@ -250,6 +250,15 @@ COMMANDS = (
 		("onto fn ls", "onto fn test --impl markets_impl", "onto fn test markets.fn --impl markets_impl"),
 	),
 	Command(
+		"store", "Stores", "bundle FILE.store",
+		"Compile a store bundle",
+		"'store bundle' prints the onto.store-bundle/1 JSON document a store runs with (spec-08), compiled from the "
+		"store's files, its ontology, its @system mappings and their referentials. A store with errors prints nothing.",
+		(Argument("action", None, ("bundle",)), Argument("file")),
+		(),
+		("onto store bundle adviser-app.store",),
+	),
+	Command(
 		"help", "Help", "[COMMAND]",
 		"Show help for onto or a command",
 		"Same as 'onto --help' or 'onto COMMAND --help'.",

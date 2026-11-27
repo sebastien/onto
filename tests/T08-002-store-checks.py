@@ -6,11 +6,9 @@ import json
 
 import pytest
 
-from onto import FormatError, Source, loadFunctions, loadMapping, loadOntology
-from onto.referential import loadReferential
-from onto.store import Store, StoreOperator
+from onto import FormatError, Source
 from tests.cli import onto
-from tests.helpers import specExample
+from tests.store import EXAMPLE, OPS, addStore, checked
 
 # -----------------------------------------------------------------------------
 #
@@ -19,30 +17,8 @@ from tests.helpers import specExample
 # -----------------------------------------------------------------------------
 
 
-def financeText(extra: str = "") -> str:
-	"""Spec-01's Finance with spec-08's additions, under spec-01's header."""
-	return specExample("spec-01-ontology") + "\n" + specExample("spec-08-store", 0).split("\n", 1)[1] + extra
-
-
-# NOTE: A member keeping a personal value about another kind's key entity (spec-08 "Personal facts stay home").
-VISIT = """
-Visit(Household, Visitor: Person) {kind=event}  -- A home visit
-  VisitorAddress Text {privacy=Owner}
-"""
-
-FINANCE = loadOntology([Source("finance.onto", financeText(VISIT))])
-EXCHANGE = loadOntology([Source("exchange.onto", specExample("spec-04-mapping", 1))])
-MARKETS = loadFunctions([FINANCE], [Source("markets.fn", specExample("spec-04-mapping", 3))])
-REFERENTIAL = loadReferential([FINANCE, EXCHANGE], [Source("market-ids.ref", specExample("spec-04-mapping", 4))])
-MAPPING = loadMapping(EXCHANGE, FINANCE, Source("exchange-finance.map", specExample("spec-04-mapping", 5)), libraries=[MARKETS], referentials=[REFERENTIAL])
-OPS = StoreOperator([FINANCE], [MAPPING])
-EXAMPLE = specExample("spec-08-store", 1)
 HEAD = "@store A rev=1 edit=edit:a\n@use Finance as F\n@system Exchange -> Finance\n"
 CLIENT = "@partition Client(client: F/Person)\n  checks: F/IdentityCheck = client <- Person\n  documents: F/Document = checks -> Document\n"
-
-
-def checked(text: str) -> Store:
-	return OPS.load([Source("a.store", text)])
 
 
 def codes(text: str) -> set[str]:
@@ -105,15 +81,6 @@ def testJsonIsCheckedLikeText() -> None:
 # CLI
 #
 # -----------------------------------------------------------------------------
-
-
-# NOTE: Spec-08's additions to Finance, as one more file of the workspace's Finance ontology.
-IDENTITY = "@ontology Finance rev=2026-11-10 src=import card=? cards=assumed\n" + specExample("spec-08-store", 0).split("\n", 1)[1]
-
-
-def addStore(workspace, text: str = EXAMPLE) -> None:
-	(workspace / "finance/identity.onto").write_text(IDENTITY)
-	(workspace / "finance/adviser-app.store").write_text(text)
 
 
 def test_check_loads_the_store_ontology_and_its_system_mappings(workspace):
