@@ -19,7 +19,7 @@ beforeAll(() => {
 });
 
 /** A store authorizing `Bearer <principal>` in its scope, denying `user:other`, and its client over its handler. */
-function served({ origins = [], headers = { Authorization: "Bearer user:adviser" } } = {}) {
+function served({ origins = [], prefix, base = "http://localhost/", headers = { Authorization: "Bearer user:adviser" } } = {}) {
 	const store = new ObservationStore(BUNDLE, {
 		storageFor: () => sqlite(),
 		clock: () => Date.parse("2026-11-26T09:30:00Z"),
@@ -30,9 +30,9 @@ function served({ origins = [], headers = { Authorization: "Bearer user:adviser"
 			return { scope: "adviser-app", principal };
 		},
 	});
-	const handler = storeHandler(store, { origins });
+	const handler = storeHandler(store, { origins, prefix });
 	const fetch = (url, init) => handler.fetch(new Request(url, init));
-	return { handler, client: storeClient({ base: "http://localhost/", fetch, init: { headers } }) };
+	return { handler, client: storeClient({ base, fetch, init: { headers } }) };
 }
 
 const append = (client, requestId = "r1", extra = {}) => client.append(PARTITION, { requestId, observations: BATCH, ...extra });
@@ -84,6 +84,14 @@ test("the handler refuses what is not its protocol", async () => {
 	expect(await status(`http://localhost/v1/partitions/${encodeURIComponent(PARTITION)}/log?after=x`)).toEqual([400, "invalid"]);
 	const large = "x".repeat(BUNDLE.limits.requestBytes + 1);
 	expect(await status("http://localhost/v1/state", { method: "POST", body: large, headers: { "Content-Type": "application/json" } })).toEqual([413, "too_large"]);
+});
+
+test("a store served under a path prefix answers there, and only there", async () => {
+	const { handler, client } = served({ prefix: "/api/store/", base: "http://localhost/api/store" });
+	expect(await append(client)).toMatchObject({ partition: PARTITION, from: 1 });
+	expect((await client.log(PARTITION)).entries).toHaveLength(8);
+	const status = async url => (await handler.fetch(new Request(url, { method: "POST" }))).status;
+	expect([await status("http://localhost/v1/state"), await status("http://localhost/api/storev1/state")]).toEqual([404, 404]);
 });
 
 test("browsers of listed origins may call it, others may not", async () => {

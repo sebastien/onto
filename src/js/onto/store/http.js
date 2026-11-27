@@ -64,10 +64,11 @@ function integer(url, name, fallback) {
 
 /**
  * A `fetch` handler serving `store` (an `ObservationStore`): appends, state and log reads, and batch reads. `origins`
- * lists the origins allowed to call it from a browser.
+ * lists the origins allowed to call it from a browser; `prefix` is the path it serves the protocol under, as
+ * `/api/store` for `/api/store/v1/state`.
  */
-export function storeHandler(store, { origins = [] } = {}) {
-	const allowed = new Set(origins), limit = store.bundle.limits.requestBytes;
+export function storeHandler(store, { origins = [], prefix = "" } = {}) {
+	const allowed = new Set(origins), limit = store.bundle.limits.requestBytes, root = prefix.replace(/\/+$/, "");
 	return {
 		async fetch(request) {
 			let headers = {};
@@ -79,7 +80,8 @@ export function storeHandler(store, { origins = [] } = {}) {
 					if (!allowed.has(origin)) fail(403, "origin_forbidden", "Origin is not allowed");
 					headers = { "Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true", Vary: "Origin" };
 				}
-				const match = RE_PARTITION.exec(url.pathname), many = url.pathname === "/v1/state";
+				const path = url.pathname.startsWith(`${root}/`) ? url.pathname.slice(root.length) : null;
+				const match = path && RE_PARTITION.exec(path), many = path === "/v1/state";
 				if (!match && !many) fail(404, "not_found", "Unknown endpoint");
 				if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: { ...headers,
 					"Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type, Authorization", "Cache-Control": "no-store" } });

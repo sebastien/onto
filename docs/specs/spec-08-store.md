@@ -735,6 +735,9 @@ does:
 | `GET /v1/references/{handle}` | Partitions referring to a handle; servers only |
 | `POST /v1/indexes/{name}/query` | Partitions matching a filter; servers only |
 
+A server may serve these endpoints under a path prefix, as
+`/api/store/v1/state`; clients take the store's base URL with the prefix.
+
 Partition IDs and handles are percent-encoded as one path segment. Errors have
 a JSON body with a stable `error` code and a `message`:
 

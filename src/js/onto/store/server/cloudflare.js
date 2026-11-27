@@ -87,16 +87,17 @@ export function cloudflareStore({ bundle }) {
 
 	/**
 	 * The Worker: `authorize(request, partition, access, env)` answers `{scope, principal}`, null for an
-	 * unauthenticated request, or throws `Forbidden`. `origins` lists the browser origins allowed to call it.
+	 * unauthenticated request, or throws `Forbidden`. `origins` lists the browser origins allowed to call it, and
+	 * `prefix` the path it serves the protocol under.
 	 */
-	function worker({ authorize, origins = [] }) {
+	function worker({ authorize, origins = [], prefix = "" }) {
 		return {
 			fetch(request, env) {
 				const store = new ObservationStore(bundle, {
 					authorize: (incoming, partition, access) => authorize(incoming, partition, access, env),
 					partitionFor: (scope, id) => remote(env.PARTITIONS.getByName(JSON.stringify([scope, id])), [scope, id]),
 				});
-				return storeHandler(store, { origins }).fetch(request);
+				return storeHandler(store, { origins, prefix }).fetch(request);
 			},
 		};
 	}
