@@ -740,9 +740,12 @@ a JSON body with a stable `error` code and a `message`:
 
 | Status | `error` | When |
 | --- | --- | --- |
-| `400` | `invalid`, with `check` and `n` | A malformed request, or a statement failing validation, homes or held slots |
+| `400` | `invalid`, with `check` and `n` | A malformed request (`check` is `request` for a body that is not JSON), or a statement failing validation, homes or held slots |
+| `400` | `https_required` | A request over plain HTTP, except to a local address |
 | `401`, `403` | `unauthorized`, `forbidden` | From the authorization callbacks |
-| `404` | `not_found` | A partition never appended to, on read |
+| `403` | `origin_forbidden` | A browser's request from an origin the server does not list |
+| `404` | `not_found` | A partition never appended to, on read, or an unknown endpoint |
+| `405` | `method_not_allowed` | An endpoint called with another method |
 | `409` | `precondition` | A slot moved; the answer gives current versions |
 | `409` | `request_reused` | A request ID with another payload |
 | `409` | `lifecycle` | A batch stating something about a subject that is not `active` |

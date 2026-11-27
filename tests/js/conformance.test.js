@@ -14,7 +14,7 @@ import { pyJson, valueKey } from "../../src/js/onto/values.js";
 import { BatchValidator, StoreError } from "../../src/js/onto/store/validate.js";
 import { Forbidden } from "../../src/js/onto/store/errors.js";
 import { ObservationStore } from "../../src/js/onto/store/store.js";
-import { Database } from "bun:sqlite";
+import { sqlite } from "./sqlite.js";
 
 const PATH = process.env.ONTO_CONFORMANCE ?? "build/conformance.json";
 const data = existsSync(PATH) ? JSON.parse(readFileSync(PATH, "utf8")) : null;
@@ -182,34 +182,6 @@ function validated(item) {
 		if (!(error instanceof StoreError)) throw error;
 		return { status: error.status, error: error.error, ...error.details };
 	}
-}
-
-/** SQLite storage of Cloudflare's shape over Bun's SQLite: `sql.exec` and `transactionSync`. */
-function sqlite() {
-	const database = new Database(":memory:");
-	return {
-		sql: {
-			exec(query, ...bindings) {
-				if (query.trim().split(";").filter(part => part.trim()).length > 1) {
-					database.exec(query);
-					return { toArray: () => [] };
-				}
-				const rows = database.query(query).all(...bindings);
-				return { toArray: () => rows };
-			},
-		},
-		transactionSync(action) {
-			database.exec("BEGIN IMMEDIATE");
-			try {
-				const result = action();
-				database.exec("COMMIT");
-				return result;
-			} catch (error) {
-				database.exec("ROLLBACK");
-				throw error;
-			}
-		},
-	};
 }
 
 /** A time Python recorded, in epoch milliseconds; Python's microseconds are cut to milliseconds, as its stamps are. */

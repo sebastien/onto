@@ -2,8 +2,9 @@
  * Module: store/store — an observation store over partitions (spec-08): it authorizes each request with the host's
  * callback, checks what Python checks before a partition is touched, and routes to the partition's own storage.
  *
- * `storageFor(scope, id)` gives a partition's SQLite storage (Cloudflare's shape): a Durable Object's in a Worker
- * (`server/cloudflare.js`), or one database per partition in Bun, Node or tests.
+ * A partition is reached through `partitionFor(scope, id)`, an object with the engine's `append`, `state` and `log`,
+ * synchronous or not: a Durable Object's stub in a Worker (`server/cloudflare.js`). Without it, `storageFor(scope, id)`
+ * gives each partition's SQLite storage (Cloudflare's shape) for an engine in this process: Bun, Node or tests.
  */
 
 import { Forbidden, StoreError, canonical, invalid } from "./errors.js";
@@ -18,6 +19,13 @@ import { BatchValidator } from "./validate.js";
 
 const RE_HANDLE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const bytes = text => new TextEncoder().encode(text).length;
+
+/** `400 invalid` unless `id` is `<Kind>/<anchor handle>` of a kind the bundle declares, within the handle limit. */
+export function checkPartitionId(bundle, id) {
+	const slash = typeof id === "string" ? id.indexOf("/") : -1;
+	if (slash < 0 || !bundle.kinds.some(kind => kind.kind === id.slice(0, slash)) || !RE_HANDLE.test(id.slice(slash + 1)) || bytes(id) > bundle.limits.handleBytes)
+		throw invalid("partition", `Expected a partition ID '<Kind>/<anchor handle>' of a declared kind, not '${id}'`);
+}
 
 /** The SHA-256 of a text, in lowercase hexadecimal. */
 export async function sha256(text) {
@@ -36,13 +44,14 @@ export class ObservationStore {
 	 * `authorize(request, partition, access)` answers `{scope, principal}`, null for an unauthenticated request, or
 	 * throws `Forbidden`; it may be asynchronous. `clock()` gives epoch milliseconds.
 	 */
-	constructor(bundle, { authorize, storageFor, clock = Date.now }) {
+	constructor(bundle, { authorize, storageFor, partitionFor, clock = Date.now }) {
+		if (!storageFor === !partitionFor) throw new TypeError("expected storageFor or partitionFor");
 		this.bundle = bundle;
 		this.authorizeCallback = authorize;
 		this.storageFor = storageFor;
+		this.partitionFor = partitionFor;
 		this.clock = clock;
 		this.validator = new BatchValidator(bundle);
-		this.kinds = new Set(bundle.kinds.map(kind => kind.kind));
 		this.limits = bundle.limits;
 		this.partitions = new Map();
 	}
@@ -60,11 +69,10 @@ export class ObservationStore {
 		return [grant.scope, grant.principal];
 	}
 
-	/** A partition by ID, `<Kind>/<anchor handle>` of a declared kind, with its storage. */
+	/** A partition by ID, `<Kind>/<anchor handle>` of a declared kind: its engine or its Durable Object. */
 	partition(scope, id) {
-		const slash = typeof id === "string" ? id.indexOf("/") : -1;
-		if (slash < 0 || !this.kinds.has(id.slice(0, slash)) || !RE_HANDLE.test(id.slice(slash + 1)) || bytes(id) > this.limits.handleBytes)
-			throw invalid("partition", `Expected a partition ID '<Kind>/<anchor handle>' of a declared kind, not '${id}'`);
+		checkPartitionId(this.bundle, id);
+		if (this.partitionFor) return this.partitionFor(scope, id);
 		const key = JSON.stringify([scope, id]);
 		if (!this.partitions.has(key))
 			this.partitions.set(key, new PartitionStore(this.storageFor(scope, id), { bundle: this.bundle, validator: this.validator, clock: this.clock, scope, id }));
@@ -79,19 +87,19 @@ export class ObservationStore {
 		if (bytes(canonical(body)) > this.limits.requestBytes) throw new StoreError(413, "too_large", "The request is larger than the store accepts");
 		const partition = this.partition(scope, partitionId);
 		const digest = await sha256(canonical({ observations: body.observations ?? null, expect: body.expect ?? [], links: body.links ?? [] }));
-		return partition.append(principal, body, digest);
+		return await partition.append(principal, body, digest);
 	}
 
 	/** The reconciled state of a selection of a partition (spec-08 "State"). */
 	async state(request, partitionId, body = {}) {
 		const [scope, principal] = await this.authorize(request, partitionId, "read");
-		return this.partition(scope, partitionId).state(principal, body);
+		return await this.partition(scope, partitionId).state(principal, body);
 	}
 
 	/** The statements and records after a `seq`, in order, with their stamps (spec-08 "Log"). */
 	async log(request, partitionId, after = 0, limit = null) {
 		const [scope, principal] = await this.authorize(request, partitionId, "read");
-		return this.partition(scope, partitionId).log(principal, after, limit);
+		return await this.partition(scope, partitionId).log(principal, after, limit);
 	}
 
 	/** Selections of several partitions, each authorized and answered on its own (spec-08 "Several partitions"). */
