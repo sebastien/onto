@@ -124,7 +124,7 @@ the adviser saw:
 - **Membership.** `IdentityCheck_C41` belongs to the partition because its
   `Person` is the anchor, `Person_U1`. `Document_D9` belongs because the check
   refers to it.
-- **Stamping.** The store gives the seven statements sequence numbers, the
+- **Stamping.** The store gives the eight statements sequence numbers, the
   record time and the adviser as principal. Their `at` defaults to the record
   time.
 - **Retries.** A retry with the same request ID returns the same answer.
