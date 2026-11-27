@@ -12,7 +12,7 @@ SKILLS = $(notdir $(wildcard docs/skills/*))
 # Where agents look for skills; each skill is linked, so edits here apply at once.
 SKILLS_DIRS ?= $(HOME)/.config/opencode/skills $(HOME)/.agents/skills
 
-.PHONY: test test-hexa test-js test-release release install-skills uninstall-skills
+.PHONY: test test-hexa test-js test-workers test-release release install-skills uninstall-skills
 
 test:
 	$(PYTEST) -q
@@ -25,6 +25,10 @@ test-hexa:
 test-js: node_modules/hexa
 	ONTO_CONFORMANCE=build/conformance.json PYTHONPATH="$(abspath $(HEXA_SRC)):$$PYTHONPATH" $(PYTEST) -q -p tests.conformance -o 'pythonpath=src/py'
 	bun test tests/js
+
+# The JavaScript store on the Workers runtime, under Miniflare: needs miniflare 4 and esbuild on NODE_PATH.
+test-workers: node_modules/hexa
+	node tests/js/workers-smoke.mjs
 
 # The runtime imports `hexa/...`: link the sibling checkout, as `npm install` would.
 node_modules/hexa:
