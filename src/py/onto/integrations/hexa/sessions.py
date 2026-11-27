@@ -14,6 +14,7 @@ import uuid
 from collections import defaultdict
 from typing import Any
 
+from ...handles import sourceQualifiedHandle
 from ...observations.model import Observations, claimSlot, referenceHandles
 from ...observations.rooted import Evidence
 from ...ontology.rooted import Field, RootedView
@@ -312,6 +313,11 @@ class Session:
 		self.report: dict | None = None
 		self.state: Observations | None = None
 		self.opened: tuple | None = None
+
+	def newHandle(self, type: str) -> str:
+		"""A handle for a new instance of `type`, source-qualified in the store's scope with a new UUID as its key, so
+		that its origin is the store even when a system produces the type (spec-09 "Origins")."""
+		return sourceQualifiedHandle(type, self.operator.scope, type, str(uuid.uuid7()))
 
 	async def open(self, view: str, seed: dict, fields: list[str] | None = None, **options) -> dict:
 		"""Read a view and keep its state."""

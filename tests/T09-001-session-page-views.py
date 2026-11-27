@@ -13,7 +13,8 @@ pytest.importorskip("hexa.shapes")
 from onto.store.runtime import ObservationStore  # noqa: E402
 
 from tests.sessions import CLIENT, FINANCE, PARTITION, SEED, newStore, operator, session  # noqa: E402
-from tests.store import USER, batch  # noqa: E402
+from onto.store.origins import ORIGIN_STORE, originOf  # noqa: E402
+from tests.store import SCOPE, USER, batch  # noqa: E402
 
 # -----------------------------------------------------------------------------
 #
@@ -164,6 +165,13 @@ def testANewMemberIsHomedByItsLinks() -> None:
 		{"s": new, "p": "Confirmed", "v": True, "version": 0}]})
 	assert [(statement["result"], statement["partition"]) for statement in result["statements"]] == [("applied", PARTITION)] * 3
 	assert store.partition("adviser-app", PARTITION).members[new] == "checks"
+
+
+def testANewHandleHasTheStoresOrigin() -> None:
+	item = session(newStore())
+	handle = item.newHandle("Finance/Person")
+	assert handle.startswith("Person_adviser_2Dapp_2FPerson_2F") and handle != item.newHandle("Finance/Person")
+	assert originOf(item.operator.bundle, handle, "Finance/Person", SCOPE) == ORIGIN_STORE
 
 
 def testATypeNoKindReachesIsUnhomed() -> None:
