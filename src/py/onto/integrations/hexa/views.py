@@ -449,7 +449,8 @@ class HexaViewOperator:
 			{h: {"type": item["type"]} for h, item in state.instances.items() if h in handles}, claims, [])
 
 	async def runReads(self, view: str, seed: dict, fields: list[str] | None = None, now: str | None = None, *,
-		fetch=None, operations: dict | None = None, record=None, replay: list | None = None, signal=None, policy: dict | None = None):
+		fetch=None, operations: dict | None = None, record=None, replay: list | None = None, signal=None, policy: dict | None = None,
+		planned: dict | None = None):
 		"""Return the plan/receipts, reconciled state and read outcomes before rooted projection.
 
 		One hexa run reads, binds and maps. A read with a request template is a `RequestSend` effect; another read is
@@ -458,8 +459,9 @@ class HexaViewOperator:
 		checked, bound and accounted for in plan order. `now` fixes the clock; `operations` add to the operator's;
 		`record` (a journal sink), `replay`, `signal` and `policy` (retry, concurrency) go to the run. A failed read
 		is reported by reason and message; its outcome keeps the failure, and the journal a failed effect's details.
+		`planned` is this view's plan when the caller has it, as a session does with its system's reads (spec-09).
 		"""
-		result = await self.plan(view, seed, fields)
+		result = planned if planned is not None else await self.plan(view, seed, fields)
 		param = self.views[view].input
 		steps = [step["step"] for step in result["steps"]]
 		# NOTE: The view's provider of each key, not any earlier read discovering it: the view may not take it from that one.

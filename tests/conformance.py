@@ -111,6 +111,11 @@ class RecordingAccess:
 			if callable(getattr(access, name, None)):
 				self.calls[name] = {}
 				setattr(self, name, getattr(self, "recorded" + name[0].upper() + name[1:]))
+		# NOTE: A session's store operations (spec-09) pass through unrecorded: only its system's plans are replayed until
+		# the JavaScript runtime runs sessions.
+		for name in ("storeRead", "storeAppend"):
+			if callable(getattr(access, name, None)):
+				setattr(self, name, getattr(access, name))
 
 	def record(self, kind: str, key: list, call, encode=lambda value: value):
 		try:
