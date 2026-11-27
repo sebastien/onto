@@ -172,10 +172,10 @@ class ObservationStore:
 				item.members[handle] = population
 		return item
 
-	def statements(self, partition: Partition, through: int | None = None) -> list[Json]:
-		"""The partition's statements in log order, up to `through`."""
-		rows = self.db.execute("SELECT body FROM entries WHERE scope = ? AND partition = ? AND generation = ? AND kind = 'statement' AND seq <= ? ORDER BY seq",
-			(partition.scope, partition.id, partition.generation, partition.head if through is None else through))
+	def statements(self, partition: Partition, through: int | None = None, kind: str = "statement") -> list[Json]:
+		"""The partition's statements in log order, up to `through`; its home links with `kind="link"`."""
+		rows = self.db.execute("SELECT body FROM entries WHERE scope = ? AND partition = ? AND generation = ? AND kind = ? AND seq <= ? ORDER BY seq",
+			(partition.scope, partition.id, partition.generation, kind, partition.head if through is None else through))
 		return [json.loads(body) for (body,) in rows]
 
 	# -- Appends -----------------------------------------------------------------
@@ -222,8 +222,9 @@ class ObservationStore:
 			return statement["roles"][relation.participants[0].role]
 		return (statement.get("same") or statement.get("distinct"))[0]
 
-	def homes(self, partition: Partition, batch: list[Json], types: dict[str, str]) -> dict[str, str]:
-		"""Members after the batch: the anchor, and the subjects whose stated links reach a parent (spec-08 "Homes")."""
+	def homes(self, partition: Partition, batch: list[Json], types: dict[str, str], links: list[Json]) -> dict[str, str]:
+		"""Members after the batch: the anchor, and the subjects whose stated links, or home links, reach a parent
+		(spec-08 "Homes")."""
 		root = partition.root
 		members = dict(partition.members)
 		anchorType = types.get(partition.anchor, root["type"])
@@ -231,6 +232,7 @@ class ObservationStore:
 			raise invalid("home.mismatch", f"The anchor of '{partition.id}' is a {anchorType}, not a {root['type']}")
 		members[partition.anchor] = root["name"]
 		claims = [item for item in [*self.statements(partition), *batch] if not item.get("retract")]
+		claims += self.statements(partition, kind="link") + links
 		subjects = list(dict.fromkeys(self.subjectOf(item) for item in batch))
 		pending = [item for item in subjects if item not in members]
 
@@ -268,6 +270,42 @@ class ObservationStore:
 			raise invalid("home.unlinked", f"No statement links '{handle}' to '{partition.id}'", n)
 		return members
 
+	def checkLinks(self, partition: Partition, links: Any, types: dict[str, str], scope: str) -> list[Json]:
+		"""Home links: claims on slots the store does not hold, each followed by a population line (spec-08 "Homes")."""
+		if not isinstance(links, list):
+			raise invalid("link", "links lists the claims that home members from another system")
+		result = []
+		for index, link in enumerate(links):
+			def refuse(message: str) -> StoreError:
+				return StoreError(400, "invalid", message, check="link", link=index)
+
+			if not isinstance(link, dict) or not ({"s", "p", "v"} <= link.keys() or {"rel", "roles"} <= link.keys()):
+				raise refuse("A home link is a claim: a subject, an attribute and a value, or a relation and its roles")
+			link = {key: link[key] for key in ("s", "p", "v", "rel", "roles") if key in link}
+			handles = list(link["roles"].values()) if "rel" in link else [link["s"], *referenceHandles(link["v"])]
+			if any(not isinstance(handle, str) or handle not in types for handle in handles) or not handles:
+				raise refuse("A home link's handles need their types, from the partition or the batch")
+			populations = partition.kind["populations"]
+			typeOf = {partition.root["name"]: partition.root["type"]} | {population["name"]: population["type"] for population in populations}
+			if "rel" in link:
+				followed = any(population["link"].get("rel") == link["rel"] for population in populations)
+			else:
+				# A member's own link reaches its parent; a parent's link reaches the member.
+				subject, targets = types[link["s"]], [types[handle] for handle in referenceHandles(link["v"])]
+				followed = bool(targets) and any(population["link"].get("slot") == link["p"] and (
+					population["link"]["on"] == "member" and isA(self.bundle, subject, population["type"])
+					and all(isA(self.bundle, target, typeOf[population["parent"]]) for target in targets)
+					or population["link"]["on"] == "parent" and isA(self.bundle, subject, typeOf[population["parent"]])
+					and all(isA(self.bundle, target, population["type"]) for target in targets)) for population in populations)
+			if not followed:
+				raise refuse(f"No population line of '{partition.kind['kind']}' follows this link")
+			holders = [(handle, types[handle]) for handle in (handles if "rel" in link else [link["s"]])]
+			origins = [originOf(self.bundle, handle, type, scope) for handle, type in holders]
+			if None in origins or all(holds(self.bundle, origin, type, link) for origin, (_, type) in zip(origins, holders)):
+				raise refuse("A home link is for a slot another system holds; the store's own links are statements")
+			result.append(link)
+		return result
+
 	def checkStatement(self, statement: Json, types: dict[str, str], scope: str) -> None:
 		"""Origins and held slots of a statement's subject, or of every participant of a binary relation."""
 		n = statement["n"]
@@ -290,7 +328,7 @@ class ObservationStore:
 		if len(canonical(body).encode()) > self.limits["requestBytes"]:
 			raise StoreError(413, "too_large", "The request is larger than the store accepts")
 		partition = self.partition(scope, partitionId, create=True)
-		payload = {"observations": body.get("observations"), "expect": body.get("expect", [])}
+		payload = {"observations": body.get("observations"), "expect": body.get("expect", []), "links": body.get("links", [])}
 		digest = hashlib.sha256(canonical(payload).encode()).hexdigest()
 		now = self.clock()
 		if retry := self.retry(partition, body["requestId"], now):
@@ -306,7 +344,8 @@ class ObservationStore:
 		batch = sorted([claim | {} for claim in observations.claims] + [claim | {"retract": True} for claim in observations.retractions], key=lambda item: item["n"])
 		if len(batch) > self.limits["statementsPerBatch"]:
 			raise StoreError(413, "too_large", f"A batch holds at most {self.limits['statementsPerBatch']} statements")
-		types = dict(partition.types)
+		# NOTE: The kind types the anchor when no statement does, as `validate` does.
+		types = dict(partition.types) | {partition.anchor: partition.types.get(partition.anchor, partition.root["type"])}
 		for handle, item in observations.instances.items():
 			# NOTE: A compatible specialisation refines the type (spec-02 "Type-only declarations"); `validate` refused others.
 			known = types.get(handle, item["type"])
@@ -321,11 +360,13 @@ class ObservationStore:
 			statement["at"] = statement.get("at", recorded)
 			if timestampValue(statement["at"]) > timestampValue(recorded):
 				raise invalid("at", "A statement cannot be observed after the store records it", statement["n"])
-		members = self.homes(partition, batch, types)
+		links = self.checkLinks(partition, body.get("links", []), types, scope)
+		members = self.homes(partition, batch, types, links)
 		for statement in batch:
 			self.checkStatement(statement, types, scope)
 		self.checkPreconditions(partition, body.get("expect", []))
-		return self.commit(partition, batch, types, members, {"principal": principal, "requestId": body["requestId"], "recorded": recorded}, digest)
+		stamps = {"principal": principal, "requestId": body["requestId"], "recorded": recorded}
+		return self.commit(partition, batch, types, members, stamps, digest, links)
 
 	def retry(self, partition: Partition, requestId: str, now: datetime) -> tuple[str, str] | None:
 		"""A retry record of this request, while it is kept (7 days)."""
@@ -356,13 +397,26 @@ class ObservationStore:
 			raise StoreError(409, "precondition", "A slot moved since the batch was prepared",
 				versions=[{key: value for key, value in item.items() if key != "version"} | {"version": current[slot]} for slot, item in zip(keys, expect)])
 
-	def commit(self, partition: Partition, batch: list[Json], types: dict[str, str], members: dict[str, str], stamps: Json, digest: str) -> Json:
-		"""Stamp the batch and write it, its slot versions, members and retry record in one transaction."""
-		first = partition.head + 1
+	def commit(self, partition: Partition, batch: list[Json], types: dict[str, str], members: dict[str, str], stamps: Json, digest: str,
+		links: list[Json]) -> Json:
+		"""Stamp the batch and write its home links, its statements, their slot versions, members and retry record in
+		one transaction."""
+		start = first = partition.head + 1
 		moved: dict[str, int] = {}
 		with self.db:
 			if not partition.exists:
 				self.db.execute("INSERT INTO partitions VALUES (?, ?, ?, ?, ?, 0, 'active')", (partition.scope, partition.id, partition.kind["kind"], partition.anchor, partition.generation))
+			# NOTE: The anchor is the root population's member from the partition's first batch, mentioned or not.
+			self.db.execute("INSERT INTO instances VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO UPDATE SET population = COALESCE(instances.population, excluded.population), "
+				"first = COALESCE(instances.first, excluded.first)", (partition.scope, partition.id, partition.generation, partition.anchor, types[partition.anchor],
+				partition.root["name"], start))
+			for offset, link in enumerate(links):
+				entry = link | stamps | {"seq": first + offset, "bundle": self.bundle["revision"]}
+				self.db.execute("INSERT INTO entries VALUES (?, ?, ?, ?, 'link', ?)", (partition.scope, partition.id, partition.generation, first + offset, canonical(entry)))
+				for handle in list(link.get("roles", {}).values()) or [link["s"], *referenceHandles(link["v"])]:
+					self.db.execute("INSERT INTO instances VALUES (?, ?, ?, ?, ?, NULL, NULL) ON CONFLICT DO NOTHING",
+						(partition.scope, partition.id, partition.generation, handle, types[handle]))
+			first += len(links)
 			for offset, statement in enumerate(batch):
 				seq = first + offset
 				entry = {key: value for key, value in statement.items() if key != "n"} | stamps | {"seq": seq, "bundle": self.bundle["revision"]}
@@ -384,7 +438,7 @@ class ObservationStore:
 					(partition.scope, partition.id, partition.generation, slot, seq))
 			head = first + len(batch) - 1
 			self.db.execute("UPDATE partitions SET head = ? WHERE scope = ? AND id = ?", (head, partition.scope, partition.id))
-			answer = {"partition": partition.id, "generation": partition.generation, "from": first, "through": head, "head": head, "recorded": stamps["recorded"]}
+			answer = {"partition": partition.id, "generation": partition.generation, "from": start, "through": head, "head": head, "recorded": stamps["recorded"]}
 			self.db.execute("INSERT INTO retries VALUES (?, ?, ?, ?, ?, ?)", (partition.scope, partition.id, stamps["requestId"], digest, canonical(answer), stamps["recorded"]))
 		return answer
 

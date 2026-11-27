@@ -513,7 +513,7 @@ The session routes each statement by its slot's holder:
 
 | Holder | Route | Result when not applied |
 | --- | --- | --- |
-| The store | Appended to the subject's home partition (spec-08 Homes): one batch per partition, with the store file's `edit` source, `expect` from the versions, and the links that home new subjects | `conflict`, `rejected` or `uncertain` |
+| The store | Appended to the subject's home partition (spec-08 Homes): one batch per partition, with the store file's `edit` source, `expect` from the versions, and the links that home new subjects; a link a system holds goes in the batch's `links`, as that system's read states it | `conflict`, `rejected` or `uncertain` |
 | A system, writable | That system's operations ([spec-10](spec-10-operations.md#changing-system-held-slots)) | `conflict`, `rejected`, `uncertain`, `unconfirmed` or `ambiguous` |
 | A system, read-only | None | `readonly` |
 | The store, unhomed | None | `unhomed` |

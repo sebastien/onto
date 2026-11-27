@@ -1,7 +1,7 @@
 ---
 identity: "onto:decision:observation-store"
 created: 2026-11-26T00:41:27.639357+00:00
-updated: 2026-11-26T01:16:44.484303+00:00
+updated: 2026-11-27T18:45:27.666711+00:00
 title: "An observation store keeps observations online, in partitions around key entities"
 status: accepted
 date: 2026-11-26
@@ -83,6 +83,21 @@ that drafted it for adviceos-crm. The review settled:
   - partition-level changes leaving slot versions alone;
 - an eventually consistent reference index for erasure;
 - a minimal index (`eq`, `in`, `exists`, `and`) for servers.
+
+**Amendment** (2026-11-28, accepted by the user in the adviceos-crm design
+session): home links. A member that comes from another system may hang on a
+link that system holds, such as a CRM group membership's `Group`. The store
+cannot state that link, so every fact it holds about the member, such as
+AdviceOS's `CanActForGroup`, was refused as `home.unlinked`. A batch now
+carries such links in `links`:
+- the store accepts a link only on a slot it does not hold, and only where a
+  population line of the kind follows it;
+- it uses the link to home the member, and records it in the log;
+- it never reconciles the link into the state.
+
+Considered: records the store owns wrapping each such fact (a type per fact),
+and memberships as anchors (a partition per membership). Found by compiling
+AdviceOS's store against the AdviceLink mapping.
 
 Related: [domain/component:Observations] [domain/component:JsRuntime]
 [domain/decision:RunSemantics+001] [domain/decision:ReferentialIdentities+002]

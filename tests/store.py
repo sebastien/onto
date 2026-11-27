@@ -23,13 +23,17 @@ def financeText(extra: str = "") -> str:
 	return specExample("spec-01-ontology") + "\n" + specExample("spec-08-store", 0).split("\n", 1)[1] + extra
 
 
-# NOTE: A member keeping a personal value about another kind's key entity (spec-08 "Personal facts stay home").
-VISIT = """
+# NOTE: A member keeping a personal value about another kind's key entity (spec-08 "Personal facts stay home"),
+# and a facet of dividends that the exchange's mapping does not fill, which a store may hold.
+EXTRA = """
 Visit(Household, Visitor: Person) {kind=event}  -- A home visit
   VisitorAddress Text {privacy=Owner}
+
+Audit of Dividend                               -- What an adviser checked about a dividend
+  Checked Boolean
 """
 
-FINANCE = loadOntology([Source("finance.onto", financeText(VISIT))])
+FINANCE = loadOntology([Source("finance.onto", financeText(EXTRA))])
 EXCHANGE = loadOntology([Source("exchange.onto", specExample("spec-04-mapping", 1))])
 MARKETS = loadFunctions([FINANCE], [Source("markets.fn", specExample("spec-04-mapping", 3))])
 REFERENTIAL = loadReferential([FINANCE, EXCHANGE], [Source("market-ids.ref", specExample("spec-04-mapping", 4))])

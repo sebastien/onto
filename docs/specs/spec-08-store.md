@@ -270,6 +270,19 @@ appended to.
   - an unstated link is rejected as `home.unlinked`;
   - a link to another anchor is rejected as `home.mismatch`;
   - a type no population of the kind reaches is rejected as `home.none`.
+- **Home links.** A member that comes from another system may hang on a link
+  that system holds, such as a CRM group membership's `Group`. The store
+  cannot state such a link, so the batch carries it in `links`, as the system
+  states it:
+  - the store accepts a link only on a slot it does not hold, and only where a
+    population line of the kind follows it (`link`);
+  - it uses the link to home the member, and records it in the log, as a record
+    with its own `seq`;
+  - it never reconciles the link into the state, whose source of the link stays
+    the system.
+
+  The store cannot check a link against the system that holds it, so a client
+  can file a member only in a partition it may append to.
 - **Parents.** The subjects through which a member's links reach the anchor
   are its parents. In the example, a check is the parent of its document.
 - **No moves.** A member never changes partition. Re-anchoring happens only by
@@ -308,6 +321,8 @@ An append carries:
   claims and retractions. Its `scope` must be the store's scope, its handles
   are scope-stable, and it has no `gaps`.
 - `expect`, optional: the slot versions the batch was prepared against.
+- `links`, optional: the [home links](#homes) of members that come from
+  another system, as spec-02 JSON claims.
 
 The batch is validated whole, in strict mode, against the store bundle:
 
@@ -806,6 +821,9 @@ statements of slots a new revision no longer holds.
   included statements, in `seq` order, minus redacted values.
 - **Homes.** Unlinked, mismatched and unknown subjects are rejected; a member
   never changes partition.
+- **Home links.** A link on a slot the store holds, or that no population line
+  follows, is rejected; an accepted one homes its member but never enters the
+  state.
 - **Held slots.**
   - A claim on a slot an `@system` mapping fills for a system's instance, or
     that the file excludes, is rejected. The same slot of an instance created
