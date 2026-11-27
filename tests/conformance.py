@@ -290,6 +290,66 @@ def install() -> None:
 
 	ObservationStore.validate = validate
 
+	# NOTE: A store's requests (spec-08): each store is a case, the calls made on it in order, each with the grants the
+	# host's callback gave, the clock's readings and Python's answer or error. The JavaScript store replays them.
+	from onto.store.runtime import Forbidden
+
+	originalStore = ObservationStore.__init__
+
+	def storeInit(self, bundle, ontology, authorize, *, path=":memory:", clock=None):
+		case = {"kind": "store", "test": CURRENT["test"], "bundle": exported(bundle, lambda: bundle)["key"], "calls": []}
+		CASES.append(case)
+		self.conformance = {"case": case, "call": None}
+		clock = clock or (lambda: datetime.now(timezone.utc))
+
+		def recordedAuthorize(request, partition, access):
+			call = self.conformance["call"]
+			try:
+				grant = authorize(request, partition, access)
+			except Forbidden as error:
+				if call is not None:
+					call["grants"].append({"forbidden": str(error)})
+				raise
+			if call is not None:
+				call["grants"].append(None if grant is None else {"scope": grant["scope"], "principal": grant["principal"]})
+			return grant
+
+		def recordedClock():
+			value = clock()
+			if (call := self.conformance["call"]) is not None:
+				call["clocks"].append(value.isoformat())
+			return value
+
+		originalStore(self, bundle, ontology, recordedAuthorize, path=path, clock=recordedClock)
+
+	def recordedCall(name):
+		original = getattr(ObservationStore, name)
+
+		def method(self, request, *args, **kwargs):
+			state = getattr(self, "conformance", None)
+			if state is None or state["call"] is not None:
+				return original(self, request, *args, **kwargs)
+			call = {"method": name, "args": list(args), "kwargs": kwargs, "grants": [], "clocks": []}
+			state["call"] = call
+			try:
+				result = original(self, request, *args, **kwargs)
+				call["answer"] = json.loads(json.dumps(result, default=str))
+				return result
+			except StoreError as error:
+				call["error"] = {"status": error.status, **json.loads(json.dumps(error.toJson(), default=str))}
+				raise
+			except Exception as error:
+				call["raised"] = type(error).__name__
+				raise
+			finally:
+				state["call"] = None
+				state["case"]["calls"].append(call)
+		return method
+
+	ObservationStore.__init__ = storeInit
+	for name in ("append", "state", "log", "stateMany"):
+		setattr(ObservationStore, name, recordedCall(name))
+
 
 def write() -> None:
 	"""Resolve each case's host answers, recorded until the end of the session, and write the cases."""

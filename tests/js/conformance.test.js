@@ -12,6 +12,9 @@ import { run } from "hexa/runtime.js";
 import { Model, ViewOperator, ViewReadError, loadBindingProgram, loadMappingProgram, printObservationsCompact, printObservationsLog } from "../../src/js/onto/index.js";
 import { pyJson, valueKey } from "../../src/js/onto/values.js";
 import { BatchValidator, StoreError } from "../../src/js/onto/store/validate.js";
+import { Forbidden } from "../../src/js/onto/store/errors.js";
+import { ObservationStore } from "../../src/js/onto/store/store.js";
+import { Database } from "bun:sqlite";
 
 const PATH = process.env.ONTO_CONFORMANCE ?? "build/conformance.json";
 const data = existsSync(PATH) ? JSON.parse(readFileSync(PATH, "utf8")) : null;
@@ -181,11 +184,86 @@ function validated(item) {
 	}
 }
 
+/** SQLite storage of Cloudflare's shape over Bun's SQLite: `sql.exec` and `transactionSync`. */
+function sqlite() {
+	const database = new Database(":memory:");
+	return {
+		sql: {
+			exec(query, ...bindings) {
+				if (query.trim().split(";").filter(part => part.trim()).length > 1) {
+					database.exec(query);
+					return { toArray: () => [] };
+				}
+				const rows = database.query(query).all(...bindings);
+				return { toArray: () => rows };
+			},
+		},
+		transactionSync(action) {
+			database.exec("BEGIN IMMEDIATE");
+			try {
+				const result = action();
+				database.exec("COMMIT");
+				return result;
+			} catch (error) {
+				database.exec("ROLLBACK");
+				throw error;
+			}
+		},
+	};
+}
+
+/** A time Python recorded, in epoch milliseconds; Python's microseconds are cut to milliseconds, as its stamps are. */
+const instant = text => Date.parse(text.replace(/(\.\d{3})\d+/, "$1"));
+
+/** Replay a store's calls on a JavaScript store: each with Python's grants and clock, each answered as Python answered. */
+async function replayStore(item) {
+	let grants = [], clocks = [];
+	const store = new ObservationStore(get(item.bundle), {
+		authorize: () => {
+			if (!grants.length) throw new Error("an authorization Python did not make");
+			const grant = grants.shift();
+			if (grant && Object.hasOwn(grant, "forbidden")) throw new Forbidden(grant.forbidden);
+			return grant;
+		},
+		storageFor: () => sqlite(),
+		clock: () => {
+			if (!clocks.length) throw new Error("a clock reading Python did not make");
+			return instant(clocks.length > 1 ? clocks.shift() : clocks[0]);
+		},
+	});
+	for (const [index, call] of item.calls.entries()) {
+		grants = [...call.grants];
+		clocks = [...call.clocks];
+		const args = call.method === "log" ? [call.args[0], call.args[1] ?? call.kwargs.after ?? 0, call.args[2] ?? call.kwargs.limit ?? null]
+			: [...call.args, ...Object.values(call.kwargs)];
+		let answer, failure;
+		try { answer = await store[call.method]({}, ...structuredClone(args)); }
+		catch (error) { failure = error; }
+		const where = `call ${index} ${call.method}`;
+		if (call.raised) {
+			expect(failure, `${where}: Python raised ${call.raised}`).toBeDefined();
+			continue;
+		}
+		if (call.error) {
+			if (!(failure instanceof StoreError)) throw failure ?? new Error(`${where}: Python answered ${JSON.stringify(call.error)}`);
+			const { message, ...expected } = call.error, { message: _, ...actual } = { status: failure.status, ...failure.toJSON() };
+			expect(difference(JSON.parse(JSON.stringify(actual)), expected), where).toBeNull();
+			continue;
+		}
+		if (failure) throw failure;
+		expect(difference(JSON.parse(JSON.stringify(answer)), call.answer), where).toBeNull();
+	}
+}
+
 if (!data) test.skip(`conformance cases (record ${PATH} first)`, () => {});
 else for (const [index, item] of data.cases.entries()) {
 	const label = `${index} ${item.kind}${item.method ? " " + item.method : ""} ${item.test}`;
 	if (item.kind === "store-validate") {
 		test(label, () => expect(validated(item)).toEqual(item.outcome));
+		continue;
+	}
+	if (item.kind === "store") {
+		if (item.calls.length) test(label, () => replayStore(item));
 		continue;
 	}
 	if (item.unsupported) {
