@@ -2,9 +2,11 @@
  * Module: workers-smoke — the observation store in the Workers runtime: SQLite Durable Objects, one per partition,
  * behind the Worker, read through the store's client (spec-08 "Implementations").
  *
- * Optional: it needs miniflare and esbuild, installed outside the repository, on NODE_PATH:
+ * Optional: it needs Miniflare 4 and esbuild, installed outside the repository, on NODE_PATH:
  *
- *	NODE_PATH=../../AdviceLink/advicelink-mcp/node_modules node tests/js/workers-smoke.mjs   # miniflare 4
+ *	NODE_PATH=/path/to/node_modules make test-workers
+ *
+ * The Worker's compatibility date is one Miniflare 4's runtime supports.
  */
 
 import assert from "node:assert/strict";
