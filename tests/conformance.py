@@ -430,6 +430,9 @@ def install() -> None:
 
 	def sessionInit(self, operator, *args, **options):
 		originalSession(self, operator, *args, **options)
+		self.conformance = None
+		if not isinstance(getattr(operator, "access", None), RecordingAccess):
+			return  # A test's stand-in operator: nothing to replay.
 		case = {"kind": "session", "test": CURRENT["test"], "operator": operator, "scope": operator.scope, **sessionBundleKey(operator), "steps": []}
 		CASES.append(case)
 		self.conformance = {"case": case, "step": None, "journal": None}
@@ -453,6 +456,8 @@ def install() -> None:
 		return result
 
 	async def sessionOpen(self, view, seed, fields=None, **options):
+		if self.conformance is None:
+			return await originalOpen(self, view, seed, fields, **options)
 		state, journal = self.conformance, []
 		state["journal"] = journal
 		if state["step"] is not None:
@@ -465,6 +470,8 @@ def install() -> None:
 		return await recordStep(self, step, lambda: originalOpen(self, view, seed, fields, **options))
 
 	async def sessionChange(self, changes):
+		if self.conformance is None:
+			return await originalChange(self, changes)
 		step = {"op": "change", "changes": plain(changes), "journals": []}
 		return await recordStep(self, step, lambda: originalChange(self, changes))
 

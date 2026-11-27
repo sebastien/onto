@@ -334,9 +334,9 @@ class Session:
 		self.report, self.state = await self.operator.open(view, seed, fields, **options)
 		return self.report
 
-	def homes(self, statements: list[Json], types: dict[str, str]) -> tuple[dict[str, tuple[str, str]], dict[str, list[Json]]]:
-		"""Each handle's home partition and population, from the change set's links and the state's; and the home links
-		a system holds that each partition needs (spec-08 "Homes")."""
+	def homes(self, statements: list[Json], types: dict[str, str]) -> tuple[dict[str, tuple[str, str]], dict[str, tuple[str, Json | None]]]:
+		"""Each handle's home partition and population, from the change set's links and the state's; and for each handle
+		homed by a link, its parent and the link when a system holds it, which an append must send (spec-08 "Homes")."""
 		operator, bundle = self.operator, self.operator.bundle
 		homes: dict[str, tuple[str, str]] = {}
 		for handle, type in types.items():
@@ -345,7 +345,7 @@ class Session:
 				homes[handle] = (f"{kind['kind']}/{handle}", kind["root"]["name"])
 		state = list(self.state.claims) if self.state else []
 		claims = [(item, False) for item in statements if not item.get("retract")] + [(item, True) for item in state]
-		links: dict[str, list[Json]] = defaultdict(list)
+		via: dict[str, tuple[str, Json | None]] = {}
 		changed = True
 		while changed:
 			changed = False
@@ -361,15 +361,29 @@ class Session:
 							if parent is None or parent not in homes or homes[parent][1] != population["parent"] or not homes[parent][0].startswith(kind["kind"] + "/"):
 								continue
 							homes[handle] = (homes[parent][0], population["name"])
-							if fromState and operator.claimHolder(claim, {item: {"type": kind} for item, kind in types.items()}) != operator.storeName:
-								links[homes[handle][0]].append({key: claim[key] for key in ("s", "p", "v", "rel", "roles") if key in claim})
+							held = fromState and operator.claimHolder(claim, {item: {"type": kind} for item, kind in types.items()}) != operator.storeName
+							via[handle] = (parent, {key: claim[key] for key in ("s", "p", "v", "rel", "roles") if key in claim} if held else None)
 							changed = True
 							break
 						if handle in homes:
 							break
 					if handle in homes:
 						break
-		return homes, links
+		return homes, via
+
+	@staticmethod
+	def homeLinks(subjects: list[str], via: dict[str, tuple[str, Json | None]]) -> list[Json]:
+		"""The links a system holds that home `subjects`, and their parents up to the anchor, each once."""
+		links: list[Json] = []
+		for subject in subjects:
+			handle, seen = subject, set()
+			while handle in via and handle not in seen:
+				seen.add(handle)
+				parent, link = via[handle]
+				if link is not None and link not in links:
+					links.append(link)
+				handle = parent
+		return links
 
 	@staticmethod
 	def linkParent(claim: Json, handle: str, population: Json) -> str | None:
@@ -436,7 +450,7 @@ class Session:
 		state = self.state.instances if self.state else {}
 		types = {handle: item["type"] for handle, item in state.items()} | {handle: item["type"] for handle, item in changes.get("instances", {}).items()}
 		statements = [dict(item) for item in changes.get("claims", [])] + [dict(item, retract=True) for item in changes.get("retractions", [])]
-		homes, links = self.homes(statements, types)
+		homes, via = self.homes(statements, types)
 		results: list[Json] = [{} for _ in statements]
 		groups: dict[str, list[int]] = defaultdict(list)
 		for index, statement in enumerate(statements):
@@ -452,7 +466,8 @@ class Session:
 			else:
 				groups[homes[subject][0]].append(index)
 		for partition, indexes in groups.items():
-			body = self.batch([statements[index] for index in indexes], types, links.get(partition, []))
+			subjects = list(dict.fromkeys(operator.subjectOf(statements[index]) for index in indexes))
+			body = self.batch([statements[index] for index in indexes], types, self.homeLinks(subjects, via))
 			try:
 				outcome = self.append(partition, body)
 			except StoreError as error:

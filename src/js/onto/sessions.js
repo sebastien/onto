@@ -334,7 +334,10 @@ export class Session {
 		return this.report;
 	}
 
-	/** Each handle's home partition and population, and the home links a system holds that each partition needs (spec-08 "Homes"). */
+	/**
+	 * Each handle's home partition and population, from the change set's links and the state's; and for each handle
+	 * homed by a link, its parent and the link when a system holds it, which an append must send (spec-08 "Homes").
+	 */
 	homes(statements, types) {
 		const { operator } = this, bundle = operator.store, homes = {};
 		for (const [handle, type] of Object.entries(types)) {
@@ -342,7 +345,7 @@ export class Session {
 			if (kind) homes[handle] = [`${kind.kind}/${handle}`, kind.root.name];
 		}
 		const claims = [...statements.filter(item => !item.retract).map(item => [item, false]), ...(this.state?.claims ?? []).map(item => [item, true])];
-		const links = {}, typed = Object.fromEntries(Object.entries(types).map(([handle, type]) => [handle, { type }]));
+		const via = {}, typed = Object.fromEntries(Object.entries(types).map(([handle, type]) => [handle, { type }]));
 		let changed = true;
 		while (changed) {
 			changed = false;
@@ -354,14 +357,32 @@ export class Session {
 						const parent = Session.linkParent(claim, handle, population);
 						if (parent === null || !Object.hasOwn(homes, parent) || homes[parent][1] !== population.parent || !homes[parent][0].startsWith(kind.kind + "/")) continue;
 						homes[handle] = [homes[parent][0], population.name];
-						if (fromState && operator.claimHolder(claim, typed) !== operator.storeName) (links[homes[handle][0]] ??= []).push(pick(claim, ["s", "p", "v", "rel", "roles"]));
+						const held = fromState && operator.claimHolder(claim, typed) !== operator.storeName;
+						via[handle] = [parent, held ? pick(claim, ["s", "p", "v", "rel", "roles"]) : null];
 						changed = true;
 						break search;
 					}
 				}
 			}
 		}
-		return [homes, links];
+		return [homes, via];
+	}
+
+	/** The links a system holds that home `subjects`, and their parents up to the anchor, each once. */
+	static homeLinks(subjects, via) {
+		const links = [], keys = new Set();
+		for (const subject of subjects) {
+			const seen = new Set();
+			for (let handle = subject; Object.hasOwn(via, handle) && !seen.has(handle); handle = via[handle][0]) {
+				seen.add(handle);
+				const link = via[handle][1];
+				if (link !== null && !keys.has(valueKey(link))) {
+					keys.add(valueKey(link));
+					links.push(link);
+				}
+			}
+		}
+		return links;
 	}
 
 	/** The parent a claim links `handle` to along `population`'s link, if it states that link. */
@@ -432,7 +453,7 @@ export class Session {
 		const types = { ...Object.fromEntries(Object.entries(this.state?.instances ?? {}).map(([handle, item]) => [handle, item.type])),
 			...Object.fromEntries(Object.entries(changes.instances ?? {}).map(([handle, item]) => [handle, item.type])) };
 		const statements = [...(changes.claims ?? []).map(item => ({ ...item })), ...(changes.retractions ?? []).map(item => ({ ...item, retract: true }))];
-		const [homes, links] = this.homes(statements, types);
+		const [homes, via] = this.homes(statements, types);
 		const results = statements.map(() => ({})), groups = new Map();
 		statements.forEach((statement, index) => {
 			const subject = operator.subjectOf(statement), type = types[subject];
@@ -447,7 +468,8 @@ export class Session {
 			}
 		});
 		for (const [partition, indexes] of groups) {
-			const body = this.batch(indexes.map(index => statements[index]), types, links[partition] ?? []);
+			const subjects = [...new Set(indexes.map(index => operator.subjectOf(statements[index])))];
+			const body = this.batch(indexes.map(index => statements[index]), types, Session.homeLinks(subjects, via));
 			let outcome;
 			try {
 				outcome = await this.append(partition, body);
