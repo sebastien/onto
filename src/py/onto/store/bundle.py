@@ -141,7 +141,7 @@ def storeBundle(ontologies: list[Ontology], store: Store, mappings: list[Mapping
 	bundle = {
 		"format": STORE_BUNDLE_FORMAT, "store": store.name, **({"rev": store.header["rev"]} if "rev" in store.header else {}),
 		**({"edit": store.header["edit"]} if "edit" in store.header else {}), "ontology": ontologies[0].namespace,
-		"model": modelJson(Model(ontologies[0])), "kinds": kinds, "systems": [system for system, _ in systems],
+		"model": modelJson(Model(ontologies[0]), validation=True), "kinds": kinds, "systems": [system for system, _ in systems],
 		"origins": originsJson(model, systems),
 		"exclusions": [{"type": item.type, "path": item.path} for item in sorted(store.exclusions, key=lambda item: (item.type, item.path))],
 		"indexes": indexes, "limits": dict(LIMITS),

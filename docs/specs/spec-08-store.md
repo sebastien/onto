@@ -774,7 +774,15 @@ Binary content is not stored: a claim refers to it, by digest or location.
 
 - the model facts claim validation and reconciliation consult, as the `target`
   of a view bundle ([spec-06](spec-06-hexa.md#bundles-and-the-javascript-runtime))
-  holds them;
+  holds them, with what spec-02's strict validation adds:
+  - the ontology's `rev`, and the vocabularies, once each, with their values
+    (extensions and hierarchical ancestors included), openness, hierarchy and
+    order;
+  - per attribute, its cardinality (`card`), its value type (a builtin, a
+    vocabulary by path, a reference, a structure, or a range of one of these)
+    and its exclusive group (`one`);
+  - per structure, its key field; per facet, its `when`; per entity,
+    association and binary relation, whether it is an event;
 - the partition kinds, with their populations compiled to the links that make a
   subject a member, and their parents;
 - the held slots, from the populations, the `@system` mappings and the
@@ -802,6 +810,12 @@ statements of slots a new revision no longer holds.
     updated by alarms from the scope's change feed.
   - It follows Storelight's server design: the authorization callback,
     routing, retry records, chunked payloads and alarms.
+  - **Validation.** The core validates a batch as spec-02's strict JSON
+    reading does, from the bundle's model facts alone: it accepts a batch
+    exactly as written, and rejects one whose values are not already canonical
+    (`3.0` for `3`, `3` for the range `3..3`). It answers what Python answers:
+    the same acceptance, status, `error`, `check` and `n`. Messages may differ,
+    and so may which of several reference-type errors is reported first.
 - **Python** (`src/py/onto/store/`): the same operations over one SQLite
   database, using the standard library only. It is the reference: conformance
   tests run each case on both implementations and compare the answers.
@@ -875,3 +889,6 @@ statements of slots a new revision no longer holds.
 3. **Moving a member** to another partition without merging.
 4. **Reads by time.** `asOf` by `at` or `valid` time, beyond `asOf` by `seq`.
 5. **Registry-backed identities** (spec-05) inside a store.
+6. **Meta handles in the JavaScript store.** spec-02's `meta.unresolved` and
+   `meta.path` checks need the generated Meta records; the JavaScript store
+   does not make them yet.
