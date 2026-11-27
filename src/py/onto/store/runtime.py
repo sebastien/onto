@@ -141,6 +141,16 @@ class ObservationStore:
 		self.db = sqlite3.connect(path)
 		self.db.executescript(SCHEMA)
 
+	def close(self) -> None:
+		"""Close the store's database; a store is also a context manager that closes it."""
+		self.db.close()
+
+	def __enter__(self) -> ObservationStore:
+		return self
+
+	def __exit__(self, *_: object) -> None:
+		self.close()
+
 	# -- Requests ----------------------------------------------------------------
 
 	def authorize(self, request: Any, partition: str | None, access: str) -> tuple[str, str]:

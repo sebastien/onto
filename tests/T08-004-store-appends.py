@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import timedelta
 
 import pytest
 
 from onto.handles import sourceQualifiedHandle
 from onto.store.runtime import ObservationStore, StoreError
-from tests.store import BUNDLE, CHECK, EXAMPLE, NOW, OPS, SCOPE, USER, appended, batch, checked, newStore
+from tests.store import BUNDLE, CHECK, EXAMPLE, FINANCE, NOW, OPS, SCOPE, USER, appended, authorize, batch, checked, newStore
 
 # -----------------------------------------------------------------------------
 #
@@ -177,6 +178,16 @@ def testLimits() -> None:
 def testRequestsAreAuthorizedAndNamed(request_, partition: str, status: int, error: str) -> None:
 	refusal = refused(newStore(), partition, CHECK, request_)
 	assert (refusal.status, refusal.error) == (status, error)
+
+
+def testAStoreClosesItsDatabase(tmp_path) -> None:
+	path = str(tmp_path / "store.sqlite")
+	with ObservationStore(BUNDLE, FINANCE, authorize, path=path) as store:
+		head = store.append(USER, "Client/Person_U1", CHECK)["head"]
+	with pytest.raises(sqlite3.ProgrammingError):
+		store.db.execute("SELECT 1")
+	with ObservationStore(BUNDLE, FINANCE, authorize, path=path) as reopened:
+		assert reopened.partition("adviser-app", "Client/Person_U1").head == head > 0
 
 
 # EOF
