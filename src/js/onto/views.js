@@ -37,6 +37,8 @@ import { RE_NAME, RE_PATH, activeHandles, intersectIntervals, jsonEqual, observa
 // -----------------------------------------------------------------------------
 
 export const BUNDLE_FORMAT = "onto.view-bundle/2";
+/** A session's bundle: the view bundle with the store bundle (spec-09 "Bundles and runtimes"). */
+export const SESSION_BUNDLE_FORMAT = "onto.view-bundle/3";
 const RE_REASON = /^[A-Za-z][A-Za-z0-9]*$/;
 const PROFILES = new Map();
 // A read the host reports unavailable with reason `R` fails with the code `ViewRead.R`, declared on first use.
@@ -116,7 +118,7 @@ function keyValue(value, builtin) {
 }
 
 /** Each planned read's wave: 0 without a provider, one more than its provider's otherwise. */
-function readWaves(steps, providers) {
+export function readWaves(steps, providers) {
 	const waves = new Map();
 	for (const name of steps) {
 		const provider = providers.get(name);
@@ -190,7 +192,7 @@ export class ViewReadError extends Error {
 // -----------------------------------------------------------------------------
 
 /** A per-run index of the reconciled claims usable in a rooted view. */
-class Evidence {
+export class Evidence {
 	constructor(model, state) {
 		Object.assign(this, { model, state, index: new Map() });
 	}
@@ -328,7 +330,7 @@ export class ViewOperator {
 	 * optionally `FailureClassify`.
 	 */
 	constructor(bundle, { access, implementations = {}, operations = {} }) {
-		if (bundle.format !== BUNDLE_FORMAT) throw new Error(`expected ${BUNDLE_FORMAT}`);
+		if (![BUNDLE_FORMAT, SESSION_BUNDLE_FORMAT].includes(bundle.format)) throw new Error(`expected ${BUNDLE_FORMAT}`);
 		this.bundle = bundle;
 		this.access = access;
 		this.operations = operations;
@@ -425,9 +427,10 @@ export class ViewOperator {
 	 * checked, bound and accounted for in plan order. `now` fixes the clock; `operations` add to the operator's;
 	 * `record` (a journal sink), `replay`, `signal` and `policy` (retry, concurrency) go to the run. A failed read
 	 * is reported by reason and message; its outcome keeps the failure, and the journal a failed effect's details.
+	 * `planned` is this view's plan when the caller has it, as a session does with its system's reads (spec-09).
 	 */
-	async runReads(view, seed, fields = null, { now = clockNow(), fetch = (step, value) => this.access.fetch(step, value), operations = {}, record, replay, signal, policy = {} } = {}) {
-		const result = await this.plan(view, seed, fields);
+	async runReads(view, seed, fields = null, { now = clockNow(), fetch = (step, value) => this.access.fetch(step, value), operations = {}, record, replay, signal, policy = {}, planned } = {}) {
+		const result = planned ?? await this.plan(view, seed, fields);
 		const param = this.views[view].input, steps = result.steps.map(item => item.step);
 		// The view's provider of each key, not any earlier read discovering it: the view may not take it from that one.
 		const providers = new Map(result.steps.map(item => [item.step, item.requires[0] ?? null])), waves = readWaves(steps, providers);
@@ -575,6 +578,11 @@ export class ViewOperator {
 			const chain = view.paths[child ?? alias];
 			const hopSuppliers = new Map(chain.map((hop, index) => [hopKey(hop), path.hops[index].supplier]));
 			const blocked = (step, population, bindings, other = "") => {
+				if (Array.isArray(step)) {
+					// NOTE: A projection with a supplier in each holder (spec-09 "Keyed elements") is blocked when all are.
+					const reasons = step.map(item => blocked(item, population, bindings, other));
+					return reasons.includes(null) ? null : reasons.includes("unavailable") ? "unavailable" : reasons[0];
+				}
 				if (!step) return gaps[spelling] === "SelectionRequest.NotSupplied" ? "notSupplied" : "unmapped";
 				let cases = outcomes.get(step) ?? [];
 				for (const handle of Object.values(bindings).reverse()) {

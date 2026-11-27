@@ -29,7 +29,7 @@ def attrJson(model: Model, attr: Attr) -> dict:
 	resolved = model.resolveType(attr.type, attr.ann)
 	structure = model.structOf(attr.type)
 	element = resolved.element
-	return {"multi": (attr.card or model.defaultCard) in ("*", "+"),
+	return {"multi": (attr.card or model.defaultCard) in ("*", "+"), **({"derived": True} if attr.derived else {}),
 		**({"numeric": True} if resolved.builtin in NUMERIC else {}),
 		**({"numericRange": True} if resolved.kind == "range" and element is not None and element.builtin in NUMERIC else {}),
 		**({"qualifiers": dict(resolved.qualifiers)} if resolved.qualifiers else {}),

@@ -2,7 +2,8 @@
  * See `views.js` for the host contract; observation helpers expect well-formed logs.
  */
 
-export { BUNDLE_FORMAT, ViewOperator, ViewReadError, clockNow, describeHop } from "./views.js";
+export { BUNDLE_FORMAT, SESSION_BUNDLE_FORMAT, ViewOperator, ViewReadError, clockNow, describeHop } from "./views.js";
+export { Session, SessionViewOperator, uuid7 } from "./sessions.js";
 export { Model } from "./model.js";
 export { loadBindingProgram } from "./binding.js";
 export { loadMappingProgram } from "./mapping.js";

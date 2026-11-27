@@ -29,6 +29,7 @@ OBJECTS: dict[str, AnyValue] = {}
 CASES: list[dict] = []
 STAGES: dict[int, tuple] = {}
 EXPORTS: dict[int, tuple] = {}
+SESSION_EXPORTS: dict[int, tuple] = {}
 CURRENT = {"test": None}
 
 
@@ -111,11 +112,42 @@ class RecordingAccess:
 			if callable(getattr(access, name, None)):
 				self.calls[name] = {}
 				setattr(self, name, getattr(self, "recorded" + name[0].upper() + name[1:]))
-		# NOTE: A session's store operations (spec-09) pass through unrecorded: only its system's plans are replayed until
-		# the JavaScript runtime runs sessions.
+		# NOTE: A session's store operations (spec-09) are recorded in order, with their arguments: the JavaScript session
+		# must make the same reads and appends, which are answered as Python's were.
+		self.storeCalls: list[dict] = []
 		for name in ("storeRead", "storeAppend"):
 			if callable(getattr(access, name, None)):
 				setattr(self, name, getattr(access, name))
+
+	def __setattr__(self, name: str, value: AnyValue) -> None:
+		# NOTE: A test may replace a store operation (a flaky append): the replacement is recorded too.
+		if name in ("storeRead", "storeAppend") and callable(value):
+			value = self.recordedStore(name, value)
+		object.__setattr__(self, name, value)
+
+	def recordedStore(self, name: str, function):
+		from onto.store.runtime import StoreError
+
+		def call(*args):
+			# NOTE: A replacement may call the operation it replaced: only the outermost call is the session's.
+			if getattr(self, "storeDepth", 0):
+				return function(*args)
+			entry = {"op": name, "args": json.loads(json.dumps(list(args), default=str))}
+			self.storeCalls.append(entry)
+			object.__setattr__(self, "storeDepth", 1)
+			try:
+				answer = function(*args)
+			except StoreError as error:
+				entry["error"] = {"status": error.status, **json.loads(json.dumps(error.toJson(), default=str))}
+				raise
+			except OSError:
+				entry["raised"] = "OSError"
+				raise
+			finally:
+				object.__setattr__(self, "storeDepth", 0)
+			entry["answer"] = json.loads(json.dumps(answer, default=str))
+			return answer
+		return call
 
 	def record(self, kind: str, key: list, call, encode=lambda value: value):
 		try:
@@ -349,6 +381,94 @@ def install() -> None:
 	ObservationStore.__init__ = storeInit
 	for name in ("append", "state", "log", "stateMany"):
 		setattr(ObservationStore, name, recordedCall(name))
+
+	# NOTE: Sessions (spec-09): an operator's plans and reports, and each session's opens and changes in order, with the
+	# journals of its views' reads, its store reads and appends, and Python's outputs. The JavaScript session replays them.
+	from onto.integrations.hexa.sessions import Session, SessionViewOperator, sessionBundle
+
+	def sessionBundleKey(operator) -> dict:
+		if id(operator) not in SESSION_EXPORTS or SESSION_EXPORTS[id(operator)][0] is not operator:
+			try:
+				SESSION_EXPORTS[id(operator)] = (operator, {"bundle": store(sessionBundle(operator))})
+			except Exception as error:  # noqa: BLE001 — reported as an unsupported case
+				SESSION_EXPORTS[id(operator)] = (operator, {"unsupported": f"{type(error).__name__}: {error}"})
+		return SESSION_EXPORTS[id(operator)][1]
+
+	def plain(value):
+		return json.loads(json.dumps(value, default=str))
+
+	originalSessionPlan, originalSessionReport = SessionViewOperator.plan, SessionViewOperator.report
+
+	async def recordSessionView(self, method, view, seed, fields, now, call, journal=None):
+		start = len(self.access.storeCalls)
+		case = {"kind": "session-view", "method": method, "test": CURRENT["test"], "operator": self, "scope": self.scope, "view": view, "seed": seed,
+			"fields": fields, "now": now, **sessionBundleKey(self)}
+		CASES.append(case)
+		try:
+			result = await call()
+		except Exception as error:
+			case["error"] = errorJson(error)
+			raise
+		finally:
+			case["storeCalls"] = self.access.storeCalls[start:]
+			if journal is not None:
+				case["journal"] = store(journal)
+		case["output"] = store(plain(result))
+		return result
+
+	async def sessionPlan(self, view, seed, fields=None):
+		return await recordSessionView(self, "plan", view, seed, fields, None, lambda: originalSessionPlan(self, view, seed, fields))
+
+	async def sessionReport(self, view, seed, fields=None, now=None, **options):
+		now = now or clockNow()
+		journal, options = journaled(options)
+		return await recordSessionView(self, "report", view, seed, fields, now, lambda: originalSessionReport(self, view, seed, fields, now, **options), journal)
+
+	SessionViewOperator.plan, SessionViewOperator.report = sessionPlan, sessionReport
+
+	originalSession, originalOpen, originalChange = Session.__init__, Session.open, Session.change
+
+	def sessionInit(self, operator, *args, **options):
+		originalSession(self, operator, *args, **options)
+		case = {"kind": "session", "test": CURRENT["test"], "operator": operator, "scope": operator.scope, **sessionBundleKey(operator), "steps": []}
+		CASES.append(case)
+		self.conformance = {"case": case, "step": None, "journal": None}
+
+	async def recordStep(self, step, call):
+		state, access = self.conformance, self.operator.access
+		start = len(access.storeCalls)
+		state["step"] = step
+		try:
+			result = await call()
+		except Exception as error:
+			step["error"] = errorJson(error)
+			raise
+		finally:
+			state["step"] = None
+			step["storeCalls"] = access.storeCalls[start:]
+			step["journals"] = [store(journal) for journal in step["journals"]]
+			state["case"]["steps"].append(step)
+		step["output"] = store(plain(result))
+		step["report"] = store(plain(self.report))
+		return result
+
+	async def sessionOpen(self, view, seed, fields=None, **options):
+		state, journal = self.conformance, []
+		state["journal"] = journal
+		if state["step"] is not None:
+			# NOTE: A change reads its view again: that read's journal is the change's.
+			state["step"]["journals"].append(journal)
+			return await originalOpen(self, view, seed, fields, **options)
+		options.setdefault("now", clockNow())
+		options["record"] = lambda entry: state["journal"].append(entry)
+		step = {"op": "open", "view": view, "seed": seed, "fields": fields, "now": options["now"], "journals": [journal]}
+		return await recordStep(self, step, lambda: originalOpen(self, view, seed, fields, **options))
+
+	async def sessionChange(self, changes):
+		step = {"op": "change", "changes": plain(changes), "journals": []}
+		return await recordStep(self, step, lambda: originalChange(self, changes))
+
+	Session.__init__, Session.open, Session.change = sessionInit, sessionOpen, sessionChange
 
 
 def write() -> None:

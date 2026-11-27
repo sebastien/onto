@@ -13,6 +13,7 @@ pytest.importorskip("hexa.shapes")
 from onto.store.runtime import ObservationStore  # noqa: E402
 
 from tests.sessions import CLIENT, FINANCE, PARTITION, SEED, newStore, operator, session  # noqa: E402
+from onto.integrations.hexa.sessions import sessionBundle  # noqa: E402
 from onto.store.origins import ORIGIN_STORE, originOf  # noqa: E402
 from tests.store import SCOPE, USER, batch  # noqa: E402
 
@@ -214,6 +215,21 @@ def testAnUnansweredAppendIsRetriedOnceWithItsRequestId(failures: int, outcome: 
 	statement, = asyncio.run(item.change({"claims": [{"s": CLIENT, "p": "Investor.RiskTolerance", "v": "High", "version": 1}]}))["statements"]
 	assert (statement["result"], len(requests), len(set(requests))) == (outcome, 2, 1)
 	assert statement.get("requestId", requests[0]) == requests[0]
+
+
+# -----------------------------------------------------------------------------
+#
+# BUNDLES
+#
+# -----------------------------------------------------------------------------
+
+
+def testASessionBundleCarriesTheStoreAndPageHints() -> None:
+	bundle = sessionBundle(operator(newStore()))
+	assert (bundle["format"], bundle["store"]["store"]) == ("onto.view-bundle/3", "AdviserApp")
+	assert bundle["views"]["ClientPage"]["pages"] == {"checks": 10} and "pages" not in bundle["views"]["ClientPhones"]
+	assert bundle["target"]["types"]["Finance/Person"]["attrs"]["Age"]["derived"] is True
+	assert "derived" not in bundle["target"]["types"]["Finance/Person"]["attrs"]["DateOfBirth"]
 
 
 # EOF

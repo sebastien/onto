@@ -223,7 +223,7 @@ def viewJson(operator: AnyValue, name: str, view: RootedView) -> dict:
 		"guardedLinks": [[parent, relation, list(roles), alias] for (parent, relation, roles), alias in view.guardedLinks.items()],
 		"selections": {key: [item.population, fieldJson(item.field)] for key, item in view.selections.items()},
 		"contexts": {key: item.contextPopulation for key, item in view.selections.items() if item.contextPopulation},
-		"typeSelections": view.typeSelections, "defaults": view.defaults, "steps": operator.steps[name],
+		"typeSelections": view.typeSelections, "defaults": view.defaults, **({"pages": dict(view.pages)} if view.pages else {}), "steps": operator.steps[name],
 		"matches": operator.correspondences(view, operator.steps[name])}
 
 

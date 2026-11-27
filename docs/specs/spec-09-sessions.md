@@ -615,10 +615,12 @@ A page's retrieval makes no history reads; histories are read on request.
 
 ## Bundles and runtimes
 
-- **Bundle.** `viewBundle(operator, store=STORE)` compiles an
-  `onto.view-bundle/3` document, the rooted-view `/2` bundle plus:
-  - `store`, the store bundle (spec-08);
-  - `holders`, per type, slot and origin;
+- **Bundle.** `sessionBundle(operator)` compiles an `onto.view-bundle/3`
+  document, the rooted-view `/2` bundle plus:
+  - `store`, the store bundle (spec-08), from whose origins and held slots
+    holders follow, per type, slot and origin;
+  - each view's population page hints (`pages`), and whether each attribute
+    is derived, which writability needs;
   - the list reads, and list views resolved like rooted views.
 - **JavaScript.** The runtime gains `Session`: store reads, list views,
   notices and changes. It generalises the sessions hosts build over
@@ -629,6 +631,10 @@ A page's retrieval makes no history reads; histories are read on request.
   (spec-08 requests), and `KeyQuery`. In a browser, `KeyQuery`, and usually
   `RequestSend`, go to the application's server, which performs them with the
   same runtime.
+  - The store's are the host's functions `storeRead(body)` (a batch read) and
+    `storeAppend(partition, body)`, such as a store client's `stateMany` and
+    `append`. A refusal is a store error; any other failure is an append
+    without an answer. Journaling them as hexa effects is deferred.
 - **Host adapter.** `rootHandle` may answer `null` when a root's handle is
   known only after reading. A new `noticeRecords(notice)` translates the
   host's notices into source records.

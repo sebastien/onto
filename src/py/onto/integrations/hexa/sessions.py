@@ -20,6 +20,7 @@ from ...observations.rooted import Evidence
 from ...ontology.rooted import Field, RootedView
 from ...store.origins import ORIGIN_SHARED, ORIGIN_STORE, RE_ELEMENT_KEY, elementPath, holds, isA, originOf, related
 from ...store.runtime import StoreError
+from .bundle import viewBundle
 from .views import HexaViewOperator, ReadOutcome, readWaves
 
 # -----------------------------------------------------------------------------
@@ -305,6 +306,14 @@ class SessionViewOperator(HexaViewOperator):
 		return (await self.open(view, seed, fields, now, **options))[0]
 
 
+SESSION_BUNDLE_FORMAT = "onto.view-bundle/3"
+
+
+def sessionBundle(operator: SessionViewOperator) -> Json:
+	"""A session's bundle (spec-09 "Bundles and runtimes"): the view bundle, with the store bundle it reads and appends to."""
+	return viewBundle(operator) | {"format": SESSION_BUNDLE_FORMAT, "store": operator.bundle}
+
+
 class Session:
 	"""A client's session: the state of the view it opened, and changes routed to each slot's holder (spec-09 "Changes")."""
 
@@ -459,6 +468,6 @@ class Session:
 		return {"statements": [{key: statement[key] for key in SLOT_KEYS if key in statement} | result for statement, result in zip(statements, results)]}
 
 
-__all__ = ["Session", "SessionViewOperator"]
+__all__ = ["SESSION_BUNDLE_FORMAT", "Session", "SessionViewOperator", "sessionBundle"]
 
 # EOF

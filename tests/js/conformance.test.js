@@ -14,6 +14,7 @@ import { pyJson, valueKey } from "../../src/js/onto/values.js";
 import { BatchValidator, StoreError } from "../../src/js/onto/store/validate.js";
 import { Forbidden } from "../../src/js/onto/store/errors.js";
 import { ObservationStore } from "../../src/js/onto/store/store.js";
+import { Session, SessionViewOperator } from "../../src/js/onto/sessions.js";
 import { sqlite } from "./sqlite.js";
 
 const PATH = process.env.ONTO_CONFORMANCE ?? "build/conformance.json";
@@ -227,6 +228,59 @@ async function replayStore(item) {
 	}
 }
 
+/**
+ * A session host's store operations, answering each read and append as Python's were, in order; the JavaScript
+ * session must make the same requests.
+ */
+function storeHooks(queue) {
+	const next = (op, args) => {
+		const entry = queue.shift();
+		if (!entry) throw new Error(`a ${op} Python did not make: ${JSON.stringify(args).slice(0, 300)}`);
+		expect(op).toBe(entry.op);
+		expect(difference(JSON.parse(JSON.stringify(args)), entry.args), `${op} request`).toBeNull();
+		if (entry.raised) throw new Error(`no answer (${entry.raised})`);
+		if (entry.error) {
+			const { status, error, message, ...details } = entry.error;
+			throw new StoreError(status, error, message, details);
+		}
+		return structuredClone(entry.answer);
+	};
+	return { storeRead: async body => next("storeRead", [body]), storeAppend: async (partition, body) => next("storeAppend", [partition, body]) };
+}
+
+/** A session operator answering as Python's host did: its view hooks, and its store's recorded answers. */
+function sessionOperator(item, queue) {
+	return new SessionViewOperator(get(item.bundle), { scope: item.scope, access: { ...access(get(item.access)), ...storeHooks(queue) },
+		implementations: implementations(get(item.calls)) });
+}
+
+async function replaySessionView(item) {
+	const queue = [...item.storeCalls], operator = sessionOperator(item, queue);
+	const output = item.method === "plan" ? await operator.plan(item.view, item.seed, item.fields)
+		: await operator.report(item.view, item.seed, item.fields, { now: item.now, replay: get(item.journal) });
+	expect(queue.length, "store calls Python made").toBe(0);
+	return output;
+}
+
+/** Replay a session's opens and changes in order, with Python's journals, store answers and request IDs. */
+async function replaySession(item) {
+	let queue = [], journals = [];
+	const operator = sessionOperator(item, { shift: () => queue.shift() });
+	const original = operator.runReads.bind(operator);
+	operator.runReads = (view, seed, fields, options) => original(view, seed, fields, { ...options, replay: journals.shift() });
+	const ids = item.steps.flatMap(step => step.storeCalls.filter(call => call.op === "storeAppend").map(call => call.args[1].requestId));
+	const session = new Session(operator, { newId: () => ids.shift() ?? "unrecorded" });
+	for (const [index, step] of item.steps.entries()) {
+		queue = [...step.storeCalls];
+		journals = step.journals.map(get);
+		const output = step.op === "open" ? await session.open(step.view, step.seed, step.fields, { now: step.now }) : await session.change(step.changes);
+		const where = `step ${index} ${step.op}`;
+		expect(queue.length, `${where}: store calls Python made`).toBe(0);
+		expect(difference(JSON.parse(JSON.stringify(output)), get(step.output)), where).toBeNull();
+		expect(difference(JSON.parse(JSON.stringify(session.report)), get(step.report)), `${where} report`).toBeNull();
+	}
+}
+
 if (!data) test.skip(`conformance cases (record ${PATH} first)`, () => {});
 else for (const [index, item] of data.cases.entries()) {
 	const label = `${index} ${item.kind}${item.method ? " " + item.method : ""} ${item.test}`;
@@ -236,6 +290,15 @@ else for (const [index, item] of data.cases.entries()) {
 	}
 	if (item.kind === "store") {
 		if (item.calls.length) test(label, () => replayStore(item));
+		continue;
+	}
+	if (item.kind === "session-view" || item.kind === "session") {
+		if (item.unsupported) test.skip(`${label}: ${item.unsupported}`, () => {});
+		else if (item.kind === "session-view") test(label, async () => {
+			if (item.error) return expect(replaySessionView(item)).rejects.toBeDefined();
+			expect(difference(JSON.parse(JSON.stringify(await replaySessionView(item))), get(item.output))).toBeNull();
+		});
+		else if (item.steps.length) test(label, () => replaySession(item));
 		continue;
 	}
 	if (item.unsupported) {
