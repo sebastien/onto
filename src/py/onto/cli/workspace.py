@@ -16,10 +16,11 @@ from ..binding import bindingFromJson, loadBinding
 from ..formats import parseFormats
 from ..functions import FunctionLibrary, functionsFromJson, loadFunctions
 from ..inventory import parseInventory
-from ..mapping import loadMapping, mappingFromJson
+from ..mapping import Mapping, loadMapping, mappingFromJson
 from ..observations import loadObservations, observationsFromJson
 from ..ontology import Ontology, loadOntology, ontologyFromJson
 from ..referential import Referential, loadReferential, referentialFromJson
+from ..store import loadStore, storeFromJson, validateStore
 from ..text import Diagnostic, FormatError, Loc, Source, sourceLines
 
 # -----------------------------------------------------------------------------
@@ -36,6 +37,7 @@ EXTENSIONS = {
 	".bind": "binding",
 	".map": "mapping",
 	".ref": "referential",
+	".store": "store",
 	".inv": "inventory",
 	".formats": "formats",
 }
@@ -48,6 +50,7 @@ DIRECTIVES = {
 	"@binding": "binding",
 	"@mapping": "mapping",
 	"@referential": "referential",
+	"@store": "store",
 }
 JSON_FORMATS = {
 	"onto.ontology/1": "ontology",
@@ -56,10 +59,11 @@ JSON_FORMATS = {
 	"onto.binding/1": "binding",
 	"onto.mapping/1": "mapping",
 	"onto.referential/1": "referential",
+	"onto.store/1": "store",
 }
 # NOTE: Kinds whose files sharing a namespace are loaded together, as one model.
-# NOTE: Files of one key load as one model: an ontology's namespace, a mapping's `From->To`.
-GROUPED = ("ontology", "functions", "referential", "mapping")
+# NOTE: Files of one key load as one model: an ontology's namespace, a mapping's `From->To`, a store's name.
+GROUPED = ("ontology", "functions", "referential", "mapping", "store")
 # NOTE: What `@use` (and `from=`) namespaces may name, per kind; libraries ignore other libraries.
 CONTEXT_KINDS = {
 	"functions": ("ontology",),
@@ -83,6 +87,8 @@ class Entry:
 	# NOTE: `needs` must resolve (the primary ontologies); `uses` are resolved when available.
 	needs: list[str] = field(default_factory=list)
 	uses: list[str] = field(default_factory=list)
+	# NOTE: A store's `@system` mappings, by `From->To` key.
+	systems: list[str] = field(default_factory=list)
 	line: int = 1
 	data: Any = None
 
@@ -99,13 +105,14 @@ class Entry:
 
 @dataclass(slots=True)
 class Context:
-	"""What an entry is loaded against: primary ontologies, extra ontologies, libraries and referentials."""
+	"""What an entry is loaded against: primary ontologies, extra ontologies, libraries, referentials and a store's mappings."""
 
 	ontology: Ontology | None = None
 	toOntology: Ontology | None = None
 	ontologies: list[Ontology] = field(default_factory=list)
 	libraries: list[FunctionLibrary] = field(default_factory=list)
 	referentials: list[Referential] = field(default_factory=list)
+	mappings: list[Mapping] = field(default_factory=list)
 
 
 # -----------------------------------------------------------------------------
@@ -236,6 +243,9 @@ class Indexer:
 				directive = line.text.split(maxsplit=2)
 				if len(directive) >= 2 and directive[0] == "@use":
 					entry.uses.append(directive[1])
+				words = line.text.split()
+				if kind == "store" and len(words) >= 4 and words[0] == "@system" and words[2] == "->":
+					entry.systems.append(mappingKey(words[1], words[3]))
 			if kind == "referential":
 				entry.uses.extend(RE_FROM.findall(line.text))
 		return entry
@@ -269,6 +279,10 @@ class Indexer:
 				fromNamespace, toNamespace = textOf(data.get("from")), textOf(data.get("to"))
 				entry.key = mappingKey(fromNamespace, toNamespace)
 				entry.needs = [fromNamespace, toNamespace] if entry.key else []
+			case "store":
+				entry.key = textOf(data.get("name"))
+				systems = data.get("systems") if isinstance(data.get("systems"), list) else []
+				entry.systems = [key for item in systems if isinstance(item, dict) and (key := mappingKey(textOf(item.get("from")), textOf(item.get("to"))))]
 			case _:
 				entry.key = textOf(data.get("namespace"))
 		if kind == "referential" and isinstance(data.get("policies"), list):
@@ -469,6 +483,15 @@ class Workspace:
 					break
 		return list(sources.values())
 
+	def owning(self, namespace: str) -> str:
+		"""The ontology namespace owning `namespace` (itself or a domain of it), else `namespace` itself."""
+		candidate = namespace
+		while candidate:
+			if self.find("ontology", candidate):
+				return candidate
+			candidate = candidate.rpartition("/")[0]
+		return namespace
+
 	def optional(self, namespaces: list[str], owner: Entry, kinds: tuple[str, ...], exclude: set[str]) -> tuple[list[Ontology], list[FunctionLibrary]]:
 		"""Ontologies and libraries of `kinds` for `namespaces`, else the ontologies carrying a namespace."""
 		loaded: dict[tuple[str, str], Any] = {}
@@ -503,6 +526,17 @@ class Workspace:
 			if len(referentials) == 1:
 				name, owner = next(iter(referentials.items()))
 				context.referentials = [self.required("referential", name, owner)]
+		elif entry.kind == "store":
+			# NOTE: The `@use` ontology, then the `@system` mappings the workspace has; the store check reports the others.
+			if not uses:
+				raise self.located(entry, "cli.unresolved", "a store names its ontology with @use")
+			context.ontology = self.required("ontology", self.owning(uses[0]), entry)
+			for key in dict.fromkeys(name for item in group for name in item.systems):
+				if found := self.find("mapping", key):
+					try:
+						context.mappings.append(self.load(found))
+					except FormatError as error:
+						raise self.located(entry, "cli.context", f"mapping {key} has errors") from error
 		if entry.kind in CONTEXT_KINDS:
 			context.ontologies, context.libraries = self.optional(uses, entry, CONTEXT_KINDS[entry.kind], set(entry.needs))
 		self.contexts[gid] = context
@@ -541,6 +575,8 @@ class Workspace:
 				return loadOntology(sources, self.viewSources)
 			if kind == "functions":
 				return loadFunctions(context.ontologies, sources)
+			if kind == "store":
+				return loadStore([context.ontology] if context.ontology else [], sources, context.mappings)
 			return loadReferential(context.ontologies, sources)
 		source = self.source(entry)
 		if kind == "inventory":
@@ -574,6 +610,8 @@ class Workspace:
 				return bindingFromJson(context.ontology, data, name, context.libraries, context.ontologies)
 			case "mapping":
 				return mappingFromJson(context.ontology, context.toOntology, data, name, context.libraries, context.ontologies, context.referentials)
+			case "store":
+				return validateStore([context.ontology] if context.ontology else [], storeFromJson(data, name), context.mappings)
 			case _:
 				return referentialFromJson(context.ontologies, data, name)
 

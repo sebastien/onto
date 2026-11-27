@@ -26,6 +26,7 @@ from ..mapping import Mapping, mappingCoverage, mappingReverse, mappingToJson, p
 from ..observations import Observations, mergeObservationLogs, observationsFromJson, observationsToJson, printObservationsCompact, printObservationsLog, printObservationsState, reconcileObservations
 from ..ontology import Ontology, loadOntology, normaliseOntology, ontologyDiff, ontologyFromJson, ontologyToJson, printOntology, printOntologyDiff
 from ..referential import Referential, printReferential, referentialToJson
+from ..store import Store, printStore, storeToJson
 from ..text import Diagnostic, FormatError, Loc, Source, annotation, layoutText
 from .usage import UsageError
 from .workspace import STDIN, Entry, Workspace
@@ -39,7 +40,7 @@ from .workspace import STDIN, Entry, Workspace
 type Row = dict[str, str]
 COVERAGE_COLUMNS = ("source", "target", "status", "note")
 # NOTE: Kinds whose lines may end with a ` -- doc`.
-DOC_KINDS = ("ontology", "functions", "binding", "mapping", "referential")
+DOC_KINDS = ("ontology", "functions", "binding", "mapping", "referential", "store")
 JSON_WRITERS: tuple[tuple[type, Callable[[Any], Any]], ...] = (
 	(Ontology, ontologyToJson),
 	(Observations, observationsToJson),
@@ -47,6 +48,7 @@ JSON_WRITERS: tuple[tuple[type, Callable[[Any], Any]], ...] = (
 	(Binding, bindingToJson),
 	(Mapping, mappingToJson),
 	(Referential, referentialToJson),
+	(Store, storeToJson),
 )
 
 
@@ -227,6 +229,8 @@ class Forms:
 				return printFunctions(model)
 			case Referential():
 				return printReferential(model)
+			case Store():
+				return printStore(model)
 			case Binding():
 				return printBinding(model)
 			case Mapping():
