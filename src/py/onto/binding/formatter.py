@@ -55,7 +55,10 @@ def printBinding(binding: Binding) -> str:
 		parts = []
 		for key in ANNOTATION_KEYS:
 			value = getattr(item, key, None) if key in keys else None
-			if value is None:
+			if value is None or value is False:
+				continue
+			if key == "optional":
+				parts.append(key)
 				continue
 			if key in ("id", "valid", "ctx"):
 				value = exprText(value, field=False)
@@ -78,7 +81,7 @@ def printBinding(binding: Binding) -> str:
 	for function in sorted(binding.functions, key=lambda item: item.name):
 		lines += [""] + functionBlock(function, short)
 	for scope in sorted(binding.scopes, key=lambda item: (item.type, exprText(item.path))):
-		lines += ["", withDoc(f"{short(scope.type)} <- {exprText(scope.path)}" + annotations(scope, ("id", "ctx", "valid", "deleted")), scope.doc)]
+		lines += ["", withDoc(f"{short(scope.type)} <- {exprText(scope.path)}" + annotations(scope, ("id", "ctx", "valid", "deleted", "optional")), scope.doc)]
 		for line in sorted(scope.lines, key=lineKey):
 			text = f"[{line.facet}]" if line.facet else f"{line.target or line.verb} <- {exprText(line.expr)}"
 			lines.append(withDoc("  " + text + annotations(line, ("when", "null", "unset")), line.doc))
@@ -110,6 +113,8 @@ def bindingToJson(binding: Binding) -> dict[str, Any]:
 		for key in ("valid", "ctx", "deleted", "doc"):
 			if (member := getattr(scope, key)) is not None:
 				value[key] = member
+		if scope.optional:
+			value["optional"] = True
 		lines = []
 		for line in sorted(scope.lines, key=lineKey):
 			entry = {key: getattr(line, key) for key in ("target", "facet", "verb", "expr", "when", "null", "unset", "doc") if getattr(line, key) is not None}

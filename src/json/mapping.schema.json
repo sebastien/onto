@@ -117,6 +117,9 @@
               "deleted": {
                 "$ref": "#/$defs/when"
               },
+              "optional": {
+                "const": true
+              },
               "doc": {
                 "$ref": "#/$defs/doc"
               },

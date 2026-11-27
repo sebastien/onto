@@ -19,7 +19,7 @@ from ..text import Diagnostic, Loc
 
 BINDING_FORMAT = "onto.binding/1"
 HEADER_KEYS = ("rev", "name", "format", "scope", "null", "complete", "retract", "confirm")
-ANNOTATION_KEYS = ("id", "when", "src", "ctx", "valid", "deleted", "null", "unset", "reverse", "candidate", "reason")
+ANNOTATION_KEYS = ("id", "when", "src", "ctx", "valid", "deleted", "optional", "null", "unset", "reverse", "candidate", "reason")
 
 
 @dataclass(slots=True)
@@ -47,6 +47,7 @@ class BindingScope:
 	valid: Expression | None = None
 	ctx: Expression | None = None
 	deleted: Condition | None = None
+	optional: bool = False  # some records lack the path: a missing one makes no instance and no gap (spec-04 Scope lines)
 	lines: list[BindingLine] = field(default_factory=list)
 	doc: str | None = None
 	loc: Loc | None = None

@@ -11,6 +11,7 @@ import re
 from typing import Any as AnyValue
 
 from hexa.combinators import Policy, collect, each, parallel, pipe, project, select, stage
+from hexa.core import Issue
 from hexa.runtime import Ledger, report
 from hexa.shapes import Failure
 
@@ -83,7 +84,8 @@ def combine(parent: dict, child: dict) -> dict:
 
 
 def selectStage(scope: ScopeProgram) -> AnyValue:
-	"""`<Name>RecordsSelect`: enumerate occurrences level by level; a missing path is a gap below its parent only."""
+	"""`<Name>RecordsSelect`: enumerate occurrences level by level; a missing path is a gap below its parent only, and
+	nothing for an optional scope."""
 	levels = [select(level) for level in scope.levels]
 	owner: list[AnyValue] = []
 
@@ -98,6 +100,8 @@ def selectStage(scope: ScopeProgram) -> AnyValue:
 				except Failure as failure:
 					if failure.kind is not Failure.Gap:
 						raise
+					if scope.optional and failure.code is Issue.Missing:
+						continue  # spec-04: an optional scope's missing path makes no record and no gap
 					fields = {"source": parent["location"] + (failure.location or "")}
 					if failure.path is not None:
 						fields["path"] = failure.path

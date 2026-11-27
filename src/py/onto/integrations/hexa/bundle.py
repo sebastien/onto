@@ -107,7 +107,7 @@ def bindingProgramJson(operator: AnyValue, program: AnyValue) -> dict:
 		shape, template = encode(scope.shape), encode(scope.template)
 		slots |= scopeSlots(scope)
 		scopes.append({"name": scope.name, "type": scope.type, "levels": list(scope.levels), "picks": list(scope.picks or []),
-			"outer": [item.name for item in scope.outer], "shape": shape, "template": template})
+			"outer": [item.name for item in scope.outer], "shape": shape, "template": template, **({"optional": True} if scope.optional else {})})
 		# A declared function with an inverse converts captures as a program-local codec (`Calls.codec`).
 		for codec in viaCodecs(compileShape(scope.shape), []):
 			if (name := names.get(codec.name)) is None:

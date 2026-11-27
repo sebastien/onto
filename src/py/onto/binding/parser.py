@@ -90,9 +90,14 @@ def bindingAnnotations(text: str | None, allowed: tuple[str, ...]) -> dict[str, 
 	for part in annotationParts(text):
 		key, separator, value = part.partition("=")
 		key, value = key.strip(), value.strip()
-		if not separator or key not in allowed or key in result:
+		if key not in allowed or key in result or not separator and key != "optional":
 			raise ValueError(f"Invalid or duplicate binding annotation '{key}'")
-		if key in ("id", "valid", "ctx"):
+		if key == "optional":
+			# NOTE: `optional` is a flag: it takes no value.
+			if separator:
+				raise ValueError("optional takes no value")
+			result[key] = True
+		elif key in ("id", "valid", "ctx"):
 			result[key] = parseExpression(value, binding=True, field=False)
 		elif key in ("when", "deleted"):
 			result[key] = parseCondition(value)
@@ -151,7 +156,7 @@ def readBindingJson(data: Any) -> Binding:
 	if not isinstance(value["scopes"], list):
 		raise ValueError("scopes must be an array")
 	for item in value["scopes"]:
-		item = jsonObject(item, ("type", "path", "id"), ("valid", "ctx", "deleted", "doc", "lines"))
+		item = jsonObject(item, ("type", "path", "id"), ("valid", "ctx", "deleted", "optional", "doc", "lines"))
 		path = expressionFromJson(item["path"], binding=True)
 		if "path" not in path:
 			raise ValueError("A scope requires a document path")
@@ -161,6 +166,10 @@ def readBindingJson(data: Any) -> Binding:
 				setattr(scope, key, expressionFromJson(item[key], binding=True, field=False))
 		if "deleted" in item:
 			scope.deleted = conditionFromJson(item["deleted"])
+		if "optional" in item:
+			if item["optional"] is not True:
+				raise ValueError("optional must be true when present")
+			scope.optional = True
 		if not isinstance(item.get("lines", []), list):
 			raise ValueError("Scope lines must be an array")
 		for line in item.get("lines", []):
@@ -274,7 +283,7 @@ def parseBinding(source: Source) -> BindingDocument:
 				parts = re.split(r"[ \t]+<-[ \t]+", body, maxsplit=1)
 				if len(parts) != 2:
 					raise ValueError("Invalid binding scope or directive")
-				ann = bindingAnnotations(annotations, ("id", "valid", "ctx", "deleted"))
+				ann = bindingAnnotations(annotations, ("id", "valid", "ctx", "deleted", "optional"))
 				if "id" not in ann:
 					raise ValueError("A binding scope requires id")
 				current = BindingScope(qualifyPath(parts[0], doc.ontology, doc.uses), documentPath(parts[1]), **ann, doc=docText, loc=line.loc)

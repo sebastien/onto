@@ -6,6 +6,7 @@
  * DocumentRecordsCollect: <Type>RecordsSelect → <Type>RecordsProject, for each scope line
  */
 
+import { Issue } from "hexa/core.js";
 import { Failure } from "hexa/shapes.js";
 import { Policy, collect, each, parallel, pipe, project, select } from "hexa/combinators.js";
 import { Ledger, report } from "hexa/runtime.js";
@@ -57,6 +58,8 @@ function selectStage(scope) {
 				try { found = yield* level(env, parent.value); }
 				catch (failure) {
 					if (!(failure instanceof Failure) || failure.kind !== Failure.Gap) throw failure;
+					// spec-04: an optional scope's missing path makes no record and no gap.
+					if (scope.optional && failure.code === Issue.Missing) continue;
 					const fields = { source: parent.location + (failure.location ?? "") };
 					if (failure.path !== undefined && failure.path !== null) fields.path = failure.path;
 					yield report(Ledger.Gap, { target: owner[0], reason: failure.code, ...fields });

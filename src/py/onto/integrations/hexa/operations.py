@@ -81,7 +81,8 @@ class HexaBindingOperator:
 		scopes = []
 		for item in compiler.compile():
 			template = item.template()
-			scopes.append(ScopeProgram(item.name, item.scope.type, item.selector(), item.shape(), template, tuple(item.outer), item.levels(), picks=item.levelPicks()))
+			scopes.append(ScopeProgram(item.name, item.scope.type, item.selector(), item.shape(), template, tuple(item.outer), item.levels(), picks=item.levelPicks(),
+				optional=item.scope.optional))
 		program = BindingProgram(self.ontology, binding, self.mode, dict(compiler.slots), {scope.name: scope.shape for scope in scopes},
 			{scope.name: scope.template for scope in scopes}, {scope.name: scope.selector for scope in scopes}, sorted(compiler.used),
 			StageNamespace({}), scopes, formats, inventory, Model(self.ontology))

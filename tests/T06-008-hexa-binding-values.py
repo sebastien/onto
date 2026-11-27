@@ -109,6 +109,28 @@ def test_a_missing_record_is_still_a_gap():
 	assert [gap.target for gap in report.gaps] == ["Crm/Adviser"]
 
 
+def readOptional(document: dict):
+	"""A binding whose owner scope says some documents lack the owner (spec-04 Scope lines)."""
+	ops = HexaBindingOperator(CRM, mode="lenient")
+	program = ops.compile(loadBinding(CRM, Source("crm.bind", BINDING.replace("Adviser <- owner {id=id}", "Adviser <- owner {id=id, optional}"))))
+	result = asyncio.run(run(CLOCK, program.stages.BindingRead, [{"src": SRC, "document": document}]))
+	log, report = ops.result(program, result)
+	return printObservationsLog(CRM, log), report
+
+
+def test_an_optional_scope_makes_no_instance_and_no_gap_for_a_missing_record():
+	text, report = readOptional({"id": 1, "ownerId": 7, "advisers": []})
+	assert "Client_1:Client" in text and "Adviser_7.Name" not in text
+	assert report.gaps == []
+
+
+def test_an_optional_scope_reads_a_present_record_and_reports_its_other_gaps():
+	text, _ = readOptional({"id": 1, "ownerId": 7, "advisers": [], "owner": {"id": 7, "name": "Kelly"}})
+	assert "Adviser_7.Name Kelly" in text
+	_, report = readOptional({"id": 1, "ownerId": 7, "advisers": [], "owner": {"name": "Kelly"}})
+	assert [gap.target for gap in report.gaps] == ["Crm/Adviser"]
+
+
 DEPOSITS = loadOntology([Source("deposits.onto", "@ontology Deposits\nDeposit\n  Cash Number\n  Gift Number\n  Count Integer\n  Kind Text\n  Known Boolean\n")])
 DEPOSIT_BINDING = """@binding Deposits
 Deposit <- $ {id=id}

@@ -245,6 +245,23 @@ def testAFieldAloneTestsThatItHasAValue():
 	assert "  Name <- name {when=name}\n" in printBinding(binding)
 
 
+def testAnOptionalScopeRoundTrips():
+	binding = load("Person <- people[*].person {id=id, optional}\n  Name <- name\n")
+	assert binding.scopes[0].optional is True
+	assert "Person <- people[*].person {id=id, optional}\n" in printBinding(binding)
+	data = bindingToJson(binding)
+	schemaValidator("mapping").validate(data)
+	assert data["scopes"][0]["optional"] is True and "optional" not in bindingToJson(load("Person <- people[*] {id=id}\n"))["scopes"][0]
+	assert bindingToJson(bindingFromJson(ONTOLOGY, data)) == data
+
+
+@pytest.mark.parametrize("body", ["Person <- people[*] {id=id, optional=yes}\n", "Person <- people[*] {id=id, optional, optional}\n",
+	"Person <- people[*] {id=id}\n  Name <- name {optional}\n"])
+def testOptionalIsAFlagOfScopeLines(body: str):
+	with pytest.raises(FormatError):
+		load(body)
+
+
 def testStructuredTargetsTakeTheirFieldsNotADocumentObject():
 	"""A structure has no scalar value: `check` rejects what the executor cannot read."""
 	ontology = loadOntology([Source("s.onto", "@ontology S rev=v1\nPerson\n  Address Address\nAddress =\n  City Text\n")])

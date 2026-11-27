@@ -408,7 +408,7 @@ test        := path [":" value ("|" value)*]
 @at <- <expr>
 @valid <- <expr>
 @columns <field>, <field>, ...
-<Type> <- <path> {id=<expr>, valid=<expr>, ctx=<expr>, deleted=<condition>} [-- doc]
+<Type> <- <path> {id=<expr>, valid=<expr>, ctx=<expr>, deleted=<condition>, optional} [-- doc]
   <Attr> <- <expr> [{annotations}] [-- doc]
   <Facet.Attr> <- <expr> [{annotations}]
   [<Facet>] [{annotations}]
@@ -467,6 +467,12 @@ Body lines are evaluated from that value (the **record**).
   for which the [condition](#conditions) holds (`deleted=status:Deleted|Merged`)
   produces the retraction `- h` instead of claims. This is how a
   `complete=none` (delta) feed removes instances.
+- A path missing from the document is a gap, reported for the record above it,
+  since a source that renamed or dropped a field would otherwise lose its
+  instances silently. `optional` says some records lack the path: a missing
+  path then makes no instance and no gap, as a `null` value does. A list mixing
+  kinds of item, such as a timeline of notes and emails, reads each kind with
+  an optional scope line: `Record/Comment <- $[*].comment {id=comment.id, optional}`.
 - A type may have several scope lines (instances from several places in the
   document); each is applied.
 
@@ -1424,7 +1430,8 @@ A function library:
   own kind.
 - Bindings use `"ontology"` instead of `from`/`to`, scopes with `"type"` and a
   `"path"` expression, `"id"`, `"valid"` and `"ctx"` expressions, an optional
-  `"deleted"` condition (the form of `when`), and an optional document `"at"`,
+  `"deleted"` condition (the form of `when`), `"optional": true` for an
+  optional scope line, and an optional document `"at"`,
   `"valid"` and `"columns"`. Attribute lines may carry `"unset"`, a string. `{"meta": "format"}`
   is `$format`.
 - Header keys are strings, except `candidates` (a boolean) and `confirm` (an

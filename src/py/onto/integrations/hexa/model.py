@@ -58,6 +58,7 @@ class ScopeProgram:
 	parent: str | None = None
 	picks: list[int | None] = field(default_factory=list)  # per level, the one position an index step keeps
 	source: str | None = None
+	optional: bool = False  # a missing path makes no record and no gap (spec-04 Scope lines)
 
 
 @dataclass(slots=True)
