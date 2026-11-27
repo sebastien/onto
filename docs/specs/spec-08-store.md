@@ -544,6 +544,13 @@ A batch read takes selections in several partitions and answers each
 separately, with its state or its error. Each partition is authorized on its
 own, so one denial does not fail the others.
 
+```json
+{ "reads": [{ "partition": "Client/Person_U1", "select": [{ "population": "checks" }] }, { "partition": "Household/Household_H1" }] }
+```
+
+The answer's `results` follow the order of `reads`: a state read's answer, or
+the partition with the `status`, `error` and `message` of its refusal.
+
 ### References
 
 The store indexes, per scope, the partitions whose statements refer to a

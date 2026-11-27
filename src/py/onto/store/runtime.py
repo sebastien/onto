@@ -388,6 +388,131 @@ class ObservationStore:
 			self.db.execute("INSERT INTO retries VALUES (?, ?, ?, ?, ?, ?)", (partition.scope, partition.id, stamps["requestId"], digest, canonical(answer), stamps["recorded"]))
 		return answer
 
+	# -- Reads -------------------------------------------------------------------
+
+	def audit(self, partition: Partition, principal: str, selection: Any) -> None:
+		"""Record a read: its principal, partition, selection and time (spec-08 "Authorization and audit")."""
+		with self.db:
+			self.db.execute("INSERT INTO reads VALUES (?, ?, ?, ?, ?)", (partition.scope, partition.id, principal, canonical(selection), timeText(self.clock())))
+
+	def reconcile(self, partition: Partition, statements: list[Json]) -> Observations:
+		"""Spec-02 reconciliation of statements, with the log order as statement order."""
+		stripped = [{key: value for key, value in entry.items() if key not in STAMPS} | {"n": entry["seq"]} for entry in statements]
+		observations = Observations({"ontology": self.ontology.namespace, "scope": partition.scope}, {},
+			{handle: {"type": type} for handle, type in partition.types.items()},
+			[item for item, entry in zip(stripped, statements) if not entry.get("retract")],
+			[item for item, entry in zip(stripped, statements) if entry.get("retract")])
+		try:
+			return reconcileObservations(self.ontology, observations, "lenient")
+		except FormatError as error:
+			raise StoreError(500, "reconciliation", str(error)) from error
+
+	def slotVersions(self, statements: list[Json]) -> dict[str, tuple[Json, int]]:
+		"""Each slot's identity and version: the `seq` of the latest statement that changed it."""
+		found: dict[str, tuple[Json, int]] = {}
+		for entry in statements:
+			subject = self.subjectOf(entry)
+			if entry.get("retract") and entry.get("exists") and "p" not in entry:
+				for key, (slot, _) in list(found.items()):
+					if json.loads(key)[0] == subject:
+						found[key] = (slot, entry["seq"])
+			slot = {key: entry[key] for key in ("s", "p", "facet", "rel", "roles", "ctx", "same", "distinct") if key in entry}
+			if not slot.keys() & {"p", "facet", "rel", "same", "distinct"}:
+				slot["exists"] = True
+			found[slotKey(entry)] = (slot, entry["seq"])
+		return found
+
+	def selection(self, partition: Partition, select: Any, through: int) -> tuple[dict[str, set[str] | None], dict[str, str]]:
+		"""The selected subjects, each with its slots (None: all), and a cursor per population page with more members."""
+		if select is None:
+			return {handle: None for handle in partition.types}, {}
+		if not isinstance(select, list):
+			raise invalid("select", "select lists subjects and populations")
+		subjects: dict[str, set[str] | None] = {}
+		cursors: dict[str, str] = {}
+		for item in select:
+			if not isinstance(item, dict) or ("s" in item) == ("population" in item):
+				raise invalid("select", "A selection entry names a subject (s) or a population")
+			slots = set(item["slots"]) if "slots" in item else None
+			if "s" in item:
+				handles = [item["s"]]
+			else:
+				if not any(population["name"] == item["population"] for population in [partition.root, *partition.kind["populations"]]):
+					raise invalid("select", f"'{item['population']}' is not a population of '{partition.kind['kind']}'")
+				page = item.get("page", {})
+				after = int(page["after"]) if "after" in page else None
+				rows = self.db.execute("SELECT handle, first FROM instances WHERE scope = ? AND partition = ? AND generation = ? AND population = ? "
+					"AND first <= ? AND (? IS NULL OR first < ?) ORDER BY first DESC", (partition.scope, partition.id, partition.generation,
+					item["population"], through, after, after)).fetchall()
+				size = page.get("size", len(rows))
+				handles = [handle for handle, _ in rows[:size]]
+				if len(rows) > size:
+					cursors[item["population"]] = str(rows[size - 1][1])
+			for handle in handles:
+				known = subjects.get(handle, set())
+				subjects[handle] = None if known is None or slots is None else known | slots
+		return subjects, cursors
+
+	def state(self, request: Any, partitionId: str, body: Json | None = None) -> Json:
+		"""The reconciled state of a selection of a partition (spec-08 "State")."""
+		scope, principal = self.authorize(request, partitionId, "read")
+		partition = self.partition(scope, partitionId)
+		body = body or {}
+		include = body.get("include", [])
+		if not isinstance(include, list) or set(include) - {"orphaned", "archived", "deletion"}:
+			raise invalid("include", "include names lifecycle states: orphaned, archived or deletion")
+		through = body.get("asOf", partition.head)
+		if not isinstance(through, int) or not 0 <= through <= partition.head:
+			raise invalid("asOf", f"asOf is a seq of the log, at most {partition.head}")
+		statements = self.statements(partition, through)
+		subjects, cursors = self.selection(partition, body.get("select"), through)
+
+		def selected(item: Json) -> bool:
+			subject = self.subjectOf(item)
+			if subject not in subjects:
+				return False
+			slots = subjects[subject]
+			return slots is None or item.get("exists") is True and "p" not in item or item.get("p") in slots or \
+				f"[{item.get('facet')}]" in slots or item.get("rel") in slots
+
+		state = self.reconcile(partition, statements)
+		claims = [item for item in state.claims if selected(item)]
+		handles = {handle for item in claims for handle in [self.subjectOf(item), *handlesOf(item)]} | set(subjects) & set(state.instances)
+		chosen = Observations(state.obs, state.sources, {handle: item for handle, item in state.instances.items() if handle in handles}, claims, [],
+			state.diagnostics)
+		versions = [slot | {"version": version} for slot, version in self.slotVersions(statements).values() if selected(slot)]
+		self.audit(partition, principal, body.get("select"))
+		return {"partition": partition.id, "generation": partition.generation, "head": partition.head, "state": partition.state,
+			**({"asOf": through} if "asOf" in body else {}), "versions": versions, "observations": observationsToJson(chosen),
+			**({"pages": cursors} if cursors else {})}
+
+	def log(self, request: Any, partitionId: str, after: int = 0, limit: int | None = None) -> Json:
+		"""The statements and records after a `seq`, in order, with their stamps (spec-08 "Log")."""
+		scope, principal = self.authorize(request, partitionId, "read")
+		partition = self.partition(scope, partitionId)
+		if not isinstance(after, int) or not 0 <= after <= partition.head:
+			raise invalid("cursor", f"A log cursor is a seq of the log, at most {partition.head}")
+		size = min(limit or self.limits["logPage"], self.limits["logPage"])
+		rows = self.db.execute("SELECT seq, kind, body FROM entries WHERE scope = ? AND partition = ? AND generation = ? AND seq > ? ORDER BY seq LIMIT ?",
+			(scope, partition.id, partition.generation, after, size)).fetchall()
+		through = rows[-1][0] if rows else after
+		self.audit(partition, principal, {"log": after})
+		return {"partition": partition.id, "generation": partition.generation, "after": after, "through": through, "head": partition.head,
+			"hasMore": through < partition.head, "entries": [json.loads(body) | {"kind": kind} for _, kind, body in rows]}
+
+	def stateMany(self, request: Any, body: Json) -> Json:
+		"""Selections of several partitions, each authorized and answered on its own (spec-08 "Several partitions")."""
+		reads = body.get("reads") if isinstance(body, dict) else None
+		if not isinstance(reads, list) or any(not isinstance(item, dict) or not isinstance(item.get("partition"), str) for item in reads):
+			raise invalid("reads", "A batch read lists partitions with their selections")
+		results = []
+		for item in reads:
+			try:
+				results.append(self.state(request, item["partition"], {key: value for key, value in item.items() if key != "partition"}))
+			except StoreError as error:
+				results.append({"partition": item["partition"], "status": error.status, **error.toJson()})
+		return {"results": results}
+
 
 __all__ = ["ObservationStore", "StoreError", "Forbidden", "timeText"]
 

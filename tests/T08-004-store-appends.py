@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 import pytest
 
-from onto import Source, loadObservations, observationsToJson
 from onto.handles import sourceQualifiedHandle
-from onto.store.runtime import Forbidden, ObservationStore, StoreError
-from tests.helpers import specExample
-from tests.store import EXAMPLE, FINANCE, OPS, checked
+from onto.store.runtime import ObservationStore, StoreError
+from tests.store import BUNDLE, CHECK, EXAMPLE, NOW, OPS, SCOPE, USER, appended, batch, checked, newStore
 
 # -----------------------------------------------------------------------------
 #
@@ -19,55 +17,14 @@ from tests.store import EXAMPLE, FINANCE, OPS, checked
 # -----------------------------------------------------------------------------
 
 
-SCOPE = "adviser-app"
-NOW = datetime(2026, 11, 26, 9, 30, tzinfo=UTC)
-USER = {"principal": "user:adviser"}
-BUNDLE = OPS.bundle(checked(EXAMPLE))
 ISSUERS = OPS.bundle(checked("@store Issuers rev=1 edit=edit:adviser-app\n@use Finance as F\n@system Exchange -> Finance\n\n"
 	"@partition Issuer(company: F/Company)\n"))
-HEADER = "@obs Finance by=app:intake\n@src e=edit:adviser-app\n@src e\n@scope adviser-app\n"
-
-
-def authorize(request, partition, access):
-	if request is None:
-		return None
-	if request.get("deny"):
-		raise Forbidden("not this client")
-	return {"scope": request.get("scope", SCOPE), "principal": request["principal"]}
-
-
-def newStore(bundle: dict = BUNDLE, clock=lambda: NOW) -> ObservationStore:
-	return ObservationStore(bundle, FINANCE, authorize, clock=clock)
-
-
-def batch(text: str, known: dict[str, str] | None = None, typed: dict[str, str] | None = None) -> dict:
-	"""The JSON form of statements, without the types of the handles the store already knows (`known`), with those
-	of handles new to it that the statements only mention (`typed`)."""
-	known = {"Person_U1": "Person"} if known is None else known
-	header, _, body = text.partition("\n\n") if text.startswith("@obs") else (HEADER, "", text)
-	declared = "".join(f"@type {handle} {type}\n" for handle, type in (known | (typed or {})).items())
-	data = observationsToJson(loadObservations(FINANCE, Source("batch.obs", f"{header}\n{declared}\n{body}")))
-	for handle in known:
-		data["instances"].pop(handle, None)
-	return data
 
 
 def refused(store: ObservationStore, partition: str, body: dict, request=USER) -> StoreError:
 	with pytest.raises(StoreError) as error:
 		store.append(request, partition, body)
 	return error.value
-
-
-EXAMPLE_BATCH = batch(specExample("spec-08-store", 2))
-CHECK = {"requestId": "3fe1c31e-24ad-4ca1-88d9-729045834e51", "observations": EXAMPLE_BATCH,
-	"expect": [{"s": "IdentityCheck_C41", "exists": True, "version": 0}]}
-
-
-def appended(*bodies: dict, store: ObservationStore | None = None) -> ObservationStore:
-	store = store or newStore()
-	for body in bodies:
-		store.append(USER, "Client/Person_U1", body)
-	return store
 
 
 # -----------------------------------------------------------------------------
