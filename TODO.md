@@ -13,16 +13,18 @@
   and tests; the implementation notes up to 2026-11-26 are in git (`TODO.md`
   at commit `da01e2c`).
 
-## Status (2026-11-26)
+## Status (2026-11-28)
 
 Implemented in Python: ontologies (spec-01), with the `Meta` domain and
 semantic diff; observations (spec-02); bindings, mappings and function
 libraries (spec-04); referential policies (spec-05); the hexa integration,
 including rooted views (spec-06); and the CLI (spec-07). The JavaScript runtime
-(`src/js/onto/`) executes bundles that Python compiles. `make test`: 1,989
-passed on Python 3.15. Not started: overlays (spec-03), registry-backed
-identities (spec-05), the observation store (spec-08), sessions (spec-09) and
-operations (spec-10).
+(`src/js/onto/`) executes bundles that Python compiles. The observation
+store's core (spec-08: store files, appends, reads) runs in Python and in
+JavaScript, with an HTTP handler, a client and a Cloudflare adapter; sessions
+(spec-09) plan and read page views and route changes in Python. `make test`:
+2,274 passed on Python 3.15. Not started: overlays (spec-03), registry-backed
+identities (spec-05) and operations (spec-10).
 
 ## Open work
 
@@ -49,8 +51,10 @@ operations (spec-10).
      (`Binding.PathUnsupported`).
 7. **Python 3.14**: run the suite on the minimum supported version; only 3.15
    is installed locally.
-8. **Observation store** (spec-08): store files, the protocol, and the
-   JavaScript and Python implementations
+8. **Observation store** (spec-08), beyond its core: lifecycle, redaction,
+   purge, merges, the reference index, erasure and the change feed, then
+   indexes, in Python and JavaScript, with the Cloudflare adapter's scope
+   objects; and the `Meta` checks in the JavaScript store's validation
    (`domain/decision:ObservationStore+026`).
 9. **Sessions** (spec-09): holders, store reads, list views and list reads,
    limits and pages, notices and changes, in Python and JavaScript, with the
