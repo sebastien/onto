@@ -149,10 +149,17 @@ def test_each_population_is_read_from_the_read_selecting_its_rows():
 	assert [step["step"] for step in plan["steps"]] == ["Matter", "MatterNotes", "ClientNotes"]
 
 
-def test_without_a_selection_the_first_read_of_the_rows_serves_every_filing():
+def test_without_a_selection_rows_reached_backwards_come_from_the_read_keyed_by_their_parent():
+	# The matter's notes are read first and state links to clients too, but only for the notes filed under the matter:
+	# a client's notes come from the read of the client (spec-06 Rooted retrieval).
 	plan = asyncio.run(engine(reads(selecting=False)).plan("MatterNotes", SEED, FIELDS))
+	assert suppliers(plan) == {"clientNotes.Body": ["Matter", "ClientNotes", "ClientNotes"], "matterNotes.Body": ["MatterNotes", "MatterNotes"]}
+
+
+def test_a_parent_without_a_read_of_its_own_takes_the_first_read_stating_the_link():
+	catalogue = {name: read for name, read in reads(selecting=False).items() if name != "ClientNotes"}
+	plan = asyncio.run(engine(catalogue).plan("MatterNotes", SEED, ["clientNotes.Body"]))
 	assert suppliers(plan)["clientNotes.Body"] == ["Matter", "MatterNotes", "MatterNotes"]
-	assert "ClientNotes" not in [step["step"] for step in plan["steps"]]
 
 
 def test_a_report_reads_each_population_from_its_own_read():

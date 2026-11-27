@@ -1,7 +1,7 @@
 ---
 identity: "onto:decision:read-selection"
 created: 2026-11-25T22:39:36.010419+00:00
-updated: 2026-11-25T22:39:36.718175+00:00
+updated: 2026-11-27T20:37:28.864473+00:00
 title: "A read declares what its request selects, and rows are read with their own key"
 status: accepted
 date: 2026-11-26
@@ -36,6 +36,18 @@ a failed read cannot hide another's facts.
 
 **Consequences**: hosts declare what a request selects; without a declaration
 the planner behaves as before.
+
+**Amendment (2026-11-28)**: rows reached backwards are read first from the
+reads keyed by their parent population, whose input corresponds to the
+parent's type; then reachability and catalogue order decide, as before. A
+read of another key states the link only for the rows it happens to read. In
+adviceos-data, a group's timeline and a client's comment list both state links
+from notes to clients and groups: before, the read reachable first took both
+populations, so a client page read a group's interactions from the client's
+notes, and a group's members' notes came from the group's timeline. Without a
+selection, a matter's note list no longer supplies its clients' notes either
+(`tests/T06-023`). The user chose this over declaring, on each read, the links
+it reads completely, which repeats what its key says.
 
 Sources: `docs/specs/spec-06-hexa.md#rooted-retrieval`,
 `tests/T06-023-hexa-read-selection.py`, commit `09545f0`

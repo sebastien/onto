@@ -347,9 +347,15 @@ class HexaViewOperator:
 		def supplies(step, candidates):
 			return any(deps <= self.footprints[step] and not self.refutes(step, conditions) for _, _, deps, conditions in candidates)
 
-		def register(key, candidates, rows=None):
-			"""Choose the first read supplying the obligation, the reads keyed as the read of its rows (`rows`) first."""
-			order = sorted(steps, key=lambda s: rows is not None and self.reads[s].key != self.reads[rows].key)
+		def keyedBy(step: str, type: str) -> bool:
+			"""Whether a read's input corresponds to instances of `type`: the read of a group for a group's rows."""
+			return any(self.targetModel.isA(target, type) or self.targetModel.isA(type, target) for target in self.inputTargets[self.reads[step].key])
+
+		def register(key, candidates, rows=None, parent=None):
+			"""Choose the first read supplying the obligation: the reads keyed as the read of its rows (`rows`) first, or
+			for rows reached backwards, the reads keyed by their parent population's type (`parent`)."""
+			order = sorted(steps, key=lambda s: rows is not None and self.reads[s].key != self.reads[rows].key
+				or parent is not None and not keyedBy(s, parent))
 			supplier = next((s for s in order if supplies(s, candidates)), None)
 			matches[key] = [{"resolved": True, "supplier": supplier}] if candidates else []
 			return supplier
@@ -370,7 +376,10 @@ class HexaViewOperator:
 					passing = self.passing({c[int(not hop.reverse)] for c in candidates}, filters, produces)
 					candidates = [c for c in candidates if c[int(not hop.reverse)] in passing]
 					rowTypes[alias] = passing
-					supplier = register(hop.key, candidates, None if hop.reverse else rowReads[hop.parent])
+					# NOTE: Rows reached backwards are filed under their parent: a read of another key states their link
+					# only for the rows it happens to read (spec-06 Rooted retrieval).
+					supplier = register(hop.key, candidates, None if hop.reverse else rowReads[hop.parent],
+						view.populations[hop.parent].type if hop.reverse else None)
 					rowReads[alias] = supplier if hop.reverse else None
 				else:
 					candidates = [c for c in candidates if c[0] in rowTypes[alias] and (

@@ -51,6 +51,12 @@ bindings supply the source row, guards, value and qualifiers. The rows of a
 population reached backwards (`<-`) are those of the read stating their link,
 and the reads keyed as that one come first for their obligations: a read of
 another key reads other rows, and failing, would hide these rows' facts.
+That read is chosen first among the reads keyed by the parent population,
+whose input corresponds to the parent's type: rows filed under a group come
+from a read of the group (its timeline), and rows filed under a client from a
+read of the client (their comment list), though each read also states links
+to the other. A read of another key states the link only for the rows it
+happens to read.
 A population's value filters (`where member=value`) narrow its rows, before
 any read is chosen for them, to the source types a mapping line can give the
 tested value: a literal gives its own value, a value map the values it maps to,
