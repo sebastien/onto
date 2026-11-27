@@ -11,6 +11,7 @@ import { http } from "hexa/http.js"; // Also declares the `Request` codes of fai
 import { run } from "hexa/runtime.js";
 import { Model, ViewOperator, ViewReadError, loadBindingProgram, loadMappingProgram, printObservationsCompact, printObservationsLog } from "../../src/js/onto/index.js";
 import { pyJson, valueKey } from "../../src/js/onto/values.js";
+import { BatchValidator, StoreError } from "../../src/js/onto/store/validate.js";
 
 const PATH = process.env.ONTO_CONFORMANCE ?? "build/conformance.json";
 const data = existsSync(PATH) ? JSON.parse(readFileSync(PATH, "utf8")) : null;
@@ -167,9 +168,26 @@ function expected(item) {
 	return Object.fromEntries(keys.map(key => [key, output[key]]));
 }
 
+/** A store's validation of a batch: accepted, or rejected with Python's status, error, check and statement. */
+const validators = new Map();
+function validated(item) {
+	if (!validators.has(item.bundle)) validators.set(item.bundle, new BatchValidator(get(item.bundle)));
+	try {
+		validators.get(item.bundle).validate(get(item.data), item.partition);
+		return { accepted: true };
+	} catch (error) {
+		if (!(error instanceof StoreError)) throw error;
+		return { status: error.status, error: error.error, ...error.details };
+	}
+}
+
 if (!data) test.skip(`conformance cases (record ${PATH} first)`, () => {});
 else for (const [index, item] of data.cases.entries()) {
 	const label = `${index} ${item.kind}${item.method ? " " + item.method : ""} ${item.test}`;
+	if (item.kind === "store-validate") {
+		test(label, () => expect(validated(item)).toEqual(item.outcome));
+		continue;
+	}
 	if (item.unsupported) {
 		test.skip(`${label}: ${item.unsupported}`, () => {});
 		continue;

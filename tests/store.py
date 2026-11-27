@@ -26,9 +26,19 @@ def financeText(extra: str = "") -> str:
 
 
 # NOTE: A member keeping a personal value about another kind's key entity (spec-08 "Personal facts stay home"),
-# a facet of dividends that the exchange's mapping does not fill, which a store may hold, and a person's phones,
-# keyed by their use (spec-01 Keyed structures).
+# a facet of dividends that the exchange's mapping does not fill, which a store may hold, a person's phones,
+# keyed by their use (spec-01 Keyed structures), and a fee with an exclusive group, a conditional facet and a range,
+# which batch validation checks (spec-02).
 EXTRA = """
+Fee
+  Card Text {one=Payment}
+  Account Text {one=Payment}
+  Kind Text
+  Ages Range<Integer>
+
+Waived of Fee {when=Kind:Waived}
+  Reason Text
+
 PhoneUse = Mobile|Home|Work                     -- What a phone number is used for
 
 Phone =                                         -- A phone number for one use

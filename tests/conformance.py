@@ -270,11 +270,34 @@ def install() -> None:
 
 	HexaViewOperator.__init__, HexaViewOperator.plan, HexaViewOperator.report, HexaViewOperator.retrieve = viewInit, plan, report, retrieve
 
+	# NOTE: A store's batch validation (spec-08 "Validation"): the JavaScript store must accept what Python accepts and
+	# reject the rest with the same check and statement, from the bundle and what the partition already types.
+	from onto.store.runtime import ObservationStore, StoreError
+
+	originalValidate = ObservationStore.validate
+
+	def validate(self, data, partition):
+		case = {"kind": "store-validate", "test": CURRENT["test"], "bundle": exported(self.bundle, lambda: self.bundle)["key"],
+			"partition": {"id": partition.id, "anchor": partition.anchor, "types": dict(partition.types)}, "data": store(data)}
+		CASES.append(case)
+		try:
+			result = originalValidate(self, data, partition)
+		except StoreError as error:
+			case["outcome"] = {"status": error.status, "error": error.error, **{key: error.details[key] for key in ("check", "n") if key in error.details}}
+			raise
+		case["outcome"] = {"accepted": True}
+		return result
+
+	ObservationStore.validate = validate
+
 
 def write() -> None:
 	"""Resolve each case's host answers, recorded until the end of the session, and write the cases."""
 	cases = []
 	for case in CASES:
+		if "operator" not in case:
+			cases.append(case)  # A store case carries what it needs.
+			continue
 		operator = case.pop("operator")
 		calls = dict(getattr(operator, "conformanceCalls", {}))
 		for nested in ("binder", "mapper"):
