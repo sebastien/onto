@@ -20,6 +20,7 @@ from ..handles import handleKey, sourceParts
 ORIGIN_STORE = "@store"
 ORIGIN_SHARED = "@shared"
 RE_ELEMENT_KEY = re.compile(r"\[[^\]]*\]")
+RE_QUALIFIED_KEY = re.compile(r"\[(?:[^\]/]*/)*([^\]/]*)\]")
 
 
 # -----------------------------------------------------------------------------
@@ -47,8 +48,13 @@ def related(bundle: dict[str, Any], left: str, right: str) -> bool:
 	return isA(bundle, left, right) or isA(bundle, right, left)
 
 
+def elementPath(path: str) -> str:
+	"""An attribute path with its element keys as their last segment: `Phones[Core/PhoneType/Mobile]` is `Phones[Mobile]`."""
+	return RE_QUALIFIED_KEY.sub(r"[\1]", path)
+
+
 def slotOf(claim: dict[str, Any]) -> tuple[str, str] | None:
-	"""A statement's slot kind and name; None for identity links, which no instance holds."""
+	"""A statement's slot kind and name, keyed elements included; None for identity links, which no instance holds."""
 	if "same" in claim or "distinct" in claim:
 		return None
 	if "rel" in claim:
@@ -56,18 +62,19 @@ def slotOf(claim: dict[str, Any]) -> tuple[str, str] | None:
 	if "facet" in claim:
 		return "facet", claim["facet"]
 	if "p" in claim:
-		return "attr", RE_ELEMENT_KEY.sub("", claim["p"])
+		return "attr", elementPath(claim["p"])
 	return "exists", ""
 
 
 def fills(system: dict[str, Any], bundle: dict[str, Any], type: str, kind: str, name: str) -> bool:
-	"""Whether `system`'s mapping fills the slot on `type` or a type compatible with it (spec-09 "Holders")."""
+	"""Whether `system`'s mapping fills the slot on `type` or a type compatible with it (spec-09 "Holders"). Keyed
+	elements are distinct slots: a mapping filling `Phones[Mobile]` does not fill `Phones[Home]`."""
 	for target, filled in system["types"].items():
 		if kind == "rel" and name in filled["relations"]:
 			return True
 		if not related(bundle, type, target):
 			continue
-		if kind == "attr" and name in {RE_ELEMENT_KEY.sub("", item) for item in filled["attrs"]} or kind == "facet" and name in filled["facets"]:
+		if kind == "attr" and name in {elementPath(item) for item in filled["attrs"]} or kind == "facet" and name in filled["facets"]:
 			return True
 	return False
 
@@ -112,7 +119,9 @@ def holds(bundle: dict[str, Any], origin: str, type: str, claim: dict[str, Any])
 		producers = bundle["origins"].get(type, {}).get("systems", []) if origin == ORIGIN_SHARED else [origin]
 		if any(fills(system, bundle, type, kind, name) for system in bundle["systems"] if system["name"] in producers):
 			return False
-	return not (kind == "attr" and any(item["path"] == name and isA(bundle, type, item["type"]) for item in bundle["exclusions"]))
+	# NOTE: Exclusions name attributes without keys, so they exclude every element.
+	unkeyed = RE_ELEMENT_KEY.sub("", name)
+	return not (kind == "attr" and any(item["path"] == unkeyed and isA(bundle, type, item["type"]) for item in bundle["exclusions"]))
 
 
 __all__ = ["ORIGIN_STORE", "ORIGIN_SHARED", "originOf", "holds", "slotOf", "lineage", "isA", "related"]

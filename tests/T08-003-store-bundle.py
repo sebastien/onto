@@ -127,10 +127,21 @@ def testHeldSlots(origin: str, type: str, claim: dict, held: bool) -> None:
 	assert holds(BUNDLE, origin, type, claim) is held
 
 
+def testKeyedElementsAreDistinctSlots() -> None:
+	exchange, = BUNDLE["systems"]
+	types = {**exchange["types"], "Finance/Company": {**exchange["types"]["Finance/Company"], "attrs": ["Code", "Phones[Mobile].Number"]}}
+	bundle = {**BUNDLE, "systems": [{**exchange, "types": types}]}
+	assert holds(bundle, "Exchange", "Finance/Company", {"p": "Phones[Mobile].Number"}) is False
+	assert holds(bundle, "Exchange", "Finance/Company", {"p": "Phones[Core/PhoneType/Mobile].Number"}) is False
+	assert holds(bundle, "Exchange", "Finance/Company", {"p": "Phones[Home].Number"}) is True
+
+
 def testExclusionsAreNeverHeld() -> None:
 	bundle = OPS.bundle(checked(EXAMPLE.replace("\n@index", "\n- F/Person.Email {reason=private}\n\n@index", 1)))
 	assert holds(bundle, ORIGIN_STORE, "Finance/Person", {"p": "Email"}) is False
 	assert holds(bundle, ORIGIN_STORE, "Finance/Person", {"p": "DateOfBirth"}) is True
+	excluded = OPS.bundle(checked(EXAMPLE.replace("\n@index", "\n- F/Person.Name.Surname\n\n@index", 1)))
+	assert holds(excluded, ORIGIN_STORE, "Finance/Person", {"p": "Name.Surname"}) is False
 
 
 # -----------------------------------------------------------------------------
