@@ -51,6 +51,13 @@ bindings supply the source row, guards, value and qualifiers. The rows of a
 population reached backwards (`<-`) are those of the read stating their link,
 and the reads keyed as that one come first for their obligations: a read of
 another key reads other rows, and failing, would hide these rows' facts.
+A population's value filters (`where member=value`) narrow its rows, before
+any read is chosen for them, to the source types a mapping line can give the
+tested value: a literal gives its own value, a value map the values it maps to,
+any other line any value. A type no line gives the member cannot pass, since
+missing evidence never satisfies a filter. So notes filed as comments are not
+taken from a read of logged meetings, whose types map to `Meeting` or `Email`,
+whatever the catalogue order. A read's `selects` does not narrow the values.
 A binding on a specialisation supplies the inherited source slots too. A line
 reading through a [lookup](spec-04-mapping.md#lookups) also needs the rows it
 looks up: the read must supply the looked-up type and the compared attributes

@@ -63,9 +63,7 @@ operations (spec-10).
     inventories and the `.ids` sidecar from an OpenAPI description; wanted
     once a second OpenAPI source appears
     (`domain/decision:OpenApiExtraction+031`).
-12. **A read providing several keys** (spec-06), instead of one read per key
-    of a shared response (`domain/decision:MultiKeyReads+032`).
-13. **Histories** (spec-09 History): newest-first log reads with `was`
+12. **Histories** (spec-09 History): newest-first log reads with `was`
     (spec-08), the `history` role in spec-06's catalogue, and `history` in
     sessions, in Python and JavaScript; after the AdviceOS read path's first
     milestone (`domain/decision:FactHistory+036`).

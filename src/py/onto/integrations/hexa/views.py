@@ -101,6 +101,19 @@ def segmentNeeds(segment) -> set[tuple[str, str]]:
 	return {(segment.owner, unkeyed(segment.key))}
 
 
+def lineValues(reader, line) -> frozenset | None:
+	"""The values a mapping line can give, as a filter compares them: a literal's own, a value map's targets; None for any."""
+	expr = line.expr
+	if expr is None:
+		return None
+	for kind in ("text", "number", "boolean"):
+		if kind in expr:
+			return frozenset([expr[kind]])
+	if "call" in expr and len(expr["args"]) == 1 and (decl := reader.owner.calls.evaluator.maps.get(expr["call"])) is not None:
+		return frozenset(item.toValue for item in decl.mapLines if item.toValue is not None)
+	return None
+
+
 def readCode(reason: object):
 	"""The code of a read unavailable for `reason`: `ViewRead.<reason>`, or `ViewRead.UnreadableResponse`; declared on first use."""
 	name = "ViewRead." + (reason if isinstance(reason, str) and RE_REASON.fullmatch(reason) else "UnreadableResponse")
@@ -276,6 +289,8 @@ class HexaViewOperator:
 		associationFields = {role for pair in roleFields.values() for role in pair}
 		written = fields | associationFields
 		inputs = defaultdict(list)
+		# Per field, each line's subject row type and the values it can give (None: any), for population filters.
+		produces = defaultdict(list)
 		# Named scopes can mint separate association handles even when their source and target types match.
 		rolesWritten = defaultdict(lambda: defaultdict(list))
 		for reader in self.scopes:
@@ -314,6 +329,7 @@ class HexaViewOperator:
 					a, b = (objectType, subjectType) if line.verb and line.verb != f.member else (subjectType, objectType)
 					if f in fields:
 						inputs[f].append((a, b, required, conditions))
+						produces[f].append((subjectType, lineValues(reader, line)))
 					if f in associationFields:
 						for origin in origins:
 							rolesWritten[id(origin)][f].append((objectType, dest, required | {(origin.source, "")}, conditions))
@@ -341,14 +357,19 @@ class HexaViewOperator:
 		# A shared target type need not have the same source rows in two populations, nor the same read: rows reached
 		# backwards are those of the read stating their link. A read keyed otherwise reads other rows (notes filed under
 		# another key), and failing, would hide these rows' facts; among reads of their key, catalogue order decides.
+		# A population's filters narrow its rows to the types a line can give the tested value (`passing`), before the read
+		# of its link is chosen: rows that cannot pass the filter do not decide which read gives the population its rows.
 		rowTypes = {view.root: set(self.sourceModel.lineage(view.input.path))}
 		rowReads = {view.root: None}
 		for alias, path in view.paths.items():
+			filters = [h for h in path if h.population == alias and h.test is not None]
 			for hop in (h for h in path if h.population == alias):
 				candidates = inputs[hop.field]
 				if hop.test is None:
 					candidates = [c for c in candidates if c[int(hop.reverse)] in rowTypes[hop.parent]]
-					rowTypes[alias] = {c[int(not hop.reverse)] for c in candidates}
+					passing = self.passing({c[int(not hop.reverse)] for c in candidates}, filters, produces)
+					candidates = [c for c in candidates if c[int(not hop.reverse)] in passing]
+					rowTypes[alias] = passing
 					supplier = register(hop.key, candidates, None if hop.reverse else rowReads[hop.parent])
 					rowReads[alias] = supplier if hop.reverse else None
 				else:
@@ -359,6 +380,19 @@ class HexaViewOperator:
 			alias = projection.population
 			register(key, [c for c in inputs[projection.field] if c[0] in rowTypes[alias]], rowReads[alias])
 		return matches
+
+	def passing(self, types: set, filters: list, produces: dict) -> set:
+		"""The row types some line of which can give each value filter's tested value (spec-06 Rooted retrieval).
+
+		A filter tests a value exactly, and missing evidence cannot satisfy it: a type no line writes the member for, or
+		whose lines give only other values, cannot pass. Ancestor tests are not values."""
+		for hop in filters:
+			if hop.ancestor or not isinstance(hop.test, (str, bool)):
+				continue
+			lines = produces.get(hop.field, ())
+			types = {t for t in types if t is None or any((t == a or self.sourceModel.isA(t, a)) and (values is None or hop.test in values)
+				for a, values in lines)}
+		return types
 
 	def checkValue(self, param: ViewInput, value) -> None:
 		"""Check the concrete JSON argument against its declared source key before using it for a read."""

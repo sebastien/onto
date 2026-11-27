@@ -1,15 +1,15 @@
 ---
 identity: "onto:decision:multi-key-reads"
 created: 2026-11-27T04:07:58.428483+00:00
-updated: 2026-11-27T04:07:59.282832+00:00
+updated: 2026-11-27T19:30:14.352615+00:00
 code: DEC0032
 title: A read providing several keys
-status: proposed
+status: rejected
 date: 2026-11-27
 ---
 # A read providing several keys
 
-**Status**: proposed (not decided). **Date**: 2026-11-27.
+**Status**: rejected. **Date**: 2026-11-27; rejected 2026-11-28.
 
 **Context**: `ViewRead(provides=...)` names one `ViewInput`: a read discovers
 one key for later reads (spec-06 "Rooted retrieval"). adviceos-data's mortgage
@@ -30,6 +30,10 @@ the catalogue entry and the response checks.
 **Open questions**: whether each provided key keeps its own `via` and admitted
 scopes; how plans and reports name a read's several discoveries; whether the
 change is worth it while the workaround costs no request.
+
+**Decision** (2026-11-28): rejected by the user. One read per provided key is
+the accepted form: a run sends a shared request once, so it costs no request,
+and each read keeps its own admitted scopes, `via` link and checks.
 
 Related: [domain/decision:Compositions+029] [domain/decision:ReadSelection+024]
 [domain/component:HexaIntegration]
