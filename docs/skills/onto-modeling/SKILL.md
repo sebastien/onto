@@ -101,7 +101,7 @@ Each file gives the rule, a DON'T and a DO in onto. Load the one you need.
 | [rules/vocabularies.md](rules/vocabularies.md) | 3.1–3.8 Axes, absence, open and closed, reference entities, maps |
 | [rules/decomposition.md](rules/decomposition.md) | 4.1–4.8 Rows not columns, facets, roles, single storage, derivation |
 | [rules/time-provenance.md](rules/time-provenance.md) | 5.1–5.4 Workflow, lifecycles, intervals; 6.1–6.4 Judgements, provenance, answers, docs |
-| [rules/relations.md](rules/relations.md) | 7.1–7.6 Verbs, supertypes, associations, grammar |
+| [rules/relations.md](rules/relations.md) | 7.1–7.7 Verbs, supertypes, associations, grammar, compositions |
 | [rules/domains.md](rules/domains.md) | 8.1–8.6 Dependency direction, placement, layers |
 | [rules/source-bias.md](rules/source-bias.md) | 9.1–9.6 Records, system state, workarounds, raw values |
 

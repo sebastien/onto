@@ -183,6 +183,15 @@ def testAssociationRolesAndForwardReference():
 	assert values(log, "Recipient") == [{"set": [{"ref": "q"}]}]
 
 
+def testAStateTakesAPointValidWhenObservedAsAtAnInstant():
+	# A snapshot sees a state at its date, neither its start nor its end; an event still has no duration.
+	log = load("@obs A\ni:Income {valid=2026-09-21}\n  Payer p:Person\n  Recipient [q:Person]\n")
+	assert next(claim for claim in log.claims if claim.get("exists"))["valid"] == "2026-09-21"
+	with pytest.raises(FormatError) as raised:
+		load("@obs Finance\nd:Dividend {valid=2026-01-01..2026-02-01}\n  Instrument i:Instrument\n  Payer c:Company\n", ONTOLOGY)
+	assert "event requires a point valid" in str(raised.value)
+
+
 def testContextsAreLimitedToContextualClaims():
 	log = load("@obs A\np:Person\na:Scenario\nb:Scenario\n@ctx a\np[Review, Investor] {ctx=b}\np.Review.Included true\np.Name P\n@ctx none\np.Review.Included false {ctx=b}\n")
 	assert [claim.get("ctx") for claim in log.claims if "facet" in claim] == ["b", None]

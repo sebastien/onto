@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 import re
 from typing import Any as AnyValue
@@ -20,7 +21,8 @@ from ...functions.operations import resolveSignature
 from ...functions.runtime import FunctionEvaluator
 from ...inventory.operations import pascalCase
 from ...ontology.model import Attr, Model, Ontology, ResolvedType, TypeExpr
-from ...mapping.operations import contextModel, correspondenceScopes, correspondenceTarget
+from ...mapping.model import MappingScope, lookupOf
+from ...mapping.operations import acceptedTypes, contextModel, correspondenceScopes, correspondenceTarget, namedCorrespondenceScope
 from ...referential.operations import policyFor
 from ...text import annotation, lastSegment
 from . import vocabulary as V
@@ -546,13 +548,14 @@ class ScopeCompiler:
 				raise CompileError(V.BindingCodes.PathUnsupported, "An enclosing path must name a field")
 			if offset == 0 and self.owner.atSlot is not None and rest == [self.owner.atField]:
 				self.registerAt()
-				return optional(self.owner.atSlot)
+				return derive(V.Present, optional(self.owner.atSlot))
+			# Captured and navigated values are raw JSON, where a record's positions match `null` first.
 			captured = optional(self.capture(offset, up, rest[0]))
-			return derive(V.Field, captured, rest[1:]) if len(rest) > 1 else captured
+			return derive(V.Present, derive(V.Field, captured, rest[1:]) if len(rest) > 1 else captured)
 		key = self.relative(steps)
 		for index in range(1, len(key)):
 			if key[:index] in self.positions:
-				return derive(V.Field, optional(self.positions[key[:index]].slot), list(key[index:]))
+				return derive(V.Present, derive(V.Field, optional(self.positions[key[:index]].slot), list(key[index:])))
 		return optional(self.positions[key].slot)
 
 	def registerAt(self) -> None:
@@ -648,6 +651,8 @@ class ScopeCompiler:
 			record["at?"] = derive(V.At, self.owner.atValue(self))
 		if scope.valid is not None:
 			record["valid?"] = derive(V.Valid, self.expression(scope.valid))
+		if self.owner.binding.valid is not None:
+			record["documentValid?"] = derive(V.Valid, self.expression(rootExpression(self.owner.binding.valid)))
 		if scope.ctx is not None:
 			record["ctx?"] = self.expression(scope.ctx)
 		if scope.deleted:
@@ -724,7 +729,7 @@ class BindingCompiler:
 		at = self.binding.at
 		if self.atSlot is not None:
 			scope.registerAt()
-			return optional(self.atSlot)
+			return derive(V.Present, optional(self.atSlot))
 		return scope.expression(rootExpression(at))
 
 	def compile(self) -> list[ScopeCompiler]:
@@ -775,6 +780,7 @@ class Segment:
 	multi: bool = False
 	next: str | None = None
 	context: str | None = None
+	lookup: AnyValue = None  # a `lookup` step: the `@lookup` declaration it reads through
 
 
 @dataclass(slots=True)
@@ -843,6 +849,10 @@ class MappingScopeCompiler:
 		steps = keyedSteps(steps)
 		result: list[Segment] = []
 		current, index = self.scope.source, 0
+		if lookup := lookupOf(self.owner.mapping.lookups, steps[0], current, self.source):
+			# The scope instance's lookup: the instance it finds, read on as a reference (spec-04 Lookups)
+			result.append(Segment(steps[0], "lookup", None, current, False, lookup.type, None, lookup))
+			current, index = lookup.type, 1
 		while index < len(steps):
 			if current is None:
 				raise CompileError(V.MappingCodes.ReferenceUnmapped, f"Path '{'.'.join(steps)}' reads through a value")
@@ -890,6 +900,9 @@ class MappingScopeCompiler:
 		if steps == ["@self"]:
 			return optional(self.root("@self")), segments
 		value = optional(self.position(segments[0]))
+		if segments[0].kind == "lookup":
+			# The one instance found; several, or a compared value in conflict, are ambiguous, never the first
+			value = derive(V.Single, value)
 		if len(segments) > 1:
 			navigation: list[str] = []
 			for previous, segment in zip(segments, segments[1:]):
@@ -908,11 +921,16 @@ class MappingScopeCompiler:
 			last = segments[-1]
 			if last.kind == "verb":
 				return ResolvedType("entity", path=last.next)
+			if last.kind == "lookup":
+				return self.source.resolveType(TypeExpr(path=last.next))
 			return self.source.resolveType(last.attr.type, last.attr.ann)
 		if "call" in expr:
 			name = expr["call"]
 			if self.isSourceRef(expr):
 				return self.source.resolveType(TypeExpr(path=expr["args"][0]["path"][0]))
+			if name == "ref":
+				path = expr["args"][0]["path"][0]
+				return self.target.resolveType(TypeExpr(path=path)) if self.owner.mapping.isTargetType(path) else None
 			if name in BUILTIN_RESULTS:
 				return ResolvedType("builtin", builtin=BUILTIN_RESULTS[name])
 			evaluator = self.owner.calls.evaluator
@@ -922,7 +940,7 @@ class MappingScopeCompiler:
 				return evaluator.mapTargetModel(name).resolveType(TypeExpr(path=mapping.mapTo))
 			return None
 		if "coalesce" in expr:
-			return self.exprType(expr["coalesce"][0])
+			return next((kind for item in expr["coalesce"] if (kind := self.exprType(item)) is not None), None)
 		if "meta" in expr:
 			return ResolvedType("builtin", builtin="DateTime" if expr["meta"] == "at" else "Text")
 		return None
@@ -1034,7 +1052,11 @@ class MappingScopeCompiler:
 				attr = self.target.lookup(self.scope.target, key)
 			else:
 				attr = None
-			if line.asType and actual is not None and actual.kind in ("entity", "relation"):
+			if line.name and actual is not None and actual.kind in ("entity", "relation"):
+				# `{name=N}`: the target of the scope line named N, which that scope must have emitted
+				accepted = acceptedTypes(self.target, self.scope.target, key, attr)
+				value = derive(V.CorrespondNamed, value, *self.owner.namedTarget(actual.path, line.name, accepted))
+			elif line.asType and actual is not None and actual.kind in ("entity", "relation"):
 				# `{as=T}`: the instance's target of type T, which its scope line must have emitted
 				value = derive(V.CorrespondEmitted, value, line.asType)
 			elif attr is not None:
@@ -1079,7 +1101,8 @@ class MappingScopeCompiler:
 		if self.scope.valid is not None:
 			record["valid?"] = derive(V.Valid, self.expression(self.scope.valid))
 		if self.scope.ctx is not None:
-			record["ctx?"] = derive(V.Correspond, self.expression(self.scope.ctx))
+			actual = self.exprType(self.scope.ctx)
+			record["ctx?"] = self.owner.correspond(self.expression(self.scope.ctx), actual.path if actual else None)
 		if self.scope.present is not None:
 			record["present?"] = self.expression(self.scope.present)
 		return record | sections | ({"qualifiers": qualifiers} if qualifiers else {}) | {"source": Location}
@@ -1147,6 +1170,14 @@ class MappingScopeCompiler:
 		return tree
 
 
+def scopeProgramIds(scopes: list[MappingScope]) -> dict[tuple[str, str, str], str]:
+	"""Keep existing readable IDs where unique; otherwise append an unambiguous encoding of the full scope key."""
+	short = {scope.key: lastSegment(scope.source) + lastSegment(scope.target) + ("_" + scope.name if scope.name else "") for scope in scopes}
+	counts = Counter(short.values())
+	return {key: name if counts[name] == 1 else name + "." + ".".join(V.encodeKey(part) for part in key if part)
+		for key, name in short.items()}
+
+
 class MappingCompiler:
 	"""Compile every scope of a mapping, using the same attribute slot definitions as bindings."""
 
@@ -1155,6 +1186,7 @@ class MappingCompiler:
 		self.model = Model(fromOntology)
 		self.targetModel = Model(toOntology)
 		self.mapping = mapping
+		self.scopeIds = scopeProgramIds(mapping.scopes)
 		self.referential = referential
 		self.slots: dict[str, AnyValue] = {}
 		self.used: set[str] = set()
@@ -1171,9 +1203,10 @@ class MappingCompiler:
 			self.slots[name] = localSlot(name, valueShape(self.model, attr))
 		return self.slots[name]
 
-	def correspond(self, value: AnyValue, source: str | None, accepted: list[str]) -> AnyValue:
-		"""Translate a reference to `source` through the instance correspondence; with several scope
-		lines for `source`, to the target instance of the type the receiver accepts (spec-04 Instances)."""
+	def correspond(self, value: AnyValue, source: str | None, accepted: list[str] | None = None) -> AnyValue:
+		"""Translate a source reference to the accepted target; an already-target reference needs no translation."""
+		if self.mapping.isTargetType(source):
+			return value
 		if source is None or len(correspondenceScopes(self.model, self.mapping, source)) < 2:
 			return derive(V.Correspond, value)
 		try:
@@ -1181,6 +1214,11 @@ class MappingCompiler:
 		except ValueError as error:
 			raise CompileError(V.MappingCodes.ReferenceUnmapped, str(error)) from error
 		return derive(V.CorrespondAs, value, target)
+
+	def namedTarget(self, source: str, name: str, accepted: list[str]) -> tuple[str, str]:
+		"""The program scope and target type of the scope line named `name` that a reference to `source` translates through."""
+		scope = namedCorrespondenceScope(self.model, self.targetModel, self.mapping, source, name, accepted)
+		return self.scopeIds[scope.key], scope.target
 
 	def policy(self, typePath: str) -> AnyValue:
 		"""`T`'s identity policy when it derives handles here; minted and alternate keys are deferred."""
@@ -1196,14 +1234,7 @@ class MappingCompiler:
 		return found
 
 	def compile(self) -> list[MappingScopeCompiler]:
-		ordered = sorted(self.mapping.scopes, key=lambda item: (item.source, item.target, item.name or ""))
-		result = []
-		for scope in ordered:
-			name = lastSegment(scope.source) + lastSegment(scope.target)
-			if scope.name:
-				name += "_" + scope.name
-			result.append(MappingScopeCompiler(self, scope, name))
-		return result
+		return [MappingScopeCompiler(self, scope, self.scopeIds[scope.key]) for scope in sorted(self.mapping.scopes, key=lambda item: item.key)]
 
 
 __all__ = ["CompileError", "BindingCompiler", "MappingCompiler", "MappingScopeCompiler", "LineInfo", "Segment", "ROOT_KEYS", "ScopeCompiler", "typeSpec", "scalarShape", "valueShape", "slotName", "fieldName", "Calls", "literal", "isMulti"]

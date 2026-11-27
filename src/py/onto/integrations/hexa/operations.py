@@ -174,7 +174,8 @@ class HexaMappingOperator:
 				[[segment.key for segment in item.segments(path)] for path in item.paths(item.scope.ctx)], "@self" in item.roots,
 				item.scope.present is not None, [[segment.key for segment in item.segments(path)] for path in item.paths(item.scope.present)],
 				item.scope.into is not None, [[segment.key for segment in item.segments(path)] for path in item.paths(item.scope.into)],
-				{key: (typePath, [segment.key for segment in item.segments(steps)]) for key, (typePath, steps) in item.sourceRefs.items()}))
+				{key: (typePath, [segment.key for segment in item.segments(steps)]) for key, (typePath, steps) in item.sourceRefs.items()},
+				scopeName=item.scope.name if item.scope.into is None else None))
 		scopes = [plan.program for plan in plans]
 		program = MappingProgram(self.fromOntology, self.toOntology, mapping, self.mode, dict(compiler.slots), {scope.name: scope.shape for scope in scopes},
 			{scope.name: scope.template for scope in scopes}, sorted(compiler.used), StageNamespace({}), scopes,

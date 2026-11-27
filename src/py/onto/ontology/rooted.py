@@ -25,7 +25,8 @@ class Field:
 	relation: str = ""
 	roles: tuple[str, ...] = ()
 	# A link whose relation has a context: the association and its roles holding the owner and the other end.
-	context: tuple[str, str, str] | None = None
+	association: tuple[str, str, str] | None = None
+	contextType: str = ""  # A contextual facet's member: the type of the instance its values hold within.
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +39,7 @@ class Hop:
 	reverse: bool = False
 	test: str | bool | None = None
 	proves: str = ""
+	contextPopulation: str = ""  # The population whose instance a contextual member's claims hold within.
 
 	@property
 	def ancestor(self) -> str | None:
@@ -46,6 +48,15 @@ class Hop:
 	@property
 	def key(self) -> str:
 		return self.population + ("?" if self.test is not None else "")
+
+
+@dataclass(frozen=True, slots=True)
+class Projection:
+	"""A view field on a bound population, with its context population when required."""
+
+	population: str
+	field: Field
+	contextPopulation: str = ""
 
 
 # -----------------------------------------------------------------------------
@@ -91,7 +102,9 @@ def fieldFor(model: Model, owner: str, member: str, *, target: str | None = None
 	if not attr or target:
 		raise ValueError(f"unknown view field {path}")
 	kind = model.resolveType(attr.type, attr.ann)
-	return Field(owner, member, path, kind.path if kind.kind in ("entity", "relation") else "")
+	facet = model.facetOf(owner, member)
+	return Field(owner, member, path, kind.path if kind.kind in ("entity", "relation") else "",
+		contextType=(annotation(facet.ann, "ctx") or "") if facet else "")
 
 
 # -----------------------------------------------------------------------------
@@ -134,6 +147,19 @@ class RootedView:
 						dependencies.add(attr.type.path)
 			return f
 
+		def bound(path: tuple[Hop, ...]) -> list[str]:
+			"""The populations a path binds, from the root."""
+			return [self.root, *(h.population for h in path if h.test is None)]
+
+		def contextIn(f: Field, before: list[str]) -> str:
+			"""The population whose instance a contextual member holds within: the nearest of its type bound before its subject."""
+			if not f.contextType:
+				return ""
+			found = next((alias for alias in reversed(before) if model.isA(self.populations[alias].type, f.contextType)), None)
+			if found is None:
+				raise ValueError(f"{f.path} holds within a {f.contextType.removeprefix(model.ontology.namespace + '/')}: expected a population of that type before it")
+			return found
+
 		def bind(population: ViewPopulation, path: tuple[Hop, ...]) -> None:
 			t = model.get(population.type)
 			if not t or not (t.kind == "entity" or isAssociation(t)):
@@ -157,9 +183,9 @@ class RootedView:
 				raise ValueError(f"{alias}: {field.path} cannot reach {b}")
 			path = self.paths[parent]
 			if population.through:
-				if not field.context:
+				if not field.association:
 					raise ValueError(f"{alias}: {field.path} needs a context with both role selectors")
-				context, start, end = field.context
+				context, start, end = field.association
 				if population.reverse:
 					start, end = end, start
 				if start == end:
@@ -169,11 +195,13 @@ class RootedView:
 				bind(witness, path)
 				path += (Hop(witness.name, alias, replace(fieldFor(model, context, end), other=kind), proves=field.path),)
 			else:
-				path += (Hop(parent, alias, replace(field, other=b), population.reverse),)
+				# The subject of a forward link is the parent, of a backward one the population it binds.
+				before = bound(self.paths[parent]) if population.reverse else bound(self.paths[parent])[:-1]
+				path += (Hop(parent, alias, replace(field, other=b), population.reverse, contextPopulation=contextIn(field, before)),)
 			if population.where:
 				f = resolveField(kind, population.where)
 				test = population.equals
-				guard = Hop(alias, alias, f, test=test)
+				guard = Hop(alias, alias, f, test=test, contextPopulation=contextIn(f, bound(path)[:-1]))
 				if ancestor := guard.ancestor:
 					if ancestor not in {h.parent for h in path} or not model.isA(self.populations[ancestor].type, f.other):
 						raise ValueError(f"{alias}: expected a compatible ancestor for {test}")
@@ -190,7 +218,7 @@ class RootedView:
 						raise ValueError(f"ambiguous object filter on {field.path}")
 					self.guardedLinks[key] = alias
 			bind(population, path)
-		self.selections: dict[str, tuple[str, Field]] = {}
+		self.selections: dict[str, Projection] = {}
 		self.typeSelections: dict[str, list[str]] = {}
 		defaultKeys = []
 		for line in decl.viewLines:
@@ -200,7 +228,7 @@ class RootedView:
 			key = f"{line.path}.{f.member}"
 			if key in self.selections:
 				raise ValueError(f"duplicate or ambiguous projected field {key}")
-			self.selections[key] = (line.path, f)
+			self.selections[key] = Projection(line.path, f, contextIn(f, bound(self.paths[line.path])[:-1]))
 			self.typeSelections.setdefault(f.path, []).append(key)
 			if not line.optional:
 				defaultKeys.append(key)
@@ -208,7 +236,7 @@ class RootedView:
 			raise ValueError("a rooted view needs at least one default projection")
 		self.defaults = {}
 		for key in defaultKeys:
-			path = self.selections[key][1].path
+			path = self.selections[key].field.path
 			# NOTE: Preserve a type-based display name only if it resolves to this projection.
 			spelling = path if path not in self.selections and self.typeSelections[path] == [key] else key
 			self.defaults[spelling] = key
@@ -234,6 +262,6 @@ class RootedView:
 		return result
 
 
-__all__ = ["RootedView", "Field", "Hop", "memberMatches"]
+__all__ = ["RootedView", "Field", "Hop", "Projection", "memberMatches"]
 
 # EOF

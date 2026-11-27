@@ -123,8 +123,9 @@ class BindingCoverage:
 				self.record(steps, conditionPaths(line.when), None, "condition")
 
 	def report(self, inventory: Inventory | None) -> CoverageReport:
-		if self.binding.at is not None:
-			self.record(None, documentPaths(self.binding.at), None, "condition")
+		for expr in (self.binding.at, self.binding.valid):
+			if expr is not None:
+				self.record(None, documentPaths(expr), None, "condition")
 		for scope in self.binding.scopes:
 			self.scope(scope)
 		keys = [key for decl in self.elements.instanceTypes() for key in self.elements.declared(decl.path)]

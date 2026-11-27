@@ -252,8 +252,19 @@ function correspondAs(value, typePath, emitted = false) {
 	return { ref: target, type: typePath };
 }
 
+/** `{ref, scopes}` → `{ref: scopes[scope]}` (`{name=N}`): the target the named scope line emitted; one it skips is a gap. */
+function correspondNamed(value, scope, typePath) {
+	if (isAbsent(value)) return ABSENT_VALUE;
+	if (value === null || isUnknown(value)) return value;
+	if (isSet(value)) return { set: value.set.map(item => correspondNamed(item, scope, typePath)), ...(value.partial ? { partial: true } : {}) };
+	const target = isPlainObject(value) ? value.scopes?.[scope] : undefined;
+	if (target === undefined || target === null) throw new Gap(CorrespondNamed.ReferenceUnmapped);
+	return { ref: target, type: typePath };
+}
+
 function single(value) {
-	if (isAbsent(value) || !isSet(value)) return value;
+	if (isAbsent(value)) return ABSENT_VALUE;
+	if (!isSet(value)) return value;
 	const members = value.set;
 	if (!members.length && !value.partial) return ABSENT_VALUE;
 	if (members.length !== 1 || value.partial) throw new Gap(Single.ReferenceAmbiguous);
@@ -291,6 +302,9 @@ function field(value, steps) {
 	if (!current.length || isAbsent(value)) return ABSENT_VALUE;
 	return steps.includes("*") ? current : current[0];
 }
+
+// A document value read outside a record's own fields; JSON `null` is not present (spec-04).
+function present(value) { return isAbsent(value) || value === null ? ABSENT_VALUE : value; }
 
 function nullable(value, marker, kind) {
 	if (!isAbsent(marker)) return kind === "absent" ? null : { ...UNKNOWN };
@@ -457,6 +471,9 @@ export const CorrespondEmitted = transform("Onto.CorrespondEmitted", (value, typ
 	gaps: ["ReferenceUnmapped"], examples: [
 		{ input: [{ ref: "MA_1", targets: { "T/Application": "Application_1" } }, "T/Application"], output: { ref: "Application_1", type: "T/Application" } },
 		{ input: [{ ref: "MA_2", targets: { "T/Application": "Application_2" }, skipped: ["T/Application"] }, "T/Application"], gap: "ReferenceUnmapped" }] });
+export const CorrespondNamed = transform("Onto.CorrespondNamed", correspondNamed, { inputs: [Any, Text, Text], output: Any, gaps: ["ReferenceUnmapped"], examples: [
+	{ input: [{ ref: "Row_1", scopes: { RowGoal_Short: "Goal_S_2F_40Short_2FRow_2F1" } }, "RowGoal_Short", "T/Goal"], output: { ref: "Goal_S_2F_40Short_2FRow_2F1", type: "T/Goal" } },
+	{ input: [{ ref: "Row_1", scopes: { RowGoal_Main: "Goal_S_2F_40Main_2FRow_2F1" } }, "RowGoal_Short", "T/Goal"], gap: "ReferenceUnmapped" }] });
 export const Valid = transform("Onto.Valid", valid, { inputs: [Any], output: Any, gaps: ["Invalid"],
 	examples: [{ input: ["2026-09-01"], output: "2026-09-01" }, { input: ["2026-02-30"], gap: "Invalid" }] });
 export const At = transform("Onto.At", timeValue, { inputs: [Any], output: Any, gaps: ["Invalid"],
@@ -465,6 +482,8 @@ export const FormatName = transform("Onto.FormatName", formatName, { inputs: [An
 	examples: [{ input: ['DatePattern("YYYYMMDD")'], output: "YYYYMMDD" }] });
 export const Field = transform("Onto.Field", field, { inputs: [Any, Any], output: Any,
 	examples: [{ input: [{ bond: { interval: 6 } }, ["bond", "interval"]], output: 6 }] });
+export const Present = transform("Onto.Present", present, { inputs: [Any], output: Any,
+	examples: [{ input: [null], output: ABSENT_VALUE }, { input: [ABSENT_VALUE], output: ABSENT_VALUE }, { input: ["2026-09-21"], output: "2026-09-21" }] });
 export const Nullable = transform("Onto.Nullable", nullable, { inputs: [Any, Any, Text], output: Any,
 	examples: [{ input: [ABSENT_VALUE, null, "unknown"], output: UNKNOWN }, { input: [ABSENT_VALUE, ABSENT_VALUE, "unknown"], output: ABSENT_VALUE }] });
 export const QualifierConvert = transform("Onto.QualifierConvert", qualifierConvert, { inputs: [Any, Any, Any], output: Any, gaps: ["Inconvertible"],
@@ -504,7 +523,7 @@ for (const [name, examples] of Object.entries(BUILTIN_EXAMPLES)) builtinTransfor
 
 export const CODECS = { EpochDate, IntegerText, SplitText, DateTimePattern, DecimalNumber, DecimalPlaces, Case };
 export const TRANSFORMS = Object.fromEntries([Read, Set_, TextEquals, TextIn, HasValue, AllOf, AnyOf, Unset, When, WhenNone, Coalesce, Handle, KeyedHandle, SourceHandle, Ref, HandleKey, Correspond,
-	CorrespondAs, CorrespondEmitted, Single, Valid, At, FormatName, Field, Nullable, QualifierConvert, ToInteger, ToVocabulary, Given, Members,
+	CorrespondAs, CorrespondEmitted, CorrespondNamed, Single, Valid, At, FormatName, Field, Present, Nullable, QualifierConvert, ToInteger, ToVocabulary, Given, Members,
 	...Object.values(BUILTIN_TRANSFORMS)].map(item => [item.name, item]));
 
 /** Report codes: `Onto.Handle.KeyMissing` is `Binding.KeyMissing`; other reasons are kept. */

@@ -55,6 +55,7 @@ class MappingScopePlan:
 	update: bool = False
 	targetInputs: list[list[str]] = field(default_factory=list)
 	sourceRefs: dict[str, tuple[str, list[str]]] = field(default_factory=dict)  # `@ref<n>` -> (source type, key segments)
+	scopeName: str | None = None  # the scope line's `{name=N}`, which `{name=N}` references translate through
 
 	def activeLines(self, occurrence: dict) -> list[LineInfo]:
 		"""Global lines run once; lines reading contextual slots run in their context occurrence."""
@@ -152,7 +153,7 @@ class Unfolder:
 	"""Turn scope instances into trees limited to the scope's reach, with metadata tables and conflicts."""
 
 	def __init__(self, index: StateIndex, correspondence: dict[str, str] | None, targets: dict[str, dict[str, str]] | None = None,
-		scopeTargets: dict[str, dict[str, str]] | None = None, skipped: dict[str, set[str]] | None = None):
+		scopeTargets: dict[str, dict[str, str]] | None = None, skipped: dict[str, set[str]] | None = None, named: dict[str, dict[str, str]] | None = None):
 		self.index = index
 		self.correspondence = correspondence
 		# Source handle -> target types whose scope lines' `when` all skip it (no instance is emitted)
@@ -160,6 +161,9 @@ class Unfolder:
 		# Source handle -> {target type: target handle}, for source types with several scope lines
 		self.targets = targets or {}
 		self.scopeTargets = scopeTargets or {}
+		# Source handle -> {program scope: target handle} its named scope lines emitted (`{name=N}` references)
+		self.named = named or {}
+		self.lookupTables: dict[int, dict[tuple, list[str]]] = {}
 
 	def reference(self, handle: str, children: dict, pointer: str, meta: dict, conflicts: dict, context: str | None = None) -> dict:
 		"""Unfold a reference, adding target correspondence and requested children."""
@@ -171,6 +175,8 @@ class Unfolder:
 				result["targetType"] = next(iter(self.targets[handle]))
 		if self.targets.get(handle):
 			result["targets"] = self.targets[handle]
+		if self.named.get(handle):
+			result["scopes"] = self.named[handle]
 		if self.skipped.get(handle):
 			result["skipped"] = sorted(self.skipped[handle])
 		if children:
@@ -201,6 +207,17 @@ class Unfolder:
 				if members is not None:
 					tree[key] = members
 				continue
+			if segment.kind == "lookup":
+				found = self.lookup(handle, segment.lookup)
+				if found is None:
+					continue
+				if len(found) != 1:
+					# Several, or a compared value in conflict: ambiguous (`Onto.Single`), and no condition reads through it
+					tree[key] = {"set": [], "partial": True}
+					continue
+				tree[key] = self.reference(found[0], children, pointer, meta, conflicts, context)
+				meta[pointer] = metaOf(self.index.existence(found[0]) or {}, sources)
+				continue
 			claims = self.index.claims(handle, key, context if segment.context else None)
 			if not claims:
 				continue
@@ -216,6 +233,35 @@ class Unfolder:
 			meta[pointer] = metaOf(claims[-1], sources)
 			tree[key] = self.value(value, segment, children, pointer, meta, conflicts, context)
 		return tree
+
+	def lookup(self, handle: str, lookup: AnyValue) -> list[str] | None:
+		"""The instances a lookup finds from `handle` (spec-04 Lookups): None when the owner has no value to compare,
+		[] when a compared value is in conflict, else those whose compared attributes have the owner's values."""
+		key = []
+		for line in lookup.lines:
+			claims = self.index.claims(handle, line.source, None)
+			values = {comparedValue(claim["v"]) for claim in claims}
+			values.discard(None)
+			if any(claim.get("conflict") for claim in claims) or len(values) > 1:
+				return []
+			key.append(next(iter(values), None))
+		if None in key:
+			return None
+		if id(lookup) not in self.lookupTables:
+			table: dict[tuple, list[str]] = {}
+			for candidate in self.index.handlesOf(lookup.type):
+				row = []
+				for line in lookup.lines:
+					claims = self.index.claims(candidate, line.attr, None)
+					values = {comparedValue(claim["v"]) for claim in claims}
+					values.discard(None)
+					if len(values) != 1 or any(claim.get("conflict") for claim in claims):
+						break
+					row.append(values.pop())
+				else:
+					table.setdefault(tuple(row), []).append(candidate)
+			self.lookupTables[id(lookup)] = table
+		return self.lookupTables[id(lookup)].get(tuple(key)) or None
 
 	def verb(self, handle: str, segment: AnyValue, children: dict, pointer: str, meta: dict, conflicts: dict, context: str | None = None) -> dict | None:
 		"""Unfold related instances for a verb, recording relation provenance."""
@@ -239,6 +285,11 @@ class Unfolder:
 		result: set[str] = set()
 		for key, node in reach.items():
 			segment, children = node["segment"], node["children"]
+			if segment.kind == "lookup":
+				found = self.lookup(handle, segment.lookup) if children else None
+				if found and len(found) == 1:
+					result |= self.contexts(found[0], children)
+				continue
 			if segment.kind == "verb":
 				found = self.index.model.verbs(segment.owner, key)
 				if found:
@@ -284,6 +335,14 @@ class Unfolder:
 				tree[key] = self.reference(handleOf(typePath, textOf(value)), {}, "", meta, conflicts, context)
 		location = f"/{plan.name}/{escape(handle)}" + (f"/contexts/{escape(context)}" if context else "")
 		return {"value": tree, "location": location, "meta": meta, "conflicts": conflicts, "exists": existsMeta, "context": context}
+
+
+def comparedValue(value: AnyValue) -> str | None:
+	"""A known lookup key: a reference by its handle, a scalar by its text."""
+	text = textOf(value)
+	if text is None:
+		return None
+	return ("ref:" if isinstance(value, dict) and "ref" in value else "text:") + text
 
 
 def valuesAt(tree: dict, keys: list[str]) -> list[AnyValue]:
@@ -659,12 +718,13 @@ def mappingStages(program: AnyValue, plans: list[MappingScopePlan], mode: str) -
 		correspondence: dict[str, str] = {}
 		targets: dict[str, dict[str, str]] = {}
 		scopeTargets: dict[str, dict[str, str]] = {}
+		named: dict[str, dict[str, str]] = {}  # source handle -> {program scope: target} of the named scopes that select it
 		unresolved: list[dict] = []
 		selected: dict[str, set[str]] = {}  # source handle -> target types an identity scope's `when` selects it for
 		present: set[str] = set()  # locations of instances with an existence claim
 		for plan in sorted(plans, key=lambda item: item.update):
 			if plan.update:
-				unfolder = Unfolder(index, correspondence, targets, scopeTargets)
+				unfolder = Unfolder(index, correspondence, targets, scopeTargets, named=named)
 			occurrences = []
 			targetConflicts = set()
 			whenSelected = set()
@@ -720,17 +780,20 @@ def mappingStages(program: AnyValue, plans: list[MappingScopePlan], mode: str) -
 						active = presenceSelected if plan.presence else whenSelected
 						if occurrence["location"] not in present or occurrence["value"]["@handle"] in active:
 							selected.setdefault(occurrence["value"]["@handle"], set()).add(plan.target)
+							if plan.scopeName:
+								named.setdefault(occurrence["value"]["@handle"], {})[plan.name] = value["handle"]
 						correspondence.setdefault(occurrence["value"]["@handle"], value["handle"])
 						targets.setdefault(occurrence["value"]["@handle"], {}).setdefault(plan.target, value["handle"])
 					scopeTargets.setdefault(occurrence["value"]["@handle"], {})[plan.name] = value["handle"]
 				elif plan.update:
 					unresolved.append({"type": plan.target, "handle": occurrence["value"]["@handle"], "location": occurrence["location"], "reasons": [str(MappingCodes.ReferenceUnmapped)]})
 		skipped = {handle: set(types) - selected.get(handle, set()) for handle, types in targets.items() if set(types) - selected.get(handle, set())}
-		return {"state": state, "correspondence": correspondence, "targets": targets, "scopeTargets": scopeTargets, "unresolved": unresolved, "skipped": skipped}
+		return {"state": state, "correspondence": correspondence, "targets": targets, "scopeTargets": scopeTargets, "unresolved": unresolved, "skipped": skipped,
+			"named": named}
 
 	def unfold(resolved):
 		index = StateIndex(resolved["state"], model)
-		unfolder = Unfolder(index, resolved["correspondence"], resolved.get("targets"), resolved.get("scopeTargets"), resolved.get("skipped"))
+		unfolder = Unfolder(index, resolved["correspondence"], resolved.get("targets"), resolved.get("scopeTargets"), resolved.get("skipped"), resolved.get("named"))
 		scopes = []
 		for plan in plans:
 			occurrences, skipped = [], []

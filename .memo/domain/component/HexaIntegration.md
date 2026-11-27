@@ -1,7 +1,7 @@
 ---
 identity: "onto:component:hexa-integration"
 created: 2026-11-25T19:44:10.612619+00:00
-updated: 2026-11-25T19:44:25.791344+00:00
+updated: 2026-11-27T17:40:14.445263+00:00
 title: hexa integration component
 ---
 # hexa integration component
@@ -12,7 +12,8 @@ safeguards, unfolding mappings, writing documents), rooted views over a host's
 read catalogue, and bundles for the JavaScript runtime.
 
 - *Package*: `src/py/onto/integrations/hexa/`; spec-06 "Layout" lists its
-  modules (compiler, vocabulary, stages, unfold, runs, writing, views,
+  modules (compiler, vocabulary, stages, unfold, runs, writing, catalogue,
+  views,
   requests, bundle, operations, model).
 - *Interfaces*: `HexaBindingOperator` (`compile`, `result`, `formatsUpdate`,
   `approve`, `compileWrite`), `HexaMappingOperator`, `HexaViewOperator` (`plan`,

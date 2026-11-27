@@ -380,6 +380,19 @@ def testMeasurementQualifiersMustNotContradict():
 	assert "qualifier" in errors(f"{base}P\n  Pay Money\n  Fee P.Pay {{cur=EUR}}\n")
 
 
+def testAPartHasOneWhole():
+	# An arm goes with its body; what it carries does not.
+	base = "@ontology A\nBody\nArm\nThing\n"
+	assert errors(f"{base}Body -hasArm/isArmOf-> Arm ?:* {{part}}\nArm -carries-> Thing\n") == []
+	assert fmt(f"{base}Body -hasArm/isArmOf-> Arm 1:* {{part}}\n").endswith("Body -hasArm/isArmOf-> Arm 1:* {part}\n")
+	assert decl(load(f"{base}Body -hasArm-> Arm 1:* {{part}}\n"), "A/Body.hasArm.A/Arm").ann == [("part", True)]
+	assert "annotation" in errors(f"{base}Body -hasArm-> Arm {{part}}\n")  # `*:*` by default: an arm of several bodies
+	assert "annotation" in errors(f"{base}Body -hasArm-> Arm +:* {{part}}\n")
+	assert "annotation" in errors(f"{base}Body -hasArm-> Arm ?:* {{part=yes}}\n")
+	assert "annotation" in errors(f"{base}Limb(Body, Arm) {{part}}\n")
+	assert "annotation" in errors("@ontology A\nArm\nBody\n  Arm Arm {part}\n")
+
+
 def testAnnotationPlacement():
 	assert "annotation" in errors("@ontology A\nP {key}\n")
 	assert "annotation" in errors("@ontology A\nP\n  N Text {kind=event}\n")

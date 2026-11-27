@@ -168,3 +168,33 @@ An attribute typed by an entity is a reference (`Shelf Location`). Use it for a
 single, one-way, attribute-like link that nobody reads from the other end. Use a
 relation as soon as the link is navigated both ways, is many-to-many, or carries
 anything. Never declare both for the same link.
+
+## 7.7 Mark a composition as a part
+
+A part goes with its whole, as an arm with its body: an application with the
+needs analysis it is made on, a loan split with its structure. Declare the
+relation from the whole, mark it `{part}` and give each part one whole (`1:*`
+or `?:*`). What a part carries is not part of the whole, nor is a thing that
+relates to several of them: a person is a client of many analyses without
+belonging to any. Rooted views reach the parts and wholes of what they reach,
+and follow other links only where they say so.
+
+DON'T
+
+```onto
+Engagement
+Application
+Party
+Application -isPartOf-> Engagement
+Engagement -hasClient/isClientIn-> Party ?:* {part}
+```
+
+DO
+
+```onto
+Engagement
+Application
+Party
+Engagement -resultsIn/resultsFromEngagement-> Application ?:* {part}
+Engagement -hasClient/isClientIn-> Party
+```

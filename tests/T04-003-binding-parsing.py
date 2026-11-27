@@ -66,6 +66,7 @@ def testCompleteSpecBindingFilesRoundTrip(ontology, index: int):
 
 def testExpressionsAnnotationsDocsFacetsRolesAndInverseVerbsAreRetained():
 	binding = load('''@at <- snapshot.at
+@valid <- snapshot.date
 Person <- people[*] {id=concat(id, ",", "}"), ctx=scenario, valid=period, deleted=flags.deleted:true} -- People
   [Investor] {when=kind:I} -- Applies
   Name <- name ?? nickname {null=unknown, when=active:true} -- Full name
@@ -78,6 +79,7 @@ Meeting <- meetings[*] {id=id}
 ''')
 	data = bindingToJson(binding)
 	schemaValidator("mapping").validate(data)
+	assert (data["at"], data["valid"]) == ({"path": ["snapshot", "at"]}, {"path": ["snapshot", "date"]})
 	person = next(scope for scope in data["scopes"] if scope["type"] == "A/Person")
 	assert person["id"]["args"][1:] == [{"text": ","}, {"text": "}"}]
 	assert person["deleted"] == {"path": ["flags", "deleted"], "value": "true"}
@@ -229,7 +231,7 @@ def testFeatureFacadeAndTopLevelApiShareImplementations():
 	"Person <- people[*] {id=id}\n    Name <- name\n",
 	"Person <- people[*] {id=id}\n\tName <- name\n",
 	"- unused\n", "- unused {reason=other}\n", "- ^.unused {reason=ignore}\n",
-	"@at <- at\n@at <- another\n", "@columns a, a\n", "@columns\n",
+	"@at <- at\n@at <- another\n", "@valid <- date\n@valid <- another\n", "@columns a, a\n", "@columns\n",
 	"@fn F Text -> Text\nPerson <- people[*] {id=id}\n",
 ])
 def testInvalidBindingDeclarationsAreRejected(body: str):

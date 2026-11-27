@@ -36,12 +36,20 @@ def shortElement(path: str, short: Namer) -> str:
 	return short(parts[0]) + ("." + ".".join(parts[1:]) if len(parts) > 1 else "")
 
 
-def expressionText(expr: dict[str, Any], short: Namer, localCalls: set[str]) -> str:
+def expressionText(expr: dict[str, Any], short: Namer, localCalls: set[str], target: tuple[str, Namer] | None = None) -> str:
+	"""`target`: the `To` namespace and its namer, for the type of a target reference `ref(T, Key)`."""
 	def names(value: dict[str, Any]) -> dict[str, Any]:
 		if "call" in value:
 			args = [names(arg) for arg in value["args"]]
 			if value["call"] == "ref" and args and len(args[0].get("path", [])) == 1 and "/" in str(args[0]["path"][0]):
-				args[0] = {"path": [short(args[0]["path"][0])]}  # ref(Type, Key): the type is a name
+				typePath = args[0]["path"][0]
+				if target and typePath.startswith(target[0] + "/"):
+					namer = target[1]
+					# A bare name resolves in From first, even if the declaration is written in To.
+					name = namer.aliasName(typePath) or namer(typePath)
+				else:
+					name = short(typePath)
+				args[0] = {"path": [name]}  # ref(Type, Key): the type is a name
 			path = value["call"]
 			name = short(path) if "/" in path else path
 			if "/" in path and name in localCalls:
@@ -67,6 +75,7 @@ def printMapping(mapping: Mapping) -> str:
 	left = Namer(mapping.fromNamespace, sorted(mapping.uses.items()))
 	right = Namer(mapping.toNamespace, sorted(mapping.uses.items()))
 	localCalls = {function.name for function in mapping.functions} | {decl.path for decl in mapping.maps}
+	target = (mapping.toNamespace, right) if mapping.toNamespace != mapping.fromNamespace else None
 	def annotations(item: Any, keys: tuple[str, ...]) -> str:
 		parts = []
 		for key in ANNOTATION_KEYS:
@@ -77,7 +86,7 @@ def printMapping(mapping: Mapping) -> str:
 				parts.append(key)
 				continue
 			if key in ("ctx", "valid", "present", "into", *QUALIFIER_KEYS):
-				value = expressionText(value, left, localCalls)
+				value = expressionText(value, left, localCalls, target)
 			elif key == "when":
 				value = printCondition(value, binding=False)
 			elif key == "as":
@@ -99,11 +108,14 @@ def printMapping(mapping: Mapping) -> str:
 		ann = printAnnotations(decl.ann, ONTOLOGY_ANNOTATIONS)
 		lines += ["", withDoc(f"@map {decl.path} {left(decl.mapFrom)} -> {right(decl.mapTo)}" + (" " + ann if ann else ""), decl.doc)]
 		lines += [printer.mapLine(line, indent="  ") for line in decl.mapLines]
+	for lookup in sorted(mapping.lookups, key=lambda item: (item.owner, item.name)):
+		lines += ["", withDoc(f"@lookup {left(lookup.owner)}.{lookup.name} -> {left(lookup.type)}", lookup.doc)]
+		lines += [withDoc(f"  {line.attr} <- {line.source}", line.doc) for line in sorted(lookup.lines, key=lambda item: item.attr)]
 	for scope in sorted(mapping.scopes, key=lambda item: (item.source, item.target, item.name or "")):
 		lines += ["", withDoc(f"{left(scope.source)} -> {right(scope.target)}" + annotations(scope, ("name", "into", "present", "when", "ctx", "valid")), scope.doc)]
 		for line in sorted(scope.lines, key=lineKey):
-			text = f"[{line.facet}]" if line.facet else f"{line.target or line.verb} <- {expressionText(line.expr, left, localCalls)}"
-			lines.append(withDoc("  " + text + annotations(line, ("when", "src", "as", *QUALIFIER_KEYS, "reverse", "candidate")), line.doc))
+			text = f"[{line.facet}]" if line.facet else f"{line.target or line.verb} <- {expressionText(line.expr, left, localCalls, target)}"
+			lines.append(withDoc("  " + text + annotations(line, ("name", "when", "src", "as", *QUALIFIER_KEYS, "reverse", "candidate")), line.doc))
 	if mapping.exclusions:
 		lines.append("")
 		for item in sorted(mapping.exclusions, key=lambda item: item.path):
@@ -122,6 +134,10 @@ def mappingToJson(mapping: Mapping) -> dict[str, Any]:
 		data["functions"] = functionsToJson(FunctionLibrary(mapping.fromNamespace, functions=mapping.functions))["functions"]
 	if mapping.maps:
 		data["maps"] = encodeOntology(normaliseOntology(Ontology(namespace=mapping.fromNamespace, decls=mapping.maps)), None)["decls"]
+	if mapping.lookups:
+		data["lookups"] = [{"owner": item.owner, "name": item.name, "type": item.type, **({"doc": item.doc} if item.doc is not None else {}),
+			"lines": [{"attr": line.attr, "from": line.source, **({"doc": line.doc} if line.doc is not None else {})} for line in sorted(item.lines, key=lambda line: line.attr)]}
+			for item in sorted(mapping.lookups, key=lambda item: (item.owner, item.name))]
 	scopes = []
 	for scope in sorted(mapping.scopes, key=lambda item: (item.source, item.target, item.name or "")):
 		value = {"source": scope.source, "target": scope.target}
@@ -134,6 +150,8 @@ def mappingToJson(mapping: Mapping) -> dict[str, Any]:
 			entry.update({key: True for key in ("reverse", "candidate") if getattr(line, key)})
 			if line.asType:
 				entry["as"] = line.asType
+			if line.name:
+				entry["name"] = line.name
 			if line.qualifiers:
 				entry["qualifiers"] = line.qualifiers
 			lines.append(entry)

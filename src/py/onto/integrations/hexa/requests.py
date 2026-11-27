@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 from hexa.runtime import p
 
 if TYPE_CHECKING:
-	from .views import ViewRead
+	from .catalogue import ViewRead
 
 # -----------------------------------------------------------------------------
 #

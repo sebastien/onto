@@ -442,9 +442,26 @@ def correspondAs(value: AnyValue, typePath: str, emitted: bool = False) -> AnyVa
 	return {"ref": target, "type": typePath}
 
 
+def correspondNamed(value: AnyValue, scope: str, typePath: str) -> AnyValue:
+	"""`{ref, scopes}` → `{ref: scopes[scope]}` (`{name=N}`): the target the named scope line emitted for the referenced
+	instance; one its `when` or `present` skips is a gap, never another of its targets."""
+	if isAbsent(value):
+		return ABSENT_VALUE
+	if value is None or value == UNKNOWN:
+		return value
+	if isinstance(value, dict) and "set" in value:
+		return {"set": [correspondNamed(item, scope, typePath) for item in value["set"]], **({"partial": True} if value.get("partial") else {})}
+	target = value.get("scopes", {}).get(scope) if isinstance(value, dict) else None
+	if target is None:
+		raise Gap(CorrespondNamed.ReferenceUnmapped)
+	return {"ref": target, "type": typePath}
+
+
 def single(value: AnyValue) -> AnyValue:
 	"""The one member of a collection (`into` over a multi-valued reference); several, or an incomplete set, are ambiguous."""
-	if isAbsent(value) or not isinstance(value, dict) or "set" not in value:
+	if isAbsent(value):
+		return ABSENT_VALUE
+	if not isinstance(value, dict) or "set" not in value:
 		return value
 	members = value["set"]
 	if not members and not value.get("partial"):
@@ -497,6 +514,11 @@ def field(value: AnyValue, steps: list[str | int]) -> AnyValue:
 	if not current or isAbsent(value):
 		return ABSENT_VALUE
 	return current if "*" in steps else current[0]
+
+
+def present(value: AnyValue) -> AnyValue:
+	"""A document value read outside a record's own fields; JSON `null` is not present (spec-04)."""
+	return ABSENT_VALUE if isAbsent(value) or value is None else value
 
 
 def nullable(value: AnyValue, marker: AnyValue, kind: str) -> AnyValue:
@@ -736,6 +758,9 @@ HandleKey = transform("Onto.HandleKey", handleKey, inputs=[Any, Text], output=An
 	examples=[{"input": [{"ref": "Issuer_C_2D17"}, "Issuer"], "output": "C-17"}])
 Correspond = transform("Onto.Correspond", correspond, inputs=[Any], output=Any, gaps=["ReferenceUnmapped"],
 	examples=[{"input": [{"ref": "Issuer_C_2D17", "target": "Company_ACME"}], "output": {"ref": "Company_ACME"}}, {"input": [{"ref": "x"}], "gap": "ReferenceUnmapped"}])
+CorrespondNamed = transform("Onto.CorrespondNamed", correspondNamed, inputs=[Any, Text, Text], output=Any, gaps=["ReferenceUnmapped"], examples=[
+	{"input": [{"ref": "Row_1", "scopes": {"RowGoal_Short": "Goal_S_2F_40Short_2FRow_2F1"}}, "RowGoal_Short", "T/Goal"], "output": {"ref": "Goal_S_2F_40Short_2FRow_2F1", "type": "T/Goal"}},
+	{"input": [{"ref": "Row_1", "scopes": {"RowGoal_Main": "Goal_S_2F_40Main_2FRow_2F1"}}, "RowGoal_Short", "T/Goal"], "gap": "ReferenceUnmapped"}])
 Single = transform("Onto.Single", single, inputs=[Any], output=Any, gaps=["ReferenceAmbiguous"],
 	examples=[{"input": [{"set": [{"ref": "Person_1"}]}], "output": {"ref": "Person_1"}}, {"input": [{"set": []}], "output": ABSENT_VALUE},
 		{"input": [{"set": [{"ref": "a"}, {"ref": "b"}]}], "gap": "ReferenceAmbiguous"}, {"input": [{"ref": "a"}], "output": {"ref": "a"}}])
@@ -754,6 +779,8 @@ FormatName = transform("Onto.FormatName", formatName, inputs=[Any], output=Any,
 	examples=[{"input": ['DatePattern("YYYYMMDD")'], "output": "YYYYMMDD"}])
 Field = transform("Onto.Field", field, inputs=[Any, Any], output=Any,
 	examples=[{"input": [{"bond": {"interval": 6}}, ["bond", "interval"]], "output": 6}])
+Present = transform("Onto.Present", present, inputs=[Any], output=Any,
+	examples=[{"input": [None], "output": ABSENT_VALUE}, {"input": [ABSENT_VALUE], "output": ABSENT_VALUE}, {"input": ["2026-09-21"], "output": "2026-09-21"}])
 Nullable = transform("Onto.Nullable", nullable, inputs=[Any, Any, Text], output=Any,
 	examples=[{"input": [ABSENT_VALUE, None, "unknown"], "output": UNKNOWN},
 		{"input": [ABSENT_VALUE, ABSENT_VALUE, "unknown"], "output": ABSENT_VALUE}])
@@ -793,7 +820,7 @@ for builtinName, builtinExamples in BUILTIN_EXAMPLES.items():
 CODECS = {"EpochDate": EpochDate, "IntegerText": IntegerText, "SplitText": SplitText, "DateTimePattern": DateTimePattern,
 	"DecimalNumber": DecimalNumber, "DecimalPlaces": DecimalPlaces, "Case": Case}
 TRANSFORMS = {item.name: item for item in (Read, Set, TextEquals, TextIn, HasValue, AllOf, AnyOf, Unset, When, WhenNone, Coalesce, Handle, KeyedHandle, SourceHandle, Ref, HandleKey, Correspond,
-	CorrespondAs, CorrespondEmitted, Single, Valid, At, FormatName, Field, Nullable, QualifierConvert, ToInteger, ToVocabulary, Given, Members, *BUILTIN_TRANSFORMS.values())}
+	CorrespondAs, CorrespondEmitted, CorrespondNamed, Single, Valid, At, FormatName, Field, Present, Nullable, QualifierConvert, ToInteger, ToVocabulary, Given, Members, *BUILTIN_TRANSFORMS.values())}
 
 
 def builtin(name: str) -> AnyValue:
@@ -859,7 +886,7 @@ __all__ = [
 	"ABSENT_VALUE", "BindingCodes", "MappingCodes", "Integral", "IsoDuration", "EpochDate", "IntegerText", "SplitText",
 	"DateTimePattern", "DecimalNumber", "DecimalPlaces", "Case", "DatePattern", "DecimalText", "Read", "Set", "TextEquals", "TextIn", "HasValue", "AllOf", "AnyOf", "Unset",
 	"When", "WhenNone", "conditionHolds", "hasValue", "isPresent", "memberTexts",
-	"Coalesce", "Handle", "KeyedHandle", "SourceHandle", "Ref", "HandleKey", "Correspond", "CorrespondAs", "CorrespondEmitted", "Single", "Valid", "At", "FormatName", "Field", "Nullable",
+	"Coalesce", "Handle", "KeyedHandle", "SourceHandle", "Ref", "HandleKey", "Correspond", "CorrespondAs", "CorrespondEmitted", "CorrespondNamed", "Single", "Valid", "At", "FormatName", "Field", "Present", "Nullable",
 	"QualifierConvert", "ToInteger", "ToVocabulary", "Given", "Members", "TRANSFORMS", "CODECS", "builtin", "functionTransform", "functionCodec",
 	"reasonCode", "vocabularyConformance", "isAbsent", "decimalText", "documentValue", "encodeKey", "decodeKey",
 	"handleOf", "textOf",

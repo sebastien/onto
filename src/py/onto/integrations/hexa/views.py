@@ -23,17 +23,17 @@ from hexa.combinators import parallel, pipe, plan, validate
 from hexa.core import REGISTRY, member
 from hexa.runtime import run
 from hexa.shapes import Failure, SelectionRequest, codes, profile
-from ...binding.model import Binding
-from ...conditions import conditionFromJson, conditionOutcome, conditionPaths, parseCondition, testValues
+from ...conditions import conditionOutcome, conditionPaths
 from ...mapping.model import Mapping, MappingLine, MappingScope
-from ...mapping.operations import acceptedTypes, correspondenceScopes, correspondenceTarget
+from ...mapping.operations import acceptedTypes, correspondenceScopes, correspondenceTarget, namedCorrespondenceScope
 from ...observations.model import Observations, activeHandles, observationStatus
 from ...observations.operations import mergeObservationLogs, observationsFromJson, observationsToJson, reconcileObservations, sourceToken
-from ...observations.rooted import Evidence, Witness, conflicted, roleValidity
+from ...observations.rooted import Evidence, Witness, conflicted, inContext, roleValidity
 from ...ontology.model import Model, ViewInput, isSymmetric, unkeyed
 from ...ontology.rooted import Field, Hop, RootedView, fieldFor, memberMatches
 from ...text import FormatError, isName, isPath
-from .compiler import SELF, MappingCompiler, isMulti
+from .catalogue import ViewRead, planReadSteps, readLink, readSelection
+from .compiler import SELF, MappingCompiler
 from .operations import HexaBindingOperator, HexaMappingOperator
 from .requests import checkRequest, requestFor, requestSource, requestTemplate
 
@@ -42,28 +42,6 @@ from .requests import checkRequest, requestFor, requestSource, requestTemplate
 # DEFINITIONS
 #
 # -----------------------------------------------------------------------------
-
-
-@dataclass(slots=True)
-class ViewRead:
-	"""A catalogue step: typed input key, admitted bindings, any key discovered in their output, and its request.
-
-	`request` is a `RequestSend` template and `source` the response's provenance token, both filled with the input
-	value as `requests` describes. Without `request`, the host's `fetch` reads the step. `selects` states what the
-	read selects: for a source type, a condition its rows satisfy, testing single-valued attributes joined by `&`
-	(`{"Exchange/Listing": "Venue:XNYS"}`), which rules the read out for mapping lines whose conditions it refutes.
-	"""
-
-	input: ViewInput
-	bindings: list[Binding]
-	provides: ViewInput | None = None
-	request: dict | None = None
-	source: str | None = None
-	selects: dict[str, str | dict] | None = None
-
-	@property
-	def key(self) -> str:
-		return self.input.key
 
 
 @dataclass(slots=True)
@@ -103,27 +81,6 @@ class ReadOutcome:
 # -----------------------------------------------------------------------------
 
 
-def readSelection(model: Model, selects: dict[str, str | dict]) -> dict[tuple[str, str], frozenset[str]]:
-	"""What a read's request selects, as the values it leaves each attribute it tests: `{(type, member): values}`."""
-	fixed = {}
-	for kind, condition in selects.items():
-		decl = model.get(kind)
-		if decl is None or decl.kind != "entity":
-			raise ValueError(f"a read selects the rows of a source entity, not {kind}")
-		parsed = parseCondition(condition, binding=False) if isinstance(condition, str) else conditionFromJson(condition, binding=False)
-		for test in parsed["all"] if "all" in parsed else [parsed]:
-			steps = test.get("path", [])
-			member = ".".join(steps) if steps and all(isinstance(step, str) for step in steps) else ""
-			if not member or not testValues(test) or model.lookup(kind, member) is None:
-				raise ValueError(f"{kind}: a read selects rows by values of their own attributes, joined by &")
-			if any((attr := model.lookup(kind, ".".join(steps[:end]))) and isMulti(model, attr) for end in range(1, len(steps) + 1)):
-				raise ValueError(f"{kind}: a read selects by single-valued attributes, not {member}")
-			if (kind, member) in fixed:
-				raise ValueError(f"{kind}: a read selects {member} once")
-			fixed[kind, member] = frozenset(testValues(test))
-	return fixed
-
-
 def writesViewField(model: Model, scope: MappingScope, line: MappingLine, field: Field) -> bool:
 	"""Whether this mapping line writes the directed relation or member of a view field."""
 	if not field.relation:
@@ -133,6 +90,15 @@ def writesViewField(model: Model, scope: MappingScope, line: MappingLine, field:
 			role = relation.participants[int(inverse)].role
 			return model.isA(scope.target, field.owner if role == field.roles[0] else field.other)
 	return False
+
+
+def segmentNeeds(segment) -> set[tuple[str, str]]:
+	"""The source rows and members a read supplies for one path step: a lookup needs the rows it looks up and the compared
+	attributes of both types (spec-04 Lookups)."""
+	if segment.kind == "lookup":
+		lookup = segment.lookup
+		return {(lookup.type, "")} | {(lookup.type, unkeyed(line.attr)) for line in lookup.lines} | {(segment.owner, unkeyed(line.source)) for line in lookup.lines}
+	return {(segment.owner, unkeyed(segment.key))}
 
 
 def readCode(reason: object):
@@ -186,15 +152,6 @@ def keyValue(value: object, builtin: str | None) -> object:
 			return value
 		return int(number) if builtin == "Integer" or number == number.to_integral_value() else float(number)
 	return value
-
-
-def readProviders(steps: list[str], reads: dict[str, ViewRead], seedKey: str) -> dict[str, str | None]:
-	"""Each planned read's provider: the earlier read that discovers its key; none for the seed's reads."""
-	providers = {}
-	for index, name in enumerate(steps):
-		key = reads[name].key
-		providers[name] = None if key == seedKey else next((other for other in steps[:index] if (p := reads[other].provides) and p.key == key), None)
-	return providers
 
 
 def readWaves(steps: list[str], providers: dict[str, str | None]) -> dict[str, int]:
@@ -281,23 +238,17 @@ class HexaViewOperator:
 			if not target or not self.targetModel.isA(target, root):
 				raise ValueError(f"{name}: no root correspondence from {view.input.key} to {root}")
 			self.rootTargets[name] = target
+		links = {step: readLink(self.targetModel, self.inputTargets, step, read) for step, read in reads.items() if read.via is not None}
+		self.steps = {}
+		for name, view in self.views.items():
+			try:
+				self.steps[name] = planReadSteps(self.targetModel, view, self.reads, links)
+			except ValueError as error:
+				raise ValueError(f"{name}: {error}") from None
 
 	@cached_property
 	def mapProgram(self):
 		return self.mapper.compile(self.mapping)
-
-	def readSteps(self, seedKey: str) -> dict:
-		"""Discover the catalogue reachable from the seed, in prerequisite order with ties in catalogue order."""
-		providers, steps = {seedKey: None}, {}
-		while ready := [(s, r) for s, r in self.reads.items() if s not in steps and r.key in providers]:
-			for name, read in ready:
-				parent = providers[read.key]
-				steps[name] = {"requires": [parent] if parent else [], "capability": name}
-				if read.provides and (key := read.provides.key) != seedKey:
-					if key in providers:
-						raise ValueError(f"ambiguous providers of {key}: {providers[key]}, {name}")
-					providers[key] = name
-		return steps
 
 	def refutes(self, step: str, conditions: tuple) -> bool:
 		"""Whether the rows a read selects fail one of a mapping line's `(reader, condition)` conditions."""
@@ -318,10 +269,10 @@ class HexaViewOperator:
 
 	def correspondences(self, view: RootedView, steps: dict) -> dict:
 		"""Follow mapping correspondences from the seed to select a read for each population field."""
-		fields = {f for _, f in view.selections.values()} | {h.field for path in view.paths.values() for h in path}
+		fields = {projection.field for projection in view.selections.values()} | {h.field for path in view.paths.values() for h in path}
 		# A link whose relation has a context can also be written by both roles of the same mapped association.
-		roleFields = {f: tuple(fieldFor(self.targetModel, f.context[0], role) for role in f.context[1:])
-			for f in fields if f.context and f.context[1] != f.context[2]}
+		roleFields = {f: tuple(fieldFor(self.targetModel, f.association[0], role) for role in f.association[1:])
+			for f in fields if f.association and f.association[1] != f.association[2]}
 		associationFields = {role for pair in roleFields.values() for role in pair}
 		written = fields | associationFields
 		inputs = defaultdict(list)
@@ -346,15 +297,19 @@ class HexaViewOperator:
 					kind = reader.exprType(line.expr)
 					objectType = kind.path if kind and kind.kind in ("entity", "relation") else None
 					dest = line.asType
-					if not dest and objectType:
+					if self.mapping.isTargetType(objectType):
+						dest, objectType = objectType, None  # No source row stands behind an already-target reference.
+					elif not dest and objectType:
 						attr = self.targetModel.lookup(scope.target, line.target) if line.target else None
-						dest = correspondenceTarget(reader.source, self.targetModel, self.mapping, objectType,
-							acceptedTypes(self.targetModel, scope.target, line.target or line.verb, attr))
+						accepted = acceptedTypes(self.targetModel, scope.target, line.target or line.verb, attr)
+						# `{name=N}`: the target type of the scope it names, where several fit the receiver
+						dest = (namedCorrespondenceScope(reader.source, self.targetModel, self.mapping, objectType, line.name, accepted).target if line.name
+							else correspondenceTarget(reader.source, self.targetModel, self.mapping, objectType, accepted))
 					matches = [f for f in matches if dest and self.targetModel.isA(dest, f.owner if line.verb and line.verb != f.member else f.other)]
 				conditions = tuple((reader, condition) for condition in (scope.when, line.when) if condition)
 				paths = [path for expr in [*guards, line.expr, *line.qualifiers.values()] for path in reader.paths(expr)]
 				paths += [path for _, condition in conditions for path in conditionPaths(condition) if path != SELF]
-				required = {(scope.source, "")} | {(part.owner, unkeyed(part.key)) for path in paths for part in reader.segments(path)}
+				required = {(scope.source, "")} | {need for path in paths for part in reader.segments(path) for need in segmentNeeds(part)}
 				for f in matches:
 					a, b = (objectType, subjectType) if line.verb and line.verb != f.member else (subjectType, objectType)
 					if f in fields:
@@ -400,8 +355,9 @@ class HexaViewOperator:
 					candidates = [c for c in candidates if c[0] in rowTypes[alias] and (
 						not hop.ancestor or c[1] in rowTypes[hop.ancestor])]
 					register(hop.key, candidates, rowReads[alias])
-		for key, (alias, f) in view.selections.items():
-			register(key, [c for c in inputs[f] if c[0] in rowTypes[alias]], rowReads[alias])
+		for key, projection in view.selections.items():
+			alias = projection.population
+			register(key, [c for c in inputs[projection.field] if c[0] in rowTypes[alias]], rowReads[alias])
 		return matches
 
 	def checkValue(self, param: ViewInput, value) -> None:
@@ -429,12 +385,13 @@ class HexaViewOperator:
 		kind = rooted.populations[rooted.root].type
 		handle = self.access.rootHandle(param, value, self.rootTargets[view])
 		wanted = rooted.select(fields)
-		steps = self.readSteps(param.key)
+		steps = self.steps[view]
 		matches = self.correspondences(rooted, steps)
 		supplier = {key: entries[0]["supplier"] if entries else None for key, entries in matches.items()}
 		dependents, paths, outputs = defaultdict(list), {}, {}
 		for spelling, key in wanted.items():
-			alias, f = rooted.selections[key]
+			projection = rooted.selections[key]
+			alias, f = projection.population, projection.field
 			child = rooted.guardedLinks.get((alias, f.relation, f.roles))
 			chain = rooted.paths[child or alias]
 			paths[spelling] = {"population": alias, "hops": [{**describeHop(h), "supplier": supplier[h.key]} for h in chain], "leaf": f.path}
@@ -505,7 +462,8 @@ class HexaViewOperator:
 		result = await self.plan(view, seed, fields)
 		param = self.views[view].input
 		steps = [step["step"] for step in result["steps"]]
-		providers = readProviders(steps, self.reads, param.key)
+		# NOTE: The view's provider of each key, not any earlier read discovering it: the view may not take it from that one.
+		providers = {step["step"]: step["requires"][0] if step["requires"] else None for step in result["steps"]}
 		waves = readWaves(steps, providers)
 		# NOTE: A replayed journal may name host reasons this process has not declared yet.
 		for entry in replay or ():
@@ -668,7 +626,8 @@ class HexaViewOperator:
 		root = result["root"]["handle"]
 		gaps = {g["field"]: g["reason"] for g in result["gaps"] if "field" in g}
 		for spelling, key in view.select(list(result["fields"])).items():
-			alias, f = view.selections[key]
+			projection = view.selections[key]
+			alias, f = projection.population, projection.field
 			supplier = result["fields"][spelling]
 			path = result["paths"][spelling]
 			child = path.get("objectPopulation")
@@ -700,8 +659,8 @@ class HexaViewOperator:
 				seen = set()
 				reason = blocked(supplier, alias, bindings, f.other)
 				for subject, value, c, roleClaim in graph.rows(f) if reason is None else ():
-					if subject != h:
-						continue
+					if subject != h or not inContext(c, projection.contextPopulation, bindings):
+						continue  # Another subject's value, or one holding within another context.
 					if returnsToParent and value.get("ref") != bindings[incoming.parent]:
 						continue  # Returning a filing/review link back to the root must preserve that root.
 					if child:

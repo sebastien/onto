@@ -75,6 +75,9 @@
         "at": {
           "$ref": "#/$defs/expr"
         },
+        "valid": {
+          "$ref": "#/$defs/expr"
+        },
         "columns": {
           "type": "array",
           "minItems": 1,
@@ -185,6 +188,49 @@
         },
         "functions": {
           "$ref": "#/$defs/functions"
+        },
+        "lookups": {
+          "description": "`@lookup Owner.Name -> Type`: the one instance of `Type` whose compared attributes equal the owner's.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["owner", "name", "type", "lines"],
+            "additionalProperties": false,
+            "properties": {
+              "owner": {
+                "$ref": "#/$defs/path"
+              },
+              "name": {
+                "$ref": "#/$defs/name"
+              },
+              "type": {
+                "$ref": "#/$defs/path"
+              },
+              "lines": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": ["attr", "from"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "attr": {
+                      "$ref": "#/$defs/attrPath"
+                    },
+                    "from": {
+                      "$ref": "#/$defs/attrPath"
+                    },
+                    "doc": {
+                      "$ref": "#/$defs/doc"
+                    }
+                  }
+                }
+              },
+              "doc": {
+                "$ref": "#/$defs/doc"
+              }
+            }
+          }
         },
         "maps": {
           "description": "Value maps, in the spec-01 JSON `map` declaration form; `path` is the map's name.",
@@ -871,6 +917,10 @@
               "$ref": "#/$defs/path",
               "description": "Mappings: the target type the line's references translate to"
             },
+            "name": {
+              "$ref": "#/$defs/name",
+              "description": "Mappings: the named scope line the line's references translate through"
+            },
             "qualifiers": {
               "type": "object",
               "additionalProperties": false,
@@ -941,6 +991,10 @@
             "as": {
               "$ref": "#/$defs/path",
               "description": "Mappings: the target type the line's references translate to"
+            },
+            "name": {
+              "$ref": "#/$defs/name",
+              "description": "Mappings: the named scope line the line's references translate through"
             },
             "qualifiers": {
               "type": "object",

@@ -18,9 +18,10 @@ from hexa.template import compileTemplate
 
 from ...binding.model import bindingBy
 from ...functions.operations import resolveSignature
-from ...ontology.model import Attr, Model, ResolvedType, TypeExpr, ViewInput, isAssociation, isSetValued, isSymmetric
+from ...ontology.facts import NUMERIC, attrJson, modelJson
+from ...ontology.model import Model, ResolvedType, TypeExpr, ViewInput, isSetValued
 from ...ontology.rooted import Field, Hop, RootedView
-from ...text import annotation, lastSegment
+from ...text import annotation
 from .compiler import BindingCompiler, MappingCompiler
 from .requests import requestTemplate
 
@@ -31,13 +32,10 @@ from .requests import requestTemplate
 # -----------------------------------------------------------------------------
 
 
-BUNDLE_FORMAT = "onto.view-bundle/1"
+BUNDLE_FORMAT = "onto.view-bundle/2"
 RE_SELECTOR_SLOT = re.compile(r":\$([A-Za-z][A-Za-z0-9.]*)")
 # Standard slots every hexa runtime declares itself.
 STANDARD_SLOTS = ("Location", "Origin")
-# NOTE: Wider than the binding and compiler NUMERIC: value identity compares Durations by number too, as
-# `observations.model` does, so the runtime's `valueIdentity` needs them flagged numeric.
-NUMERIC = ("Integer", "Number", "Amount", "Percent", "Duration")
 
 
 # -----------------------------------------------------------------------------
@@ -74,19 +72,6 @@ def scopeSlots(scope: AnyValue) -> set[Slot]:
 # -----------------------------------------------------------------------------
 
 
-def attrJson(model: Model, attr: Attr) -> dict:
-	"""What reconciliation and unfolding consult about an attribute: cardinality, numeric identity, declared qualifiers, structure and target."""
-	resolved = model.resolveType(attr.type, attr.ann)
-	structure = model.structOf(attr.type)
-	element = resolved.element
-	return {"multi": (attr.card or model.defaultCard) in ("*", "+"),
-		**({"numeric": True} if resolved.builtin in NUMERIC else {}),
-		**({"numericRange": True} if resolved.kind == "range" and element is not None and element.builtin in NUMERIC else {}),
-		**({"qualifiers": dict(resolved.qualifiers)} if resolved.qualifiers else {}),
-		**({"struct": structure.path} if structure is not None else {}),
-		**({"ref": resolved.path} if resolved.kind in ("entity", "relation") else {})}
-
-
 def typeJson(resolved: ResolvedType, collection: bool = False) -> dict:
 	"""A resolved signature type, as `types.js` checks values against it."""
 	result = {"kind": resolved.kind, **{key: value for key in ("builtin", "path") if (value := getattr(resolved, key))}}
@@ -101,27 +86,6 @@ def typeJson(resolved: ResolvedType, collection: bool = False) -> dict:
 	if resolved.kind == "range" and resolved.element is not None and resolved.element.builtin in NUMERIC:
 		result["numericRange"] = True
 	return result | ({"collection": True} if collection else {})
-
-
-def modelJson(model: Model) -> dict:
-	"""The ontology facts runtimes consult: declaration kinds and bases, attributes, facets, structures and binary relations."""
-	types, relations, facets, structs = {}, {}, {}, {}
-	attrs = lambda items: {attr.name: attrJson(model, attr) for attr in items}
-	participants = lambda decl: [{"role": item.role, "type": item.type, **({"card": item.card} if item.card else {})} for item in decl.participants]
-	for decl in model.ontology.decls:
-		if decl.kind == "entity" or isAssociation(decl):
-			types[decl.path] = {"kind": decl.kind, **({"base": decl.base} if decl.base else {}),
-				**({"association": True, "roles": participants(decl)} if isAssociation(decl) else {}), "attrs": attrs(decl.attrs)}
-		elif decl.kind == "relation" and decl.arrow:
-			relations[decl.path] = {"verb": decl.arrow.verb, **({"inverse": decl.arrow.inverse} if decl.arrow.inverse else {}),
-				"participants": participants(decl), **({"symmetric": True} if isSymmetric(decl) else {}), "attrs": attrs(decl.attrs)}
-		elif decl.kind == "facet" and decl.subject:
-			facets.setdefault(decl.subject, []).append({"name": lastSegment(decl.path), "path": decl.path,
-				**({"ctx": annotation(decl.ann, "ctx")} if annotation(decl.ann, "ctx") else {}), "attrs": attrs(decl.attrs)})
-		elif decl.kind == "type" and decl.fields is not None:
-			structs[decl.path] = {"fields": attrs(decl.fields)}
-	return {"namespace": model.ontology.namespace, "uses": [list(pair) for pair in model.ontology.uses], "defaultCard": model.defaultCard,
-		"types": types, "relations": relations, "facets": facets, "structs": structs}
 
 
 def viaCodecs(shape: AnyValue, found: list) -> list:
@@ -161,10 +125,16 @@ def bindingProgramJson(operator: AnyValue, program: AnyValue) -> dict:
 		"slots": slotsJson(slots), "functions": functions, "maps": maps, "codecs": codecs, "scopes": scopes}
 
 
+def lookupJson(lookup: AnyValue) -> dict:
+	"""A lookup step's declaration: the looked-up type and its compared attributes, `[attr, owner attribute]`."""
+	return {"type": lookup.type, "lines": [[line.attr, line.source] for line in lookup.lines]}
+
+
 def reachJson(reach: dict) -> dict:
 	"""A scope's reach: `{key: {segment, children}}`, with the segment facts unfolding uses."""
 	return {key: {"segment": {"key": node["segment"].key, "kind": node["segment"].kind, "owner": node["segment"].owner, "multi": node["segment"].multi,
-		**({"next": node["segment"].next} if node["segment"].next else {}), **({"context": node["segment"].context} if node["segment"].context else {})},
+		**({"next": node["segment"].next} if node["segment"].next else {}), **({"context": node["segment"].context} if node["segment"].context else {}),
+		**({"lookup": lookupJson(node["segment"].lookup)} if node["segment"].lookup else {})},
 		"children": reachJson(node["children"])} for key, node in reach.items()}
 
 
@@ -216,7 +186,8 @@ def mappingProgramJson(mapper: AnyValue, program: AnyValue, libraries: list | No
 			"segmentKeys": [[list(steps), keys] for steps, keys in plan.segmentKeys.items()],
 			"contextOverride": plan.contextOverride, "contextualScope": plan.contextualScope, "contextInputs": plan.contextInputs,
 			"readsSelf": plan.readsSelf, "presence": plan.presence, "presenceInputs": plan.presenceInputs, "update": plan.update,
-			"targetInputs": plan.targetInputs, "sourceRefs": {key: [typePath, keys] for key, (typePath, keys) in plan.sourceRefs.items()}})
+			"targetInputs": plan.targetInputs, "sourceRefs": {key: [typePath, keys] for key, (typePath, keys) in plan.sourceRefs.items()},
+			**({"scopeName": plan.scopeName} if plan.scopeName else {})})
 	compiler = MappingCompiler(mapper.fromOntology, mapper.toOntology, mapping, mapper.referential, mapper.libraries if libraries is None else libraries,
 		mapper.implementations, mapper.ontologies)
 	functions, maps = functionsJson(compiler.calls.evaluator, set(program.vocabulary))
@@ -232,12 +203,13 @@ def inputJson(item: ViewInput) -> dict:
 def fieldJson(item: Field) -> dict:
 	return {"owner": item.owner, "member": item.member, "path": item.path,
 		**{key: value for key in ("other", "relation") if (value := getattr(item, key))}, **({"roles": list(item.roles)} if item.roles else {}),
-		**({"context": list(item.context)} if item.context else {})}
+		**({"context": list(item.association)} if item.association else {}), **({"ctx": item.contextType} if item.contextType else {})}
 
 
 def hopJson(hop: Hop) -> dict:
 	return {"parent": hop.parent, "population": hop.population, "field": fieldJson(hop.field), **({"reverse": True} if hop.reverse else {}),
-		**({"test": hop.test} if hop.test is not None else {}), **({"proves": hop.proves} if hop.proves else {})}
+		**({"test": hop.test} if hop.test is not None else {}), **({"proves": hop.proves} if hop.proves else {}),
+		**({"ctx": hop.contextPopulation} if hop.contextPopulation else {})}
 
 
 def viewJson(operator: AnyValue, name: str, view: RootedView) -> dict:
@@ -249,9 +221,10 @@ def viewJson(operator: AnyValue, name: str, view: RootedView) -> dict:
 		"populations": {alias: {"type": population.type} for alias, population in view.populations.items()},
 		"paths": {alias: [hopJson(hop) for hop in path] for alias, path in view.paths.items()},
 		"guardedLinks": [[parent, relation, list(roles), alias] for (parent, relation, roles), alias in view.guardedLinks.items()],
-		"selections": {key: [alias, fieldJson(item)] for key, (alias, item) in view.selections.items()},
-		"typeSelections": view.typeSelections, "defaults": view.defaults,
-		"matches": operator.correspondences(view, operator.readSteps(view.input.key))}
+		"selections": {key: [item.population, fieldJson(item.field)] for key, item in view.selections.items()},
+		"contexts": {key: item.contextPopulation for key, item in view.selections.items() if item.contextPopulation},
+		"typeSelections": view.typeSelections, "defaults": view.defaults, "steps": operator.steps[name],
+		"matches": operator.correspondences(view, operator.steps[name])}
 
 
 def viewBundle(operator: AnyValue) -> dict:

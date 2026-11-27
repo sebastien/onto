@@ -14,7 +14,7 @@ from ..observations.parser import jsonObject, jsonString
 from ..ontology.model import Decl, RE_ATTR_PATH, RE_ELEMENT_PATH, RE_MAP, RE_VIEW_ARROW
 from ..ontology.parser import OntologyParseContext, declFromJson, parseMapLine
 from ..text import Diagnostics, Loc, Source, isName, isPath, isToken, parseAnnotations, parseArguments, sourceLines, splitAnnotations, splitDoc
-from .model import HEADER_KEYS, MAPPING_FORMAT, QUALIFIER_KEYS, Mapping, MappingDocument, MappingExclusion, MappingLine, MappingScope
+from .model import HEADER_KEYS, MAPPING_FORMAT, QUALIFIER_KEYS, Mapping, MappingDocument, MappingExclusion, MappingLine, MappingLookup, MappingLookupLine, MappingScope
 
 # -----------------------------------------------------------------------------
 #
@@ -90,7 +90,7 @@ def elementPath(text: str, namespace: str, uses: dict[str, str]) -> str:
 
 def readMappingJson(data: Any) -> Mapping:
 	"""Decode and validate mapping JSON data."""
-	value = jsonObject(data, ("format", "from", "to", "scopes"), ("header", "uses", "functions", "maps", "exclusions"))
+	value = jsonObject(data, ("format", "from", "to", "scopes"), ("header", "uses", "functions", "maps", "lookups", "exclusions"))
 	if value["format"] != MAPPING_FORMAT:
 		raise ValueError("Unknown mapping JSON format")
 	fromNamespace, toNamespace = jsonString(value["from"], isPath), jsonString(value["to"], isPath)
@@ -118,6 +118,18 @@ def readMappingJson(data: Any) -> Mapping:
 		for line in item["lines"]:
 			readDoc(line)
 		mapping.maps.append(decl)
+	if not isinstance(value.get("lookups", []), list):
+		raise ValueError("lookups must be an array")
+	isAttrPath = lambda text: bool(RE_ATTR_PATH.fullmatch(text))  # noqa: E731
+	for item in value.get("lookups", []):
+		item = jsonObject(item, ("owner", "name", "type", "lines"), ("doc",))
+		lookup = MappingLookup(jsonString(item["owner"], isPath), jsonString(item["name"], isName), jsonString(item["type"], isPath), doc=readDoc(item))
+		if not isinstance(item["lines"], list) or not item["lines"]:
+			raise ValueError("A lookup compares at least one attribute")
+		for line in item["lines"]:
+			line = jsonObject(line, ("attr", "from"), ("doc",))
+			lookup.lines.append(MappingLookupLine(jsonString(line["attr"], isAttrPath), jsonString(line["from"], isAttrPath), readDoc(line)))
+		mapping.lookups.append(lookup)
 	if not isinstance(value["scopes"], list):
 		raise ValueError("scopes must be an array")
 	for item in value["scopes"]:
@@ -136,7 +148,7 @@ def readMappingJson(data: Any) -> Mapping:
 			if not isinstance(line, dict) or len(set(line) & {"target", "facet", "verb"}) != 1:
 				raise ValueError("A mapping line requires one target kind")
 			kind = next(key for key in ("target", "facet", "verb") if key in line)
-			line = jsonObject(line, (kind,) if kind == "facet" else (kind, "expr"), ("when", "candidate", "doc") if kind == "facet" else ("when", "src", "as", "reverse", "candidate", "doc", "qualifiers"))
+			line = jsonObject(line, (kind,) if kind == "facet" else (kind, "expr"), ("when", "candidate", "doc") if kind == "facet" else ("when", "src", "as", "name", "reverse", "candidate", "doc", "qualifiers"))
 			name = jsonString(line[kind], isName if kind == "facet" else lambda text: bool(RE_ELEMENT_PATH.fullmatch(text)))
 			entry = MappingLine(**{kind: name}, doc=readDoc(line))
 			if "expr" in line:
@@ -149,6 +161,8 @@ def readMappingJson(data: Any) -> Mapping:
 				entry.src = jsonString(line["src"], lambda text: bool(RE_ATTR_PATH.fullmatch(text)))
 			if "as" in line:
 				entry.asType = jsonString(line["as"], isPath)
+			if "name" in line:
+				entry.name = jsonString(line["name"], isName)
 			for key in ("reverse", "candidate"):
 				if key in line:
 					if line[key] is not True:
@@ -187,7 +201,7 @@ def parseMapping(source: Source) -> MappingDocument:
 		doc.header = mappingHeader(dict(parseArguments(match[3], lines[0].loc, diag)))
 	except ValueError as error:
 		diag.error("header", str(error), lines[0].loc)
-	current: MappingScope | FunctionDeclaration | Decl | None = None
+	current: MappingScope | FunctionDeclaration | Decl | MappingLookup | None = None
 	names: set[str] = set()
 	for line in lines[1:]:
 		try:
@@ -201,6 +215,13 @@ def parseMapping(source: Source) -> MappingDocument:
 					current.mapLines.append(value)
 				continue
 			body, docText = splitDoc(line.text)
+			if line.indent and isinstance(current, MappingLookup):
+				# `A <- B`: the looked-up type's attribute A equals the owner's attribute B
+				match = re.fullmatch(r"(\S+)[ \t]+<-[ \t]+(\S+)", body)
+				if not match or not RE_ATTR_PATH.fullmatch(match[1]) or not RE_ATTR_PATH.fullmatch(match[2]):
+					raise ValueError("A lookup line compares two attributes: Attr <- Attr")
+				current.lines.append(MappingLookupLine(match[1], match[2], docText, line.loc))
+				continue
 			body, annotations = splitAnnotations(body)
 			if line.indent:
 				if not isinstance(current, MappingScope):
@@ -211,7 +232,7 @@ def parseMapping(source: Source) -> MappingDocument:
 					parts = re.split(r"[ \t]+<-[ \t]+", body, maxsplit=1)
 					if len(parts) != 2 or not RE_ELEMENT_PATH.fullmatch(parts[0]):
 						raise ValueError("Invalid mapping assignment")
-					entry = MappingLine(target=parts[0], expr=parseExpression(parts[1]), **mappingAnnotations(annotations, ("when", "src", "as", *QUALIFIER_KEYS, "reverse", "candidate")), doc=docText, loc=line.loc)
+					entry = MappingLine(target=parts[0], expr=parseExpression(parts[1]), **mappingAnnotations(annotations, ("when", "src", "as", "name", *QUALIFIER_KEYS, "reverse", "candidate")), doc=docText, loc=line.loc)
 					if entry.asType:
 						entry.asType = qualifyPath(entry.asType, doc.toNamespace, doc.uses)
 				current.lines.append(entry)
@@ -232,6 +253,14 @@ def parseMapping(source: Source) -> MappingDocument:
 				current = Decl("map", name, ann=parseAnnotations(annotations, line.loc, diag), doc=docText, loc=line.loc,
 					mapFrom=qualifyPath(left, doc.fromNamespace, doc.uses), mapTo=qualifyPath(right, doc.toNamespace, doc.uses))
 				doc.maps.append(current)
+			elif match := re.fullmatch(r"@lookup\s+(\S+)\s+->\s+(\S+)", body):
+				owner, _, name = match[1].rpartition(".")
+				if not owner or not isName(name) or annotations is not None:
+					raise ValueError("Invalid lookup: @lookup Owner.Name -> Type")
+				current = MappingLookup(qualifyPath(owner, doc.fromNamespace, doc.uses), name, qualifyPath(match[2], doc.fromNamespace, doc.uses), doc=docText, loc=line.loc)
+				if any((item.owner, item.name) == (current.owner, current.name) for item in doc.lookups):
+					raise ValueError(f"Duplicate lookup '{match[1]}'")
+				doc.lookups.append(current)
 			elif match := re.fullmatch(r"@use\s+(\S+)\s+as\s+(\S+)", body):
 				namespace, alias = match.groups()
 				if not isPath(namespace) or not isName(alias) or alias in doc.uses or annotations is not None or docText is not None:
@@ -254,6 +283,9 @@ def parseMapping(source: Source) -> MappingDocument:
 	for function in doc.functions:
 		if not function.examples:
 			diag.error("example", f"Function '{function.name}' needs examples", function.loc)
+	for lookup in doc.lookups:
+		if not lookup.lines:
+			diag.error("mapping", f"Lookup '{lookup.name}' compares no attribute", lookup.loc)
 	doc.diagnostics = diag.check()
 	return doc
 

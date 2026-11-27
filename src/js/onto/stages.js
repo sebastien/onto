@@ -118,6 +118,8 @@ export class ClaimsBuilder {
 			this.add({ s: handle, exists: true, ...meta }, true);
 			return;
 		}
+		// The document's validity (`@valid`) holds for every claim; a scope's own `valid` for its existence claim.
+		if (typeof record.documentValid === "string") meta = { ...meta, valid: record.documentValid };
 		const valid = record.valid;
 		this.exists(handle, { ...meta, ...(typeof valid === "string" ? { valid } : {}) });
 		const ctx = refHandle(record.ctx);

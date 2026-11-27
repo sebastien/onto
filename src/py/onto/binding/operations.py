@@ -282,7 +282,7 @@ def resolveBinding(ontology: Ontology, doc: BindingDocument, libraries: list[Fun
 			diag.error("reference", f"Unknown ontology or function library '{namespace}'", doc.loc)
 	diag.check()
 	binding = Binding(doc.ontology, dict(doc.header), dict(doc.uses), deepcopy(doc.at), deepcopy(doc.columns),
-		scopes=deepcopy(doc.scopes), exclusions=deepcopy(doc.exclusions), loc=doc.loc)
+		scopes=deepcopy(doc.scopes), exclusions=deepcopy(doc.exclusions), loc=doc.loc, valid=deepcopy(doc.valid))
 	if doc.functions:
 		uses = {alias: namespace for alias, namespace in doc.uses.items() if namespace in model.namespaces()}
 		binding.functions = resolveFunctions(contexts, FunctionsDocument(doc.ontology, uses=uses, functions=doc.functions)).functions
@@ -294,11 +294,12 @@ def resolveBinding(ontology: Ontology, doc: BindingDocument, libraries: list[Fun
 				diag.error("function", f"Ambiguous library function '{path}'", doc.loc)
 			functions[path] = function
 	resolver = ExpressionResolver(model, binding.ontology, binding.uses, functions, binding.scopes)
-	if binding.at is not None:
-		try:
-			resolver.resolve(binding.at)
-		except ValueError as error:
-			diag.error("expression", str(error), doc.loc)
+	for expr in (binding.at, binding.valid):
+		if expr is not None:
+			try:
+				resolver.resolve(expr)
+			except ValueError as error:
+				diag.error("expression", str(error), doc.loc)
 	for exclusion in binding.exclusions:
 		try:
 			resolver.resolve(exclusion.path)

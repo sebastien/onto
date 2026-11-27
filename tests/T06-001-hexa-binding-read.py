@@ -79,7 +79,8 @@ def test_dividend_scope_compiles_as_spec06_shows():
 	assert encoded["shape"]["$loose"]["payableDate?"] == {"$either": ["$Null", {"$tolerant": {"$": "Exchange.Dividend.PayableDate", "via": {"$": "DatePattern", "arguments": ["YYYYMMDD"]}}}]}
 	assert encoded["shape"]["$loose"]["amount?"] == {"$either": ["$Null", {"$tolerant": {"$": "Exchange.Dividend.Amount", "via": "DecimalText"}}]}
 	assert encoded["template"]["handle"] == {"$derive": "$Onto.Handle", "arguments": ["Dividend", {"$derive": "$Onto.Concat", "arguments": [
-		{"$": "Bind.Dividend.Fields.Outer.Isin", "optional": True}, "/", {"$": "Bind.Dividend.Fields.ExDate", "optional": True}]}]}
+		{"$derive": "$Onto.Present", "arguments": [{"$": "Bind.Dividend.Fields.Outer.Isin", "optional": True}]}, "/",
+		{"$": "Bind.Dividend.Fields.ExDate", "optional": True}]}]}
 	assert encoded["outer"] == ["Bind.At", "Bind.Dividend.Fields.Outer.Isin"]
 	assert {"Exchange.Dividend.Amount", "Exchange.Instrument.CouponRate", "Exchange.Issuer.Id"} <= set(program.slots)
 
@@ -207,6 +208,29 @@ def test_documents_of_a_run_are_aliased_in_order_and_keep_their_own_gaps():
 	_, result, log, report = read(HexaBindingOperator(EXCHANGE), BINDING, [{"src": SRC, "document": feed}, {"src": "feed:b", "document": second}])
 	assert observationsToJson(log)["sources"] == {"d1": SRC, "d2": "feed:b"}
 	assert {(gap.src, gap.reason) for gap in report.gaps} == {(SRC, "Issue.Missing"), ("feed:b", "Binding.KeyMissing")}
+
+
+def test_valid_dates_every_claim_of_a_document_and_a_scope_its_own_existence():
+	# A snapshot: everything it says holds as at its date; a dividend exists as of its ex-date all the same.
+	text = specExample("spec-04-mapping", 2).replace("@at <- asOf\n", "@at <- asOf\n@valid <- asOf\n")
+	_, _, log, _ = read(HexaBindingOperator(EXCHANGE), loadBinding(EXCHANGE, Source("b", text)), [{"src": SRC, "document": FEED}])
+	dividends = {handle for handle, item in log.instances.items() if item["type"] == "Exchange/Dividend"}
+	own = [claim for claim in log.claims if claim.get("exists") and claim["s"] in dividends]
+	assert own and all(claim["valid"] != FEED["asOf"] for claim in own)
+	assert {claim.get("valid") for claim in log.claims if claim not in own} == {FEED["asOf"]}
+
+
+def test_json_null_outside_the_record_is_absent():
+	# A null document field is not present: `@at` takes the run's time, and `??` falls through it.
+	feed = {**FEED, "asOf": None, "published": FEED["asOf"]}
+	text = specExample("spec-04-mapping", 2).replace("@at <- asOf\n", "@at <- asOf\n@valid <- asOf ?? published\n")
+	ops = HexaBindingOperator(EXCHANGE)
+	program = ops.compile(loadBinding(EXCHANGE, Source("b", text)))
+	result = asyncio.run(run({"ClockRead": lambda context: "2026-11-11T09:00:00Z"}, program.stages.BindingRead, [{"src": SRC, "document": feed}]))
+	log, report = ops.result(program, result)
+	assert {gap.reason for gap in report.gaps} == {"Issue.Missing"}  # the example's bond without dividends
+	assert {claim["at"] for claim in log.claims} == {"2026-11-11T09:00:00Z"}
+	assert {claim["valid"] for claim in log.claims if not claim.get("exists")} == {FEED["asOf"]}
 
 
 def test_run_time_comes_from_the_clock_effect_without_at():

@@ -121,7 +121,7 @@ def readDoc(value: dict[str, Any]) -> str | None:
 
 def readBindingJson(data: Any) -> Binding:
 	"""Decode and validate binding JSON data."""
-	value = jsonObject(data, ("format", "ontology", "scopes"), ("header", "uses", "at", "columns", "functions", "exclusions"))
+	value = jsonObject(data, ("format", "ontology", "scopes"), ("header", "uses", "at", "valid", "columns", "functions", "exclusions"))
 	if value["format"] != BINDING_FORMAT:
 		raise ValueError("Unknown binding JSON format")
 	namespace = jsonString(value["ontology"], isPath)
@@ -137,6 +137,8 @@ def readBindingJson(data: Any) -> Binding:
 	binding = Binding(namespace, header, dict(uses))
 	if "at" in value:
 		binding.at = expressionFromJson(value["at"], binding=True)
+	if "valid" in value:
+		binding.valid = expressionFromJson(value["valid"], binding=True)
 	if "columns" in value:
 		if not isinstance(value["columns"], list) or not value["columns"] or any(not isinstance(column, str) for column in value["columns"]):
 			raise ValueError("columns must be a nonempty string array")
@@ -250,6 +252,10 @@ def parseBinding(source: Source) -> BindingDocument:
 				if doc.at is not None or annotations is not None or docText is not None:
 					raise ValueError("Invalid or duplicate @at directive")
 				doc.at = parseExpression(match[1], binding=True)
+			elif match := re.fullmatch(r"@valid[ \t]+<-[ \t]+(.+)", body):
+				if doc.valid is not None or annotations is not None or docText is not None:
+					raise ValueError("Invalid or duplicate @valid directive")
+				doc.valid = parseExpression(match[1], binding=True)
 			elif match := re.fullmatch(r"@columns[ \t]+(.+)", body):
 				if doc.columns is not None or annotations is not None or docText is not None:
 					raise ValueError("Invalid or duplicate @columns directive")

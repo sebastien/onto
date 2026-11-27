@@ -60,7 +60,8 @@
         "objectRole": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
         "ctx": { "$ref": "#/$defs/path" },
         "extends": { "$ref": "#/$defs/path" },
-        "hierarchical": { "const": true }
+        "hierarchical": { "const": true },
+        "part": { "const": true }
       },
       "additionalProperties": { "anyOf": [{ "$ref": "#/$defs/token" }, { "const": true }] }
     },

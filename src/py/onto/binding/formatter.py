@@ -71,6 +71,8 @@ def printBinding(binding: Binding) -> str:
 	lines += [f"@use {namespace} as {alias}" for alias, namespace in sorted(binding.uses.items())]
 	if binding.at is not None:
 		lines.append("@at <- " + exprText(binding.at))
+	if binding.valid is not None:
+		lines.append("@valid <- " + exprText(binding.valid))
 	if binding.columns is not None:
 		lines.append("@columns " + ", ".join(column if isName(column) else json.dumps(column, ensure_ascii=False) for column in binding.columns))
 	for function in sorted(binding.functions, key=lambda item: item.name):
@@ -96,6 +98,8 @@ def bindingToJson(binding: Binding) -> dict[str, Any]:
 		data["uses"] = binding.uses
 	if binding.at is not None:
 		data["at"] = binding.at
+	if binding.valid is not None:
+		data["valid"] = binding.valid
 	if binding.columns is not None:
 		data["columns"] = binding.columns
 	if binding.functions:

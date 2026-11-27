@@ -76,6 +76,7 @@ class BindingDocument:
 	exclusions: list[BindingExclusion] = field(default_factory=list)
 	diagnostics: list[Diagnostic] = field(default_factory=list)
 	loc: Loc | None = None
+	valid: Expression | None = None  # `@valid <- expr`: when every claim of a document holds.
 
 
 @dataclass(slots=True)
@@ -92,6 +93,7 @@ class Binding:
 	exclusions: list[BindingExclusion] = field(default_factory=list)
 	diagnostics: list[Diagnostic] = field(default_factory=list)
 	loc: Loc | None = None
+	valid: Expression | None = None  # `@valid <- expr`: when every claim of a document holds.
 
 
 def bindingBy(binding: "Binding") -> str:

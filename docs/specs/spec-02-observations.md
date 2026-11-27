@@ -289,9 +289,11 @@ Defaults come from `@obs` and the latest `@src`/`@at`/`@ctx` directives.
 - `at` is transaction/observation time; `valid` is when the fact is true in the
   world. Neither implies the other.
 - For `kind=event` relations, `valid` is a point; for `kind=state` relations, an
-  interval. A new claim on the instance with a closed interval (e.g.
-  `dr1 {valid=2021-07-01..2026-06-30}`) states the state ended. It is not a
-  retraction. A bare update of a named binary relation preserves the
+  interval, or a point when the state is observed as at that instant (a
+  snapshot, such as a questionnaire's answers as at its date): it held then, and
+  the point says neither when it started nor that it ended. A new claim on the
+  instance with a closed interval (e.g. `dr1 {valid=2021-07-01..2026-06-30}`)
+  states the state ended. It is not a retraction. A bare update of a named binary relation preserves the
   participants from a still-live earlier claim by the same source.
 
 ## Contexts

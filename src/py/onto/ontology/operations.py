@@ -83,7 +83,7 @@ def checkAnnotations(model: Model, ann: Annotations, places: set[str], loc: Loc 
 			diag.error("annotation", "deps must be candidate", loc)
 		elif key == "elided" and not (isinstance(value, str) and value.isdigit()):
 			diag.error("annotation", "elided must be a count", loc)
-		elif key in ("key", "ordered", "hierarchical", "history") and value is not True:
+		elif key in ("key", "part", "ordered", "hierarchical", "history") and value is not True:
 			diag.error("annotation", f"{key} is a flag", loc)
 		elif key == "id" and value not in IDENTIFIERS:
 			diag.error("annotation", f"id must be {', '.join(IDENTIFIERS)}", loc)
@@ -347,6 +347,9 @@ def validateRelation(model: Model, decl: Decl, diag: Diagnostics) -> None:
 		participant = contextRoles.get(role)
 		if not decl.arrow or not participant or not model.isA(decl.participants[index].type, participant.type):
 			diag.error("reference", f"{key} '{role}' must select a compatible role on the relation context", decl.loc)
+	# A part goes with one whole: each object relates to at most one subject.
+	if decl.arrow and annotation(decl.ann, "part") and (decl.arrow.counts or model.defaultCounts).partition(":")[0] not in ("1", "?"):
+		diag.error("annotation", f"A part has one whole: '{decl.path}' needs 1 or ? before ':'", decl.loc)
 	subjectRole, objectRole = annotation(decl.ann, "subjectRole"), annotation(decl.ann, "objectRole")
 	if subjectRole is not None and subjectRole == objectRole:
 		shared = contextRoles.get(subjectRole)

@@ -6,7 +6,7 @@ from ..conditions import conditionPaths
 from ..coverage import CoverageReport, Elements, coverageRows, impliedKeys, viewSelections
 from ..expressions import Expression
 from ..ontology.model import Model, Ontology
-from .model import Mapping, MappingScope
+from .model import Mapping, MappingScope, lookupOf
 
 # -----------------------------------------------------------------------------
 #
@@ -55,7 +55,15 @@ class MappingCoverage:
 
 	def record(self, scope: MappingScope, paths: list[list[str]], target: str | None, status: str, note: str | None) -> None:
 		for steps in paths:
-			for key in self.source.read(scope.source, steps):
+			owner = scope.source
+			if steps and (lookup := lookupOf(self.mapping.lookups, steps[0], owner, self.source.model)):
+				# A path through a lookup reads on in the looked-up type; the compared attributes select it, as a condition does
+				compared = [(lookup.type, line.attr) for line in lookup.lines] + [(owner, line.source) for line in lookup.lines]
+				for item, member in compared:
+					for key in self.source.read(item, member.split(".")):
+						self.reads.setdefault(self.source.display(key), []).append((None, "ambiguous" if status == "ambiguous" else "condition", None))
+				owner, steps = lookup.type, steps[1:]
+			for key in self.source.read(owner, steps):
 				self.reads.setdefault(self.source.display(key), []).append((target, status, note))
 
 	def scope(self, scope: MappingScope) -> None:

@@ -8,7 +8,7 @@ from typing import Any
 from ..conditions import Condition
 from ..expressions import Expression
 from ..functions.model import Function, FunctionDeclaration
-from ..ontology.model import Decl
+from ..ontology.model import Decl, Model
 from ..text import Diagnostic, Loc
 
 # -----------------------------------------------------------------------------
@@ -40,6 +40,7 @@ class MappingLine:
 	loc: Loc | None = None
 	qualifiers: dict[str, Expression] = field(default_factory=dict)
 	asType: str | None = None  # `{as=T}`: the target type its references translate to
+	name: str | None = None  # `{name=N}`: the named scope line its references translate through
 
 
 @dataclass(slots=True)
@@ -57,6 +58,39 @@ class MappingScope:
 	name: str | None = None
 	present: Expression | None = None
 	into: Expression | None = None
+
+	@property
+	def key(self) -> tuple[str, str, str]:
+		"""The scope's complete identity, independent of declaration order."""
+		return self.source, self.target, self.name or ""
+
+
+@dataclass(slots=True)
+class MappingLookupLine:
+	"""`A <- B`: the looked-up type's attribute `A` equals the owner's attribute `B`."""
+
+	attr: str
+	source: str
+	doc: str | None = None
+	loc: Loc | None = None
+
+
+@dataclass(slots=True)
+class MappingLookup:
+	"""`@lookup Owner.Name -> Type`: the one instance of `Type` whose compared attributes equal the owner's (spec-04 Lookups)."""
+
+	owner: str
+	name: str
+	type: str
+	lines: list[MappingLookupLine] = field(default_factory=list)
+	doc: str | None = None
+	loc: Loc | None = None
+
+
+def lookupOf(lookups: list[MappingLookup], name: object, source: str, model: Model) -> MappingLookup | None:
+	"""The nearest lookup named `name` in the scope type's lineage."""
+	byOwner = {item.owner: item for item in lookups if item.name == name}
+	return next((byOwner[owner] for owner in model.lineage(source) if owner in byOwner), None) if byOwner else None
 
 
 @dataclass(slots=True)
@@ -83,6 +117,7 @@ class MappingDocument:
 	exclusions: list[MappingExclusion] = field(default_factory=list)
 	diagnostics: list[Diagnostic] = field(default_factory=list)
 	loc: Loc | None = None
+	lookups: list[MappingLookup] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -99,8 +134,14 @@ class Mapping:
 	exclusions: list[MappingExclusion] = field(default_factory=list)
 	diagnostics: list[Diagnostic] = field(default_factory=list)
 	loc: Loc | None = None
+	lookups: list[MappingLookup] = field(default_factory=list)
+
+	def isTargetType(self, path: str | None) -> bool:
+		"""Whether `path` names a type in the distinct target namespace."""
+		return path is not None and self.fromNamespace != self.toNamespace and path.startswith(self.toNamespace + "/")
 
 
-__all__ = ["Condition", "MappingLine", "MappingScope", "MappingExclusion", "MappingDocument", "Mapping", "ANNOTATION_KEYS", "HEADER_KEYS", "MAPPING_FORMAT", "QUALIFIER_KEYS"]
+__all__ = ["Condition", "MappingLine", "MappingScope", "MappingExclusion", "MappingLookup", "MappingLookupLine", "MappingDocument", "Mapping",
+	"lookupOf", "ANNOTATION_KEYS", "HEADER_KEYS", "MAPPING_FORMAT", "QUALIFIER_KEYS"]
 
 # EOF

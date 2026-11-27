@@ -1,13 +1,13 @@
 ---
 identity: "onto:component:js-runtime"
 created: 2026-11-25T19:44:10.787977+00:00
-updated: 2026-11-25T19:44:25.983695+00:00
+updated: 2026-11-27T17:19:34.393760+00:00
 title: JavaScript runtime component
 ---
 # JavaScript runtime component
 
 **Owns** executing, outside Python, what Python compiles: binding and mapping
-programs and rooted views loaded from a bundle (`onto.view-bundle/1`), on hexa's
+programs and rooted views loaded from a bundle (`onto.view-bundle/2`), on hexa's
 JavaScript binding, in browsers, Node and Bun.
 
 - *Package*: `src/js/onto/`; spec-06 "Bundles and the JavaScript runtime" lists

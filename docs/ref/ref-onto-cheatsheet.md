@@ -133,6 +133,7 @@ amount, percent, date, duration, `{ordered}` vocabulary), observed `low..high`,
 | `default` | attribute | Value assumed when none is observed |
 | `privacy` | attribute | Audiences, joined by `+` |
 | `kind` | relation | `event` (a point in time) or `state` (an interval) |
+| `part` | binary relation | Each object is a part of its subject and goes with it (`1:*` or `?:*`) |
 | `layer` | entity, relation | Classification across domains |
 | `context`, `subjectRole`, `objectRole` | binary relation | Association carrying the link's state |
 | `ctx` | facet | Context the facet's values hold within |

@@ -10,7 +10,7 @@ from ..expressions import Expression, keyedSteps, parseExpression
 from ..functions.model import BUILTIN_ARITIES, Function, FunctionLibrary
 from ..ontology.model import Decl, MapLine, Model, Ontology
 from ..text import Loc, annotation, lastSegment
-from .model import Mapping, MappingLine, MappingScope
+from .model import Mapping, MappingLine, MappingScope, lookupOf
 
 # -----------------------------------------------------------------------------
 #
@@ -154,6 +154,8 @@ class Reverser:
 	def solve(self, scope: MappingScope, line: MappingLine, expr: Expression, value: Expression) -> MappingLine:
 		"""The reverse line assigning `expr`'s source path from `value`."""
 		if "call" in expr:
+			if expr["call"] == "ref" and str(expr["args"][0].get("path", [""])[0]).startswith(self.mapping.toNamespace + "/"):
+				raise Lossy("a target reference writes nothing back")
 			inner, solved = self.inverse(expr, value)
 			return self.solve(scope, line, inner, solved)
 		if "path" not in expr:
@@ -162,6 +164,8 @@ class Reverser:
 			raise Lossy("the scope instance '$' is not an assignable input")
 		steps = keyedSteps(expr["path"])
 		owner, index = scope.source, 0
+		if lookupOf(self.mapping.lookups, steps[0], owner, self.model):
+			raise Lossy(f"'{'.'.join(steps)}' reads through a lookup, which writes nothing back")
 		facet = self.model.facetOf(owner, steps[0])
 		attr = self.model.lookup(owner, ".".join(steps[:2])) if facet and len(steps) > 1 else self.model.lookup(owner, steps[0])
 		if attr is None:
@@ -230,6 +234,8 @@ class Reverser:
 					raise Lossy("the default of exclusive lines has no reversible condition")
 				if line.target and isDerived(self.targetModel, scope.target, line.target):
 					raise Lossy(DERIVED)
+				if line.name:
+					raise Lossy(f"a reference translated through the scope named {line.name} writes nothing back")
 				value = targetExpression(lineLabel(line))
 				solved = self.solve(scope, line, line.expr, value)
 				if solved.target and isDerived(self.model, scope.source, solved.target):

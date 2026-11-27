@@ -38,7 +38,7 @@ Entry
 
 def test_a_view_bundle_is_json_with_the_catalogue_in_its_order():
 	bundle = json.loads(json.dumps(viewBundle(operator())))
-	assert bundle["format"] == BUNDLE_FORMAT
+	assert bundle["format"] == BUNDLE_FORMAT == "onto.view-bundle/2"
 	assert set(bundle) == {"format", "source", "target", "bindings", "reads", "mapping", "keyTypes", "inputTargets", "views"}
 	# Member order is significant: catalogue order breaks ties between reads, as in Python.
 	assert list(bundle["reads"]) == ["Second", "First"]
@@ -46,6 +46,7 @@ def test_a_view_bundle_is_json_with_the_catalogue_in_its_order():
 	view = bundle["views"]["Summary"]
 	assert view["input"] == {"name": "id", "path": "Source/Special", "attr": "Id", "key": "Source/Special.Id"}
 	assert view["rootTarget"] == "Target/Entry" and view["defaults"] == {"Entry.Name": "entry.Name"}
+	assert view["steps"] == {step: {"requires": [], "capability": step} for step in ("Second", "First")}
 	assert view["matches"] == {"entry.Name": [{"resolved": True, "supplier": "Second"}]}
 	assert bundle["target"]["types"]["Target/Entry"]["attrs"]["Name"] == {"multi": False}
 

@@ -294,7 +294,10 @@ projection and a writing binding produce documents for another system.
 
 | Component | What it provides |
 | --- | --- |
-| Formats | `.onto`, `.obs`, `.bind`, `.map`, `.fn`, `.ref` (text and JSON), plus `.inv`, `.formats`, `.ids`, `.reg` sidecars; JSON schemas in `src/json/` |
+| Formats | `.onto`, `.obs`, `.bind`, `.map`, `.fn`, `.ref`, `.store` (text and JSON), plus `.inv`, `.formats`, `.ids`, `.reg` sidecars; JSON schemas in `src/json/` |
+| Observation store | A protocol for keeping observations online, in partitions around key entities, with authorization, lifecycle, redaction and erasure ([spec-08](specs/spec-08-store.md)) |
+| Sessions | A client runtime combining a store's systems into one state: each slot read from and changed through the system that holds it, with list views, pages and change notices ([spec-09](specs/spec-09-sessions.md)) |
+| Operations | Writing the slots another system holds through its API: reversed mappings, request bodies written by bindings, fresh reads and confirmations ([spec-10](specs/spec-10-operations.md)) |
 | Python library (`onto`) | Parse, validate, format and convert each format; reconcile observations; diff ontologies; coverage; mapping reversal; function execution. Standard library only, Python ≥ 3.14 |
 | CLI (`onto`) | Workspace-aware commands (below); human or `--json` output, diagnostics as `file:line:` |
 | hexa integration | Optional (`onto.integrations.hexa`): compiles bindings and mappings into [hexa](../../hexa/README.md) programs to execute runs, learn formats, re-run and write documents |
@@ -349,9 +352,10 @@ layout.
 ## Status
 
 Ontologies, observations, bindings, mappings, functions, referential policies,
-the CLI and the hexa integration are implemented in Python. Overlays (spec-03)
-and registry-backed identities (minted handles, alternate keys) are specified
-but not yet implemented. A JavaScript runtime (`src/js/onto/`) executes compiled
+the CLI and the hexa integration are implemented in Python. Overlays (spec-03),
+registry-backed identities (minted handles, alternate keys), the observation
+store (spec-08), sessions (spec-09) and operations (spec-10) are specified but
+not yet implemented. A JavaScript runtime (`src/js/onto/`) executes compiled
 bindings, mappings and rooted views from a Python-built bundle, in browsers,
 Node and Bun ([spec-06](specs/spec-06-hexa.md#bundles-and-the-javascript-runtime));
 parsing and compiling remain Python-only.
@@ -364,5 +368,6 @@ parsing and compiling remain Python-only.
   [overlay](specs/spec-03-overlay.md),
   [bindings and mappings](specs/spec-04-mapping.md),
   [identities](specs/spec-05-identities.md), [hexa](specs/spec-06-hexa.md),
-  [CLI](specs/spec-07-cli.md).
+  [CLI](specs/spec-07-cli.md), [observation store](specs/spec-08-store.md),
+  [sessions](specs/spec-09-sessions.md), [operations](specs/spec-10-operations.md).
 - [Cheatsheet](ref/ref-onto-cheatsheet.md) for syntax at a glance.

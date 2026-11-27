@@ -1,7 +1,7 @@
 {
   "series": {
     "DEC": {
-      "next": 23,
+      "next": 37,
       "reservations": {
         "1": {
           "identity": "onto:decision:run-semantics",
@@ -63,8 +63,64 @@
           "identity": "onto:decision:composite-keys",
           "state": "assigned"
         },
+        "23": {
+          "identity": "onto:decision:context-links",
+          "state": "assigned"
+        },
+        "24": {
+          "identity": "onto:decision:read-selection",
+          "state": "assigned"
+        },
+        "25": {
+          "identity": "onto:decision:contextual-members",
+          "state": "assigned"
+        },
+        "26": {
+          "identity": "onto:decision:observation-store",
+          "state": "assigned"
+        },
+        "27": {
+          "identity": "onto:decision:snapshot-dates",
+          "state": "assigned"
+        },
+        "28": {
+          "identity": "onto:decision:sessions",
+          "state": "assigned"
+        },
+        "29": {
+          "identity": "onto:decision:compositions",
+          "state": "assigned"
+        },
         "3": {
           "identity": "onto:decision:inverse-and-formats",
+          "state": "assigned"
+        },
+        "30": {
+          "identity": "onto:decision:operations",
+          "state": "assigned"
+        },
+        "31": {
+          "identity": "onto:decision:openapi-extraction",
+          "state": "assigned"
+        },
+        "32": {
+          "identity": "onto:decision:multi-key-reads",
+          "state": "assigned"
+        },
+        "33": {
+          "identity": "onto:decision:named-references",
+          "state": "assigned"
+        },
+        "34": {
+          "identity": "onto:decision:lookups",
+          "state": "assigned"
+        },
+        "35": {
+          "identity": "onto:decision:target-references",
+          "state": "assigned"
+        },
+        "36": {
+          "identity": "onto:decision:fact-history",
           "state": "assigned"
         },
         "4": {

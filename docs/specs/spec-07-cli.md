@@ -114,6 +114,7 @@ input; `--kind KIND` then says what it is.
 | `.bind` | `binding` | `@binding` | `Namespace` | `onto.binding/1` |
 | `.map` | `mapping` | `@mapping` | `From->To` | `onto.mapping/1` |
 | `.ref` | `referential` | `@referential` | `Name` | `onto.referential/1` |
+| `.store` | `store` | `@store` | `Name` | `onto.store/1` |
 | `.inv` | `inventory` | none | file stem | none |
 | `.formats` | `formats` | none | file stem | none |
 
@@ -152,6 +153,8 @@ path entry that is not a directory is a warning.
 - Files of a mapping sharing its `@mapping From -> To` header are one mapping
   ([spec-04](spec-04-mapping.md#mappings)): all are parsed before any is
   resolved, so a check, run or coverage of one file covers the whole mapping.
+- Files of a store sharing its `@store` header are one store
+  ([spec-08](spec-08-store.md#format)).
 - Bindings and observations are loaded file by file; several may share a
   namespace key.
 - Indexing problems (`cli.kind`, `cli.read`) are reported for the files a
@@ -171,6 +174,7 @@ To load a file, the CLI first loads its context from the workspace:
 | `binding` | The `@binding` ontology; the `@use` ontologies and libraries |
 | `mapping` | `From` and `To`; the `@use` ontologies and libraries; the `referential=` referential |
 | `referential` | The `@use` ontologies and the policies' `from=` ontologies |
+| `store` | The `@use` ontology; the `@system` mappings, with their `From` ontologies |
 
 - A required ontology or referential (the `@obs`, `@binding` and `@mapping`
   namespaces, `referential=`) that the workspace lacks is an error on the
@@ -439,6 +443,17 @@ that cannot be imported, or lacks `IMPLEMENTATIONS`, is a usage error.
 
 List functions: fully qualified name, signature and doc, sorted by name.
 
+### Stores
+
+#### `onto store bundle FILE.store`
+
+Planned; not yet available.
+
+Print the store bundle of a store ([spec-08](spec-08-store.md#store-bundle)),
+an `onto.store-bundle/1` JSON document, compiled from the store's files, its
+ontology and its `@system` mappings. A store with errors prints nothing and
+exits 1.
+
 ### Help
 
 #### `onto help [COMMAND]`
@@ -571,7 +586,7 @@ Help is written for someone who does not know the formats yet:
 | Term | Meaning |
 | --- | --- |
 | `FILE` | A path to an onto file; `-` reads standard input, with `--kind` |
-| `KIND` | `ontology`, `observations`, `functions`, `binding`, `mapping`, `referential`, `inventory`, `formats` |
+| `KIND` | `ontology`, `observations`, `functions`, `binding`, `mapping`, `referential`, `store`, `inventory`, `formats` |
 | `DIR` | A directory added to the search path |
 | `VIEW` | An ontology view path, e.g. `Finance/PortfolioReview` |
 | `NAMESPACE` | An ontology namespace, e.g. `Exchange` |

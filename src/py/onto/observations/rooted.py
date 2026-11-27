@@ -41,6 +41,11 @@ def conflicted(claim: Claim, subjectRoleClaim: Claim | None = None) -> bool:
 	return bool(claim.get("conflict") or subjectRoleClaim is not None and subjectRoleClaim.get("conflict"))
 
 
+def inContext(claim: Claim, contextPopulation: str, bindings: dict[str, str]) -> bool:
+	"""Whether a claim holds within the instance bound to an obligation's context population, when it has one."""
+	return not contextPopulation or claim.get("ctx") == bindings[contextPopulation]
+
+
 def roleValidity(claim: Claim, subjectRoleClaim: Claim) -> str | Literal[False] | None:
 	"""The link's shared validity; False for disjoint role claims, None for an unbounded link."""
 	valids = [item["valid"] for item in (subjectRoleClaim, claim) if "valid" in item]
@@ -67,10 +72,10 @@ class Evidence:
 		if field not in self.index:
 			rows = []
 			symmetric = bool(field.relation) and isSymmetric(self.model.get(field.relation))
-			context, startRole, endRole = field.context or ("", "", "")
+			association, startRole, endRole = field.association or ("", "", "")
 			roles = defaultdict(list) if startRole != endRole else None
 			for claim in self.state.claims:
-				if claim.get("ctx") is not None:  # These views request unqualified facts.
+				if claim.get("ctx") is not None and not field.contextType:  # Only a contextual member's values hold within a context.
 					continue
 				if field.relation and claim.get("rel") == field.relation:
 					subject, other = (claim["roles"][role] for role in field.roles)
@@ -80,7 +85,7 @@ class Evidence:
 						rows.append((other, {"ref": subject}, claim, None))
 				elif not field.relation and "p" in claim and memberMatches(claim["p"], field.member) and self.isA(claim["s"], field.owner):
 					rows.append((claim["s"], claim["v"], claim, None))
-				elif roles is not None and claim.get("p") in (startRole, endRole) and self.isA(claim["s"], context):
+				elif roles is not None and claim.get("p") in (startRole, endRole) and self.isA(claim["s"], association):
 					roles[claim["s"], claim["p"]].append(claim)
 			for (handle, role), held in (roles or {}).items():
 				if role != startRole:
@@ -115,7 +120,7 @@ class Evidence:
 	def test(self, hop: Hop, bindings: dict[str, str]) -> tuple[list[Witness], str]:
 		"""Retain every matching filter claim, or explain why none proves the filter."""
 		subject = bindings[hop.population]
-		checks = [(v, c, roleClaim) for h, v, c, roleClaim in self.rows(hop.field) if h == subject]
+		checks = [(v, c, roleClaim) for h, v, c, roleClaim in self.rows(hop.field) if h == subject and inContext(c, hop.contextPopulation, bindings)]
 		if any(conflicted(c, roleClaim) for _, c, roleClaim in checks):
 			return [], "conflict"
 		witnesses = []
@@ -145,6 +150,8 @@ class Evidence:
 					continue
 				status, branches, rejected = "missing", [], []
 				for subject, value, claim, roleClaim in self.rows(hop.field):
+					if not inContext(claim, hop.contextPopulation, bindings):
+						continue
 					# An explicit `through` finishes with the second role; the previous hop proved the first.
 					if hop.proves:
 						roleClaim = trail[-1].claim
@@ -182,6 +189,6 @@ class Evidence:
 		return paths, stops
 
 
-__all__ = ["Evidence", "Witness", "conflicted", "roleValidity"]
+__all__ = ["Evidence", "Witness", "conflicted", "inContext", "roleValidity"]
 
 # EOF

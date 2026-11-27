@@ -531,6 +531,11 @@ Household -hasMember/memberOf-> Person 1:*
   example says a person is in at most one household, a household has many members.
   Omitted, `@ontology rel=` applies.
 - Annotations go after `L:R`: `S -verb-> T 1:* {kind=state}`.
+- `{part}` makes the relation a **composition**: each object is a part of its
+  subject and goes with it, as an arm goes with its body. What a part relates
+  to otherwise, as what an arm carries, does not. A part has one whole, so `L`
+  is `1` or `?`: `Body -hasArm/isArmOf-> Arm 1:* {part}`. A rooted view reaches
+  the parts and wholes of what it reaches ([rooted retrieval](spec-06-hexa.md#rooted-retrieval)).
 - `{context=R}` names an n-ary relation (the association) whose instances carry
   the link's state and other roles. It resolves like any name and must denote an
   n-ary relation. `subjectRole` and `objectRole` select the context's roles that
@@ -651,6 +656,7 @@ Keys, in normal-form order:
 | `privacy` | attribute | Who may see values: audience names joined by `+` (e.g. `Owner+Household`). The audiences are not fixed by the format; normal form sorts them |
 | `default` | attribute | The value assumed when none is observed (e.g. `Currency Currency {default=NZD}`). On a closed vocabulary it must be one of its values. Not allowed on derived attributes |
 | `kind` | relation | `event` or `state` |
+| `part` | binary relation | Flag: each object is a part of its subject, a [composition](#binary-shorthand) |
 | `layer` | entity, relation | A name classifying the element across domains (e.g. `Party`, `Holding`, `Evidence`). The layers are not fixed by the format |
 | `context` | binary relation | The n-ary relation carrying the link's state; written shortest, stored as a full path |
 | `subjectRole`, `objectRole` | context-backed binary relation | Role names on the context selecting the subject and object |
@@ -672,6 +678,8 @@ Keys, in normal-form order:
 | `src` | any | Provenance; overrides the inherited value |
 | `check` | any | Token naming an open question |
 | `elided` | vocabulary | A slice omitted this many values |
+| `page` | rooted view, population line | A list view's default page size; a population read that many instances at a time ([rooted views](#rooted-views)) |
+| `max` | rooted view | The largest page a list view's queries may ask for ([rooted views](#rooted-views)) |
 
 **Measurement qualifiers** (`cur`, `unit`, `period`, `scale`) belong on type
 declarations and are inherited through aliases and uses. A use may fill a `?` but
@@ -777,6 +785,33 @@ A flat view cannot include a rooted view because it provides no seed.
   makes a projection selectable but off by default. The view needs at least
   one default projection. Selecting a link that has a forward filtered
   population under its subject also requires that population's object test.
+- A member of a [contextual facet](#contextual-facets) (`F of E {ctx=C}`),
+  projected, filtered on or followed, holds within the nearest population of
+  type `C` bound before its subject on the subject's path: its values are those
+  stated within that population's instance. With `incomes: Income = scenarios
+  -> considers`, `incomes.IncomeTreatment.IsIncluded` is each scenario's own
+  treatment of the income. A view whose path binds no population of type `C`
+  before the subject is invalid. Facts and retrieved claims keep their `ctx`.
+- A view retrieves what its populations reach and the parts and wholes of
+  those ([compositions](#binary-shorthand)). An ordinary link leads it nowhere it
+  does not follow: with `staff: Person = branch -> employs`, the other branches
+  employing that staff are not read ([rooted retrieval](spec-06-hexa.md#rooted-retrieval)).
+- A parameter written `* Entity.Attribute` makes a **list view**:
+  `@view ClientList(contactIds: * CRM/Contact.Id)`. `*` marks many, as in
+  cardinalities. The parameter is every key a query selects, rather than one
+  the caller supplies, and each key seeds the populations as one row
+  ([sessions](spec-09-sessions.md#list-views)).
+- Views hint their limits as annotations
+  ([limits and pages](spec-09-sessions.md#limits-and-pages)):
+  - on a list view, `page=N` is its queries' default page size, and `max=N` the
+    largest page they may ask for;
+  - on a population line, after any `where` filter, `page=N` reads the
+    population `N` instances at a time:
+    `checks: IdentityCheck = client <- Person {page=10}`.
+
+  Both are positive integers, and `page` is no larger than `max`. The JSON
+  form keeps them as annotations of the view and of its populations, and marks
+  a list view's `input` with `"many": true`.
 - A file can name its target modules with ordinary `@use` aliases, e.g.
   `@use Library/People as People` for `People/Person`. An external source
   ontology used to validate a parameter stays separate from the target

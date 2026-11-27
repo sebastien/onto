@@ -329,9 +329,9 @@ class ObservationResolver:
 		return meta | ({"ctx": ctx} if ctx else {})
 
 	def checkValid(self, path: str, meta: dict[str, Any], loc: Loc) -> None:
-		kind = annotation(self.model.get(path).ann, "kind")
-		if "valid" in meta and kind and ((".." in meta["valid"]) != (kind == "state")):
-			self.diag.error("meta", f"{kind} requires {'an interval' if kind == 'state' else 'a point'} valid", loc)
+		# A state takes an interval, or a point when observed as at an instant; an event only a point.
+		if "valid" in meta and ".." in meta["valid"] and annotation(self.model.get(path).ann, "kind") == "event":
+			self.diag.error("meta", "event requires a point valid", loc)
 
 	def resolve(self, mode: str = "strict") -> Observations:
 		ontology = self.model.ontology

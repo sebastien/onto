@@ -249,6 +249,9 @@ class ClaimsBuilder:
 		if record.get("deleted") is True:
 			self.add({"s": handle, "exists": True, **meta}, retraction=True)
 			return
+		# The document's validity (`@valid`) holds for every claim; a scope's own `valid` for its existence claim.
+		if isinstance(record.get("documentValid"), str):
+			meta = {**meta, "valid": record["documentValid"]}
 		valid = record.get("valid")
 		self.exists(handle, {**meta, **({"valid": valid} if isinstance(valid, str) else {})})
 		ctx = handleOf(record.get("ctx"))

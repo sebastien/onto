@@ -168,10 +168,18 @@ class StateIndex {
 	}
 }
 
+/** A known lookup key: a reference by its handle, a scalar by its text. */
+function comparedValue(value) {
+	const text = textOf(value);
+	if (text === null) return null;
+	return `${isObject(value) && Object.hasOwn(value, "ref") ? "ref:" : "text:"}${text}`;
+}
+
 /** Turn scope instances into trees limited to the scope's reach, with metadata tables and conflicts. */
 class Unfolder {
-	constructor(index, correspondence, targets = {}, scopeTargets = {}, skipped = {}) {
-		Object.assign(this, { index, correspondence, targets: targets ?? {}, scopeTargets: scopeTargets ?? {}, skipped: skipped ?? {} });
+	/** `named`: source handle → {program scope: target} its named scope lines emitted (`{name=N}` references). */
+	constructor(index, correspondence, targets = {}, scopeTargets = {}, skipped = {}, named = {}) {
+		Object.assign(this, { index, correspondence, targets: targets ?? {}, scopeTargets: scopeTargets ?? {}, skipped: skipped ?? {}, named: named ?? {}, lookupTables: new Map() });
 	}
 
 	reference(handle, children, pointer, meta, conflicts, context = null) {
@@ -181,6 +189,7 @@ class Unfolder {
 			if (Object.hasOwn(this.targets, handle)) result.targetType = Object.keys(this.targets[handle])[0];
 		}
 		if (this.targets[handle] && Object.keys(this.targets[handle]).length) result.targets = this.targets[handle];
+		if (this.named[handle] && Object.keys(this.named[handle]).length) result.scopes = this.named[handle];
 		if (this.skipped[handle]?.length) result.skipped = sortCodePoints(this.skipped[handle]);
 		if (Object.keys(children).length) result.of = this.subtree(handle, children, `${pointer}/of`, meta, conflicts, context);
 		return result;
@@ -204,6 +213,18 @@ class Unfolder {
 				if (members !== null) tree[key] = members;
 				continue;
 			}
+			if (segment.kind === "lookup") {
+				const found = this.lookup(handle, segment.lookup);
+				if (found === null) continue;
+				if (found.length !== 1) {
+					// Several, or a compared value in conflict: ambiguous (`Onto.Single`), and no condition reads through it
+					tree[key] = { set: [], partial: true };
+					continue;
+				}
+				tree[key] = this.reference(found[0], children, pointer, meta, conflicts, context);
+				meta[pointer] = metaOf(this.index.existence(found[0]) ?? {}, sources);
+				continue;
+			}
 			const claims = this.index.claims(handle, key, segment.context ? context : null);
 			if (!claims.length) continue;
 			if (claims.some(claim => claim.conflict)) {
@@ -221,6 +242,39 @@ class Unfolder {
 			tree[key] = this.value(value, segment, children, pointer, meta, conflicts, context);
 		}
 		return tree;
+	}
+
+	/** The instances a lookup finds from `handle` (spec-04 Lookups): null when the owner has no value to compare, [] when a
+	 * compared value is in conflict, else those whose compared attributes have the owner's values. */
+	lookup(handle, lookup) {
+		const key = [];
+		for (const [, source] of lookup.lines) {
+			const claims = this.index.claims(handle, source, null);
+			const values = new Set(claims.map(claim => comparedValue(claim.v)));
+			values.delete(null);
+			if (claims.some(claim => claim.conflict) || values.size > 1) return [];
+			key.push(values.values().next().value ?? null);
+		}
+		if (key.includes(null)) return null;
+		const tableKey = JSON.stringify(lookup);
+		if (!this.lookupTables.has(tableKey)) {
+			const table = new Map();
+			for (const candidate of this.index.handlesOf(lookup.type)) {
+				const row = [];
+				for (const [attr] of lookup.lines) {
+					const claims = this.index.claims(candidate, attr, null);
+					const values = new Set(claims.map(claim => comparedValue(claim.v)));
+					values.delete(null);
+					if (values.size !== 1 || claims.some(claim => claim.conflict)) break;
+					row.push(...values);
+				}
+				if (row.length !== lookup.lines.length) continue;
+				const rowKey = JSON.stringify(row);
+				table.set(rowKey, [...(table.get(rowKey) ?? []), candidate]);
+			}
+			this.lookupTables.set(tableKey, table);
+		}
+		return this.lookupTables.get(tableKey).get(JSON.stringify(key)) ?? null;
 	}
 
 	roles(segment) {
@@ -250,6 +304,11 @@ class Unfolder {
 	contexts(handle, reach) {
 		const result = new Set();
 		for (const [key, { segment, children }] of Object.entries(reach)) {
+			if (segment.kind === "lookup") {
+				const found = Object.keys(children).length ? this.lookup(handle, segment.lookup) : null;
+				if (found?.length === 1) for (const item of this.contexts(found[0], children)) result.add(item);
+				continue;
+			}
 			if (segment.kind === "verb") {
 				const roles = this.roles({ ...segment, key });
 				if (roles) {
@@ -606,9 +665,9 @@ function mappingStages(program) {
 		state = implicitReferences(state, model, plans);
 		const index = new StateIndex(state, model);
 		let unfolder = new Unfolder(index, null);
-		const correspondence = {}, targets = {}, scopeTargets = {}, unresolved = [], selected = {}, present = new Set();
+		const correspondence = {}, targets = {}, scopeTargets = {}, named = {}, unresolved = [], selected = {}, present = new Set();
 		for (const plan of [...plans].sort((a, b) => Number(a.update) - Number(b.update))) {
-			if (plan.update) unfolder = new Unfolder(index, correspondence, targets, scopeTargets);
+			if (plan.update) unfolder = new Unfolder(index, correspondence, targets, scopeTargets, {}, named);
 			const occurrences = [], targetConflicts = new Set(), whenSelected = new Set(), presenceOccurrences = [];
 			for (const handle of index.handlesOf(plan.source)) {
 				const occurrence = unfolder.occurrence(plan, handle) ?? { value: { "@handle": handle, "@scope": index.scope, "@type": index.typeOf(handle) }, location: `/${plan.name}/${escape(handle)}` };
@@ -664,7 +723,10 @@ function mappingStages(program) {
 				if (typeof value.handle === "string") {
 					if (!plan.update) {
 						const active = plan.presence ? presenceSelected : whenSelected;
-						if (!present.has(occurrence.location) || active.has(handle)) (selected[handle] ??= new Set()).add(plan.target);
+						if (!present.has(occurrence.location) || active.has(handle)) {
+							(selected[handle] ??= new Set()).add(plan.target);
+							if (plan.scopeName) (named[handle] ??= {})[plan.name] = value.handle;
+						}
 						correspondence[handle] ??= value.handle;
 						(targets[handle] ??= {})[plan.target] ??= value.handle;
 					}
@@ -677,12 +739,12 @@ function mappingStages(program) {
 			const rest = Object.keys(types).filter(type => !selected[handle]?.has(type));
 			if (rest.length) skipped[handle] = rest;
 		}
-		return { state, correspondence, targets, scopeTargets, unresolved, skipped };
+		return { state, correspondence, targets, scopeTargets, unresolved, skipped, named };
 	});
 
 	const unfold = resolved => {
 		const index = new StateIndex(resolved.state, model);
-		const unfolder = new Unfolder(index, resolved.correspondence, resolved.targets, resolved.scopeTargets, resolved.skipped);
+		const unfolder = new Unfolder(index, resolved.correspondence, resolved.targets, resolved.scopeTargets, resolved.skipped, resolved.named);
 		const scopes = [];
 		for (const plan of plans) {
 			const occurrences = [], skipped = [];

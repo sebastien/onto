@@ -1,7 +1,7 @@
 /**
  * Module: views — plan and retrieve rooted views over a host read catalogue, as `integrations/hexa/views.py`.
  *
- * The operator runs a bundle (`onto.view-bundle/1`) produced by Python's `viewBundle`. The host supplies
+ * The operator runs a bundle (`onto.view-bundle/2`) produced by Python's `viewBundle`. The host supplies
  * `access`, the only part that knows the source system:
  *
  * - `rootHandle(input, value, targetType)` translates a source identity into a target handle;
@@ -36,7 +36,7 @@ import { RE_NAME, RE_PATH, activeHandles, intersectIntervals, jsonEqual, observa
 //
 // -----------------------------------------------------------------------------
 
-export const BUNDLE_FORMAT = "onto.view-bundle/1";
+export const BUNDLE_FORMAT = "onto.view-bundle/2";
 const RE_REASON = /^[A-Za-z][A-Za-z0-9]*$/;
 const PROFILES = new Map();
 // A read the host reports unavailable with reason `R` fails with the code `ViewRead.R`, declared on first use.
@@ -51,7 +51,24 @@ codes("ViewRead", "UnreadableResponse");
 const hopKey = hop => hop.population + (hop.test !== undefined ? "?" : "");
 /** Whether a row's claims include a conflicting one. */
 const conflicted = (claim, subjectRoleClaim = null) => Boolean(claim.conflict || subjectRoleClaim?.conflict);
+/** Whether a claim holds within the instance bound to an obligation's context population, when it has one. */
+const inContext = (claim, contextPopulation, bindings) => !contextPopulation || claim.ctx === bindings[contextPopulation];
 const unwrap = raw => raw && raw.ledger && Object.hasOwn(raw, "value") ? raw.value : raw;
+
+/** Decode the `/2` wire spellings into fields, hops and projections with distinct context names. */
+function viewFromBundle({ paths, selections, contexts = {}, guardedLinks, ...view }) {
+	const fieldFromBundle = ({ context: association, ctx: contextType, ...field }) => ({ ...field, association, contextType });
+	return {
+		...view,
+		paths: Object.fromEntries(Object.entries(paths).map(([alias, hops]) => [alias, hops.map(({ field, ctx: contextPopulation, ...hop }) => ({
+			...hop, field: fieldFromBundle(field), contextPopulation,
+		}))])),
+		selections: Object.fromEntries(Object.entries(selections).map(([key, [population, field]]) => [key, {
+			population, field: fieldFromBundle(field), contextPopulation: contexts[key],
+		}])),
+		guarded: new Map(guardedLinks.map(([parent, relation, roles, alias]) => [valueKey([parent, relation, roles]), alias])),
+	};
+}
 
 /** The code of a read unavailable for `reason`: `ViewRead.<reason>`, or `ViewRead.UnreadableResponse`. */
 function readCode(reason) {
@@ -96,16 +113,6 @@ function keyValue(value, builtin) {
 	if (typeof value !== "string" || !["Integer", "Number"].includes(builtin)) return value;
 	const number = Number(value);
 	return Number.isFinite(number) ? number : value;
-}
-
-/** Each planned read's provider: the earlier read that discovers its key; none for the seed's reads. */
-function readProviders(steps, reads, seedKey) {
-	const providers = new Map();
-	for (const [index, name] of steps.entries()) {
-		const key = reads[name].input.key;
-		providers.set(name, key === seedKey ? null : steps.slice(0, index).find(other => reads[other].provides?.key === key) ?? null);
-	}
-	return providers;
 }
 
 /** Each planned read's wave: 0 without a provider, one more than its provider's otherwise. */
@@ -198,16 +205,16 @@ class Evidence {
 		if (!this.index.has(key)) {
 			const rows = [];
 			const symmetric = Boolean(field.relation && this.model.relations[field.relation]?.symmetric);
-			const [context, startRole, endRole] = field.context ?? [];
+			const [association, startRole, endRole] = field.association ?? [];
 			const roles = startRole !== endRole ? new Map() : null;
 			for (const claim of this.state.claims) {
-				if (claim.ctx !== undefined && claim.ctx !== null) continue; // These views request unqualified facts.
+				if (claim.ctx !== undefined && claim.ctx !== null && !field.contextType) continue; // Only a contextual member's values hold within a context.
 				if (field.relation && claim.rel === field.relation) {
 					const [subject, other] = field.roles.map(role => claim.roles[role]);
 					if (this.isA(subject, field.owner) && (other === "?" || this.isA(other, field.other))) rows.push([subject, other === "?" ? { unknown: true } : { ref: other }, claim, null]);
 					if (subject !== other && symmetric && this.isA(other, field.owner)) rows.push([other, { ref: subject }, claim, null]);
 				} else if (!field.relation && Object.hasOwn(claim, "p") && memberMatches(claim.p, field.member) && this.isA(claim.s, field.owner)) rows.push([claim.s, claim.v, claim, null]);
-				else if (roles && (claim.p === startRole || claim.p === endRole) && this.isA(claim.s, context)) {
+				else if (roles && (claim.p === startRole || claim.p === endRole) && this.isA(claim.s, association)) {
 					const held = valueKey([claim.s, claim.p]);
 					if (!roles.has(held)) roles.set(held, [claim.s, claim.p, []]);
 					roles.get(held)[2].push(claim);
@@ -248,7 +255,7 @@ class Evidence {
 	/** Retain every matching filter claim, or explain why none proves the filter. */
 	test(hop, bindings) {
 		const subject = bindings[hop.population];
-		const checks = this.rows(hop.field).filter(([handle]) => handle === subject);
+		const checks = this.rows(hop.field).filter(([handle, , claim]) => handle === subject && inContext(claim, hop.contextPopulation, bindings));
 		if (checks.some(([, , claim, roleClaim]) => conflicted(claim, roleClaim))) return [[], "conflict"];
 		const ancestor = ancestorOf(hop), witnesses = [];
 		for (const [, value, claim, subjectRoleClaim] of checks) {
@@ -277,6 +284,7 @@ class Evidence {
 				let status = "missing";
 				const branches = [], rejected = [];
 				for (const [subject, value, claim, roleClaim] of this.rows(hop.field)) {
+					if (!inContext(claim, hop.contextPopulation, bindings)) continue;
 					// An explicit `through` finishes with the second role; the previous hop proved the first.
 					const subjectRoleClaim = hop.proves ? trail.at(-1).claim : roleClaim;
 					if (hop.proves && (subject !== handle || roleValidity(claim, subjectRoleClaim) === false)) continue;
@@ -326,33 +334,12 @@ export class ViewOperator {
 		this.operations = operations;
 		this.sourceModel = new Model(bundle.source);
 		this.targetModel = new Model(bundle.target);
-		this.views = Object.fromEntries(Object.entries(bundle.views).map(([name, view]) => [name, {
-			...view, guarded: new Map(view.guardedLinks.map(([parent, relation, roles, alias]) => [valueKey([parent, relation, roles]), alias])),
-		}]));
+		this.views = Object.fromEntries(Object.entries(bundle.views).map(([name, view]) => [name, viewFromBundle(view)]));
 		this.reads = bundle.reads;
 		this.keyTypes = bundle.keyTypes;
 		this.programs = {};
 		for (const [key, program] of Object.entries(bundle.bindings)) this.programs[key] = loadBindingProgram(program, this.sourceModel, { implementations });
 		this.mapping = loadMappingProgram(bundle.mapping, this.sourceModel, this.targetModel, { implementations });
-	}
-
-	/** The catalogue reachable from the seed, in prerequisite order with ties in catalogue order. */
-	readSteps(seedKey) {
-		const providers = new Map([[seedKey, null]]), steps = {};
-		for (;;) {
-			const ready = Object.entries(this.reads).filter(([step, read]) => !Object.hasOwn(steps, step) && providers.has(read.input.key));
-			if (!ready.length) break;
-			for (const [name, read] of ready) {
-				const parent = providers.get(read.input.key);
-				steps[name] = { requires: parent ? [parent] : [], capability: name };
-				const key = read.provides?.key;
-				if (key && key !== seedKey) {
-					if (providers.has(key)) throw new Error(`ambiguous providers of ${key}: ${providers.get(key)}, ${name}`);
-					providers.set(key, name);
-				}
-			}
-		}
-		return steps;
 	}
 
 	/** Resolve selectors to declared projections, preferring exact population names. */
@@ -392,11 +379,11 @@ export class ViewOperator {
 		this.checkValue(param, value);
 		const kind = rooted.populations[rooted.root].type;
 		const handle = this.access.rootHandle(param, value, rooted.rootTarget);
-		const wanted = this.select(view, fields), steps = this.readSteps(param.key), matches = rooted.matches;
+		const wanted = this.select(view, fields), steps = rooted.steps, matches = rooted.matches;
 		const supplier = Object.fromEntries(Object.entries(matches).map(([key, entries]) => [key, entries.length ? entries[0].supplier : null]));
 		const dependents = new Map(), paths = {}, outputs = {};
 		for (const [spelling, key] of Object.entries(wanted)) {
-			const [alias, field] = rooted.selections[key];
+			const { population: alias, field } = rooted.selections[key];
 			const child = rooted.guarded.get(valueKey([alias, field.relation ?? "", field.roles ?? []]));
 			const chain = rooted.paths[child ?? alias];
 			paths[spelling] = { population: alias, hops: chain.map(hop => ({ ...describeHop(hop), supplier: supplier[hopKey(hop)] ?? null })), leaf: field.path, ...(child ? { objectPopulation: child } : {}) };
@@ -442,7 +429,8 @@ export class ViewOperator {
 	async runReads(view, seed, fields = null, { now = clockNow(), fetch = (step, value) => this.access.fetch(step, value), operations = {}, record, replay, signal, policy = {} } = {}) {
 		const result = await this.plan(view, seed, fields);
 		const param = this.views[view].input, steps = result.steps.map(item => item.step);
-		const providers = readProviders(steps, this.reads, param.key), waves = readWaves(steps, providers);
+		// The view's provider of each key, not any earlier read discovering it: the view may not take it from that one.
+		const providers = new Map(result.steps.map(item => [item.step, item.requires[0] ?? null])), waves = readWaves(steps, providers);
 		// A replayed journal may name host reasons this process has not declared yet.
 		for (const entry of replay ?? []) if (typeof entry?.failure?.code === "string" && entry.failure.code.startsWith("ViewRead.")) readCode(entry.failure.code.slice("ViewRead.".length));
 		const env = { FailureClassify: readClassify, ...this.operations, ...operations, ClockRead: () => now, DocumentFetch: documentFetch(fetch),
@@ -582,7 +570,7 @@ export class ViewOperator {
 		const graph = new Evidence(this.targetModel, state), root = result.root.handle;
 		const gaps = Object.fromEntries(result.gaps.filter(gap => Object.hasOwn(gap, "field")).map(gap => [gap.field, gap.reason]));
 		for (const [spelling, key] of Object.entries(this.select(result.view, Object.keys(result.fields)))) {
-			const [alias, field] = view.selections[key];
+			const { population: alias, field, contextPopulation } = view.selections[key];
 			const supplier = result.fields[spelling], path = result.paths[spelling], child = path.objectPopulation;
 			const chain = view.paths[child ?? alias];
 			const hopSuppliers = new Map(chain.map((hop, index) => [hopKey(hop), path.hops[index].supplier]));
@@ -606,7 +594,7 @@ export class ViewOperator {
 				const handle = bindings[alias], seen = new Set();
 				const reason = blocked(supplier, alias, bindings, field.other ?? "");
 				for (const [subject, value, claim, roleClaim] of reason === null ? graph.rows(field) : []) {
-					if (subject !== handle) continue;
+					if (subject !== handle || !inContext(claim, contextPopulation, bindings)) continue; // Another subject's value, or one holding within another context.
 					if (returnsToParent && value?.ref !== bindings[incoming.parent]) continue; // Returning a filing/review link back to the root must preserve that root.
 					if (child) {
 						const edge = trail.at(-2); // The last witness is the object filter, immediately after its incoming edge.

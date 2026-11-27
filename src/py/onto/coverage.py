@@ -108,7 +108,8 @@ def viewSelections(model: Model, view: Decl) -> set[ViewSelection]:
 		visited.add(current.path)
 		if current.viewInput:
 			rooted = RootedView(model, current)
-			for _, f in rooted.selections.values():
+			for projection in rooted.selections.values():
+				f = projection.field
 				if f.relation:
 					whole(model.get(f.relation))
 				else:

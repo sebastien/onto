@@ -406,6 +406,7 @@ test        := path [":" value ("|" value)*]
 @binding <Namespace> {key=value ...}
 @use <Namespace> as <Alias>
 @at <- <expr>
+@valid <- <expr>
 @columns <field>, <field>, ...
 <Type> <- <path> {id=<expr>, valid=<expr>, ctx=<expr>, deleted=<condition>} [-- doc]
   <Attr> <- <expr> [{annotations}] [-- doc]
@@ -429,7 +430,15 @@ test        := path [":" value ("|" value)*]
 | `confirm` | Runs confirming held retractions in lenient mode ([Approval](#approval)) | `1` |
 
 - `@at <- expr` sets the observation time (`at`) of every claim from the
-  document, from a document field. Without it, `at` is the run's time.
+  document, from a document field. Without it, or when its value is absent
+  (`a ?? b` falls through a JSON `null`), `at` is the run's time.
+- `@valid <- expr` sets when every claim from the document holds (`valid`): a
+  date, a date-time or a spec-02 interval, from a document field. A snapshot,
+  such as a questionnaire's answers as at its date, says so once. A scope's own
+  `valid=` still gives its existence claims theirs, and an absent value dates
+  nothing. Mapped claims keep the date, as they keep their inputs' `valid`
+  ([Claims and metadata](#claims-and-metadata)), whereas their `at` is the
+  mapping's run time. Writing does not write the field back.
 - Claims carry `by=bind:<Namespace>`, or `by=bind:<Namespace>/<name>` for a
   named binding, so a re-run withdraws only its own output. Several bindings of
   one ontology reading documents of one `src` (an API's endpoints) must have
@@ -503,8 +512,10 @@ deliberately not bound, for [coverage](#coverage). `reason` is required.
   <args> => <result>
 @map <Name> <From> -> <To> [{annotations}] [-- doc]
   <FromValue> <match> <ToValue> [-- doc]
+@lookup <Owner>.<Name> -> <Type> [-- doc]
+  <Attr> <- <Attr> [-- doc]
 <FromType> -> <ToType> [{name=<Name>, into=<expr>, present=<expr>, when=<condition>, ctx=<expr>, valid=<expr>}] [-- doc]
-  <target> <- <expr> [{when=<condition>, src=<path>, as=<Type>, cur=<expr>, period=<expr>, reverse, candidate}] [-- doc]
+  <target> <- <expr> [{when=<condition>, src=<path>, as=<Type>, name=<Name>, cur=<expr>, period=<expr>, reverse, candidate}] [-- doc]
   [<Facet>] [{annotations}]
 - <From path> {reason=<reason>} [-- doc]
 ```
@@ -521,7 +532,8 @@ A mapping may span several files, like an ontology: the files with the same
 resolved. A reference translates through the scope lines of every file, and
 coverage counts every file's lines and exclusions. Each file resolves its own
 `@use` aliases; the files must agree on header keys and on an alias they share,
-and must not declare a local function or map, or exclude an element, twice.
+and must not declare a local function, map or lookup, or exclude an element,
+twice.
 
 | Key | Meaning | Default |
 | --- | --- | --- |
@@ -601,7 +613,20 @@ state to an instance of `T`. Body lines give `T`'s values.
   translated through the scope lines of `S`, and its target is implicit too. A
   type with no correspondence is a gap (`Mapping.ReferenceUnmapped`). A line
   whose `when` is false demands nothing, so another table's id is not looked
-  up. Source references are lossy under reversal.
+  up. Source references reverse to the referenced instance's key
+  ([Reversal](#reversal)).
+- `ref(T, Key)`, with `T` a type of `To`, names the target instance whose key
+  under the referential's `key=` policy for `T`
+  ([spec-05](spec-05-identities.md#referentials)) is `Key`: a literal or one
+  path to a text or number. Its handle is the one the policy derives, whether or
+  not the mapping produces the instance, which stays
+  [implicit](spec-02-observations.md#implicit-instances) until a source states
+  it. Reference data kept apart from a mapping's output, such as a practice's
+  reference questions, is named this way:
+  `Question <- ref(Questionnaire/Question, "HasWill")`. A type name without
+  an alias resolves in `From` first; use a `To` alias when both ontologies
+  declare that name. Normal form uses a target alias if one is available.
+  A type without such a policy is an error. Lossy under reversal.
 - `$` alone reads the scope instance itself, as a reference translated like any
   other: in `Client -> Relationship`, `Client <- $` is the client's `Person`. Its
   claims take the scope instance's existence metadata.
@@ -618,8 +643,12 @@ state to an instance of `T`. Body lines give `T`'s values.
   currently require source-qualified identities (no target referential policy).
   Incoming references still require a unique type-directed correspondence:
   a receiver accepting several named scopes of the same type is ambiguous,
-  not an instruction to choose the first. Explicit named-reference selection
-  is not yet supported.
+  not an instruction to choose the first. A line's `{name=N}` chooses: the
+  reference translates through the scope line named `N` among those of its
+  source type whose target the receiver accepts, e.g. `Item <- $ {name=Wants}`
+  for one of the items a row names. As with `{as=T}`, an instance that scope's
+  `when` or `present` skips has no such target, and the reference is a gap
+  (`Mapping.ReferenceUnmapped`). Lossy under reversal.
 - `{into=Application}` assigns the scope's fields, facets or verbs to the
   target already mapped from that source reference, instead of minting another
   target. The selector must be a non-contextual source instance reference. A
@@ -640,7 +669,8 @@ state to an instance of `T`. Body lines give `T`'s values.
   add no existence header; explicit facet assertions retain spec-02's normal
   same-handle existence encoding, not a new identity.
   They do not contribute instance correspondence, so updates cannot supply one
-  another's identities. Reversal reports them as lossy.
+  another's identities. They reverse into rows of their source type
+  ([Reversal](#reversal)).
   A named update may share a source/target pair with an existing unnamed
   identity scope without changing that scope's identity.
 - `{present=expr}` emits a scope only for a known, nonempty value. Absent,
@@ -651,8 +681,8 @@ state to an instance of `T`. Body lines give `T`'s values.
   its assignment. Conflicting presence inputs or failed expressions report gaps
   rather than choosing a declaration; a scope its presence does not select
   demands nothing of its lines, which report no gaps. This selection may be
-  combined with `when`. Named and presence-selected scopes are currently lossy
-  under reversal.
+  combined with `when`. Named and presence-selected scopes reverse as
+  [Reversal](#reversal) describes.
 - Target attributes, facets and relations follow the forms of bindings
   (`Attr`, `Facet.Attr`, `[Facet]`, `verb`, `Role`).
 - A target is assigned by one line, or by **exclusive lines**: lines whose
@@ -674,6 +704,56 @@ state to an instance of `T`. Body lines give `T`'s values.
 - A quoted literal assigned to a `Range<T>` attribute is validated and
   canonicalised with the observations range parser. For example,
   `Horizon <- "P1Y..P5Y"` retains a duration band, not an untyped text value.
+
+### Lookups
+
+Sources often describe one thing in rows that do not name each other: a needs
+analysis lists each client's personal details and, apart, each client's
+address, both naming the client and the analysis. A **lookup** declares the
+reference a mapping reads from one row to the other:
+
+```onto
+@lookup CnaIndividual.Address -> CnaAddress -- The client's address in the same analysis
+  Client <- Client
+  Application <- Advice
+
+CnaIndividual -> Residence
+  Resident <- Client
+  Address.City <- Address.Details.City
+  Duration <- YearsMonths(Address.Years ?? 0, Address.Months ?? 0) {when=Address.Years | Address.Months}
+```
+
+- `@lookup Owner.Name -> Type` declares `Name`, a single-valued reference from
+  each instance of `Owner` to the instance of `Type` (both entity types of
+  `From`) whose attributes have the values its lines give. A line `A <- B`
+  requires `Type`'s attribute `A` to equal the owner's attribute `B`: both
+  single-valued, of one type or references to one type. References compare by
+  handle, other values by their text. `Name` is not an attribute of `Owner`,
+  and a lookup has at least one line.
+- A path of a scope over `Owner` may start with the lookup's name and read
+  through it as through a reference (`Address.Details.City`), in an expression,
+  a qualifier, a condition or a scope annotation. A scope inherits lookups
+  from its source type's ancestors; when several declare the same name, the
+  nearest declaration in the lineage wins regardless of file or declaration
+  order. Only the scope instance's lookups are read: no path reaches one
+  through a reference.
+- The lookup finds the instances of `Type` in the input state whose compared
+  attributes have known values equal to the owner's. One: the path reads
+  through it. None: the path's value is absent, as it is when the owner has no
+  value to compare. Unknown (`?`) and confirmed absent (`null`) claims are
+  not keys. Several matches, or any compared attribute of the owner with
+  conflicting values: a gap, `Mapping.ReferenceAmbiguous`, never the first;
+  a condition reading through such a lookup holds for none of them, so its
+  line demands nothing.
+- Unlike `ref(S, Key)`, a lookup names no implicit instance: it finds only what
+  the input holds. A rooted view therefore reads the rows it looks up: a line
+  reading through a lookup needs a read supplying both types' compared
+  attributes ([spec-06](spec-06-hexa.md#rooted-retrieval)).
+- Values read through a lookup keep their own provenance. Lines reading through
+  a lookup are lossy under reversal. Coverage counts the compared attributes as
+  read by a condition, and each path read through the lookup as the path it
+  ends with in `Type`.
+- A lookup is declared once in a mapping, in any of its files.
 
 ### Claims and metadata
 
@@ -930,9 +1010,36 @@ A path through a reference (`Instrument.Isin`) reads another instance:
   makes claims about instances other than the scope's own.
 
 `??`, literals, multi-argument functions and `$` metadata (except `$valid`, which
-reverses to the scope's `valid`) are not reversible. A `when` condition reverses
-only if each path it tests is also assigned by a reversible line; it keeps its
-values, alternatives and combination.
+reverses to the scope's `valid`) are not reversible. A `when` condition whose
+tested paths are all assigned by reversible lines translates into the reverse;
+it keeps its values, alternatives and combination.
+
+Scopes and lines reverse as follows
+([spec-10](spec-10-operations.md#reversal)):
+
+- **Source-side conditions.** A scope condition testing source paths that no
+  reversible line assigns, such as `{when=Deleted:false}`, held for every
+  instance the scope produced.
+  - The reverse scope applies to all of its target instances, without a
+    condition.
+  - It asserts the tested value on the source instance when the condition tests
+    one value of one path; alternatives and combinations assert nothing.
+- **Literal lines** (`Type <- "FileNote"`) write nothing back. They become
+  conditions of the reverse scope: only target instances with that value
+  reverse through it.
+- **Named scopes** reverse onto the source instance each target instance was
+  produced from, which a named source-qualified handle names
+  (`<scope>/@<name>/<S>/<key>`).
+- **Presence-selected scopes** reverse as their lines do. Retracting one of
+  their target instances clears the source paths their `present` expression
+  reads, when reversible lines of the scope assign them.
+- **Update scopes** (`into=`) reverse into rows: a slot they assign is written
+  as an instance of the scope's source type, whose selector names the
+  destination's source instance. Retracting the slot retracts the row.
+- **Source references** `ref(S, Key)` reverse when the referenced target
+  instance comes from an instance of `S`: `Key` takes its key. Among exclusive
+  lines, the line whose `S` matches applies, and its `when` test value is
+  asserted.
 
 A **derived** value is never projected back (A -> B -> A): a value the source
 computes, or one a rule derives, is not an input anyone writes. A line is lossy,
@@ -969,6 +1076,11 @@ Each value is spelled in two steps:
    unchanged. Unchanged values thus round-trip exactly, including what the
    line's functions drop: whitespace removed by `trim`, trailing zeros, a time
    of day, member order.
+   - Originals may also come from another document, read by another binding,
+     such as the response an operation reads before writing its request
+     ([spec-10](spec-10-operations.md#running-an-update)).
+   - They are then matched by instance and source slot rather than by field
+     path, since the two documents differ.
 2. **Format.** Otherwise the value is encoded with the format the field's
    [formats](#formats) entry chose, then by the line's inverse functions;
    without an entry, in its observations encoding.
@@ -1228,12 +1340,14 @@ Warnings:
 ## Normal form
 
 1. The header line (`@binding`, `@mapping` or `@functions`), then `@use` sorted
-   by alias, then `@at` and `@columns` (bindings).
+   by alias, then `@at`, `@valid` and `@columns` (bindings).
 2. `@fn` declarations sorted by name, examples sorted by encoded arguments.
 3. `@map` declarations sorted by name, lines as in spec-01.
-4. Scope lines sorted by source type path, then target type path (or path, for
+4. `@lookup` declarations sorted by owner type path, then name; lines sorted
+   by attribute.
+5. Scope lines sorted by source type path, then target type path (or path, for
    bindings); body lines sorted by target (`[Facet]` lines first).
-5. Exclusions sorted by path.
+6. Exclusions sorted by path.
 
 Annotations follow the order `id`, `name`, `into`, `present`, `when`, `src`, `as`, `ctx`, `valid`, `deleted`,
 `null`, `unset`, `cur`, `period`, `reverse`, `candidate`, `reason`. Header keys follow the order of their
@@ -1295,6 +1409,9 @@ A function library:
 - Mapping scopes may carry `name` (an identifier), `present` and `into` (expressions).
   Structure/entity exclusions cover their descendant fields; explicit leaf
   exclusions are more specific, and actual reads still take precedence.
+- A mapping line's `{name=N}` is its `name`. `@lookup` declarations go under
+  `lookups`, each `{"owner", "name", "type", "lines": [{"attr", "from", "doc"?}],
+  "doc"?}`, with fully qualified type paths.
 - Expressions: `{"path": [step, ...]}`, where a step is a field or attribute
   name (any string), `{"each": true}` (`[*]`), `{"index": n}`, `{"up": n}` (`^`)
   or `{"root": true}` (`$`); `{"text": "..."}`, `{"number": "5.25"}`,
@@ -1307,8 +1424,8 @@ A function library:
   own kind.
 - Bindings use `"ontology"` instead of `from`/`to`, scopes with `"type"` and a
   `"path"` expression, `"id"`, `"valid"` and `"ctx"` expressions, an optional
-  `"deleted"` condition (the form of `when`), and optional `"at"` and
-  `"columns"`. Attribute lines may carry `"unset"`, a string. `{"meta": "format"}`
+  `"deleted"` condition (the form of `when`), and an optional document `"at"`,
+  `"valid"` and `"columns"`. Attribute lines may carry `"unset"`, a string. `{"meta": "format"}`
   is `$format`.
 - Header keys are strings, except `candidates` (a boolean) and `confirm` (an
   integer); `retract` is written as in the text (`"20%"`).

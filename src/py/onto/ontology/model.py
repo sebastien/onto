@@ -35,6 +35,7 @@ ANNOTATION_PLACES: dict[str, set[str] | None] = {
 	"privacy": {"attribute"},
 	"default": {"attribute"},
 	"kind": {"relation"},
+	"part": {"binary"},
 	"layer": {"entity", "relation"},
 	"context": {"binary"},
 	"subjectRole": {"binary"},

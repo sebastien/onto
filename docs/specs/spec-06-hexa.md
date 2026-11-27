@@ -51,21 +51,39 @@ bindings supply the source row, guards, value and qualifiers. The rows of a
 population reached backwards (`<-`) are those of the read stating their link,
 and the reads keyed as that one come first for their obligations: a read of
 another key reads other rows, and failing, would hide these rows' facts.
-A binding on a specialisation supplies the inherited source slots too. Onto submits the ordered proof obligations
+A binding on a specialisation supplies the inherited source slots too. A line
+reading through a [lookup](spec-04-mapping.md#lookups) also needs the rows it
+looks up: the read must supply the looked-up type and the compared attributes
+of both types. Onto submits the ordered proof obligations
 for each projection up to its first static gap. Hexa's `SelectionRequest`
 deduplicates their read steps and adds prerequisite reads before any I/O.
 Reads and their input providers are shared across views.
 
 The adapter configures `ViewRead(input, bindings, provides=None, request=None,
-source=None, selects=None)` per step.
+source=None, selects=None, via=None)` per step.
 Both `input` and `provides` are `ViewInput(name, path, attr)` values, for
 example `ViewInput("id", "Exchange/Issuer", "Id")`. Steps match on the full
 source attribute, not `name`: a view may call this argument `issuerId`.
 The operator checks `{key}` and the declared value type against the source
 ontology, and checks the mapping's instance correspondence to the root before
 exposing the view. Starting from that source key, `provides` determines the
-reachable reads. Providers precede consumers; ties use catalogue order. A
-discovered key needs one provider.
+reachable reads. Providers precede consumers; ties use catalogue order.
+
+`via` names the link along which a read discovers the key it provides: a binary
+relation of the target, spelled as a view spells a link
+(`Exchange/Issuer.issues`), leading from the read's input to that key. For an
+overloaded verb, the provided key's corresponding target types narrow the
+link by endpoint. If more than one remains, qualify the link with the full
+endpoint type, as in `Exchange/Issuer.issues: Exchange/Instrument`. A view
+takes the key from such a read only when one of its populations is bound
+through that relation, in either direction (or through its `context`, in by
+one selected role and out by the other, as `through` does), or when the
+relation is a composition ([`{part}`](spec-01-ontology.md#binary-shorthand)): a view reaches
+what its populations reach and the parts and wholes of those, never what
+another link leads to. Otherwise the read is still a step of the view, keyed
+by its input, and provides nothing. A read without `via` provides its key to
+every view. Among the reads a view takes a key from, a discovered key needs
+one provider; a view with two is rejected when the operator is built.
 
 `selects` optionally declares a condition the read's rows of a source entity
 type satisfy, e.g. `{"Exchange/Listing": "Venue:XNYS"}`. Tests can list
@@ -174,6 +192,31 @@ not depend on the order in which effects complete.
   attributed to its input; it cannot hide facts for a sibling. A failed read
   is a diagnostic, never a negative fact in the observation document.
 
+[Sessions](spec-09-sessions.md) extend rooted retrieval across the systems of
+an observation store:
+
+- **Plans and reports.**
+  - Each field gains its `holder` and `writable`.
+  - Store reads are steps with `kind: "store"`, and plans give each page's
+    reads.
+  - Each fact of a report gains its `holder`; a store-held fact also gains its
+    `partition` and slot `version`.
+- **Catalogue.** It gains list reads (`ListRead`), and a read may declare page
+  parameters.
+  - It also gains operations (`Operation`, [spec-10](spec-10-operations.md#declaration)):
+    an effect, a subject, body bindings used for writing, a request template, a
+    preparatory read, arguments, and for creates a response and a key.
+- **Roots.** `rootHandle` may answer `null` when a root's handle is known only
+  after reading.
+- **Bundles.** The future `onto.view-bundle/3` adds the store bundle, holders,
+  list reads and list views ([Bundles and runtimes](spec-09-sessions.md#bundles-and-runtimes)).
+  It also adds the reverse of each `@system` mapping, the operations with
+  their body and response programs, and writability
+  ([spec-10](spec-10-operations.md#bundles-and-runtimes)).
+- **Writing in JavaScript.** The JavaScript runtime runs the writing stages of
+  [Writing documents](#writing-documents), reverse mappings and operations, so
+  that sessions write in browsers and on servers.
+
 ### Binding and mapping operators
 
 The integration lives in `src/py/onto/integrations/hexa/` and is optional:
@@ -264,7 +307,8 @@ log, report = ops.result(program, result)
 | `stages.py` | `DocumentRecordsCollect`, `DocumentFieldsDiscover`, `ClaimsEmit`, the stage namespace |
 | `runs.py` | Previous output, stale slots, retractions, safeguards, approval |
 | `operations.py` | `HexaBindingOperator`, `HexaMappingOperator` and their functional forms |
-| `views.py` | `HexaViewOperator`, read catalogue, supplier planning and rooted view reports |
+| `catalogue.py` | `ViewRead`, link resolution and each view's reachable read steps |
+| `views.py` | `HexaViewOperator`, supplier planning, execution and rooted view reports |
 | `requests.py` | Read request templates filled into `RequestSend` requests and provenance tokens |
 | `bundle.py` | `viewBundle`: compiled programs, model facts and resolved views as JSON for the JavaScript runtime |
 
@@ -275,8 +319,12 @@ hexa's conformance run over its examples.
 ### Bundles and the JavaScript runtime
 
 Python compiles; other runtimes execute. `viewBundle(operator)` returns an
-`onto.view-bundle/1` document holding everything a `HexaViewOperator` needs
-after compiling:
+`onto.view-bundle/2` document holding everything a `HexaViewOperator` needs
+after compiling. Version `/2` carries the permitted read steps for each rooted
+view. Recompile `/1` bundles for the current runtime. Sessions extend this
+contract in `/3`, not `/2`.
+
+The `/2` bundle contains:
 
 - `source` and `target`: the model facts that claim emission, reconciliation,
   unfolding and projection consult (lineage, attributes with cardinality,
@@ -290,7 +338,8 @@ after compiling:
   declared functions and value maps their transforms call, with resolved
   signatures; library functions name their implementation, which the host supplies;
 - `views`: each rooted view resolved to populations, hops and selections,
-  with the read supplying each obligation; `keyTypes` and `inputTargets`.
+  with the reads it may take (`steps`, each with the read providing its key)
+  and the read supplying each obligation; `keyTypes` and `inputTargets`.
 
 Slots whose shapes depend on an ontology revision stay program-local, as in
 Python; fixed-shape selector captures are declared process-wide. Function
@@ -406,7 +455,11 @@ functions, the parts of `??`, `id`, `valid`, `ctx`, `when` and `deleted` paths, 
 `Bind.<Type>.Fields`, named after the field path in PascalCase (`exDate` →
 `Bind.Dividend.Fields.ExDate`, `bond.couponRate` →
 `Bind.Instrument.Fields.BondCouponRate`); enclosing records add `Outer`,
-`Outer2`, and so on for each `^`. Their canonical shape is `Any`. A function
+`Outer2`, and so on for each `^`. Their canonical shape is `Any`. A value read
+from a capture, or from inside a field read whole (`advice.created` where
+`advice` is also read), goes through `Onto.Present`: JSON `null` is not
+present (spec-04), as a record's own positions say by matching `Null` first. A
+function
 reads its arguments in the observations value encoding of its parameter types,
 as spec-04 [typing](spec-04-mapping.md#typing) requires, and raises a gap when it
 cannot.
@@ -500,7 +553,7 @@ P   = $Slot                 a direct read
 The record template produces one **record** per occurrence:
 
 ```text
-{type, handle, at?, valid?, ctx?, deleted?, values: {Path: Value, ...},
+{type, handle, at?, valid?, documentValid?, ctx?, deleted?, values: {Path: Value, ...},
  facets: {Facet: true, ...}, links: {verb: Value, ...},
  formats: {FieldPath: Format, ...}, source, origin?}
 ```
@@ -633,7 +686,9 @@ DocumentRecordsCollect: <Type>RecordsSelect → <Type>RecordsProject, for each s
   `valid`; a contextual facet's `ctx` never applies to existence.
 - Metadata: `src` is the document's token, `at` the record's `at` or the run's
   time from the `ClockRead` effect (so replay reproduces it), `by` is
-  `bind:<Namespace>` (`bind:<Namespace>/<name>` for a named binding), and `valid` comes from the record. A record's `ctx` is a
+  `bind:<Namespace>` (`bind:<Namespace>/<name>` for a named binding), and `valid` comes from the record:
+  `documentValid` (`@valid`) on every claim, except that the scope's own `valid`
+  takes its place on the existence claim. A record's `ctx` is a
   default only for contextual facet applicability and value claims, never for
   existence or non-contextual claims (spec-02).
 - Instances referenced through `ref` and not produced by any record are typed by
@@ -861,12 +916,12 @@ DividendRow = {exDate?:      either(Null, tolerant($Bind.Dividend.Fields.ExDate)
                taxCredit?:   either(Null, tolerant($Exchange.Dividend.TaxCredit via DecimalText)), ...}
 
 DividendRecord = {type: "Exchange/Dividend",
-                  handle: Onto.Handle("Dividend", Onto.Concat($Bind.Dividend.Fields.Outer.Isin?, "/",
+                  handle: Onto.Handle("Dividend", Onto.Concat(Onto.Present($Bind.Dividend.Fields.Outer.Isin?), "/",
                                                               $Bind.Dividend.Fields.ExDate?)),
                   valid: Onto.Valid($Bind.Dividend.Fields.ExDate?),
                   values: {Amount: $Exchange.Dividend.Amount?,
                            Currency: $Exchange.Dividend.Currency?,
-                           Instrument: Onto.Ref("Instrument", $Bind.Dividend.Fields.Outer.Isin?),
+                           Instrument: Onto.Ref("Instrument", Onto.Present($Bind.Dividend.Fields.Outer.Isin?)),
                            PayableDate: $Exchange.Dividend.PayableDate?,
                            TaxCredit: $Exchange.Dividend.TaxCredit?},
                   facets: {}, links: {}, formats: {},
@@ -902,6 +957,11 @@ MappingRead: HandlesResolve → InstancesUnfold → <S><T>RecordsProject → <S>
              → ClaimsEmit
 MappingRun:  MappingRead → (the re-running stages of bindings)
 ```
+
+Each scope has a program ID used by its stages and by references to the scope.
+The default spelling is `<S><T>` with the short type names, plus `_Name` for a
+named scope. If those spellings collide in a program, the ID also encodes the
+full source and target paths and the scope name. Claim handles are unchanged.
 
 This version supports contextual facets, `key=A` and `key=A from=Ns` policies,
 and mappings without a referential (source-qualified handles). Minted handles,
@@ -1199,8 +1259,23 @@ generated reverses contain:
 - Records may carry `also`, a list of claims on other instances, so `ClaimsEmit`
   accepts it in mapping records generally; forward mappings never produce it.
 
+The reversals of [spec-10](spec-10-operations.md#reversal) add these forms:
+
+| Form | Produced by | Compiles to |
+| --- | --- | --- |
+| An unconditional reverse scope, with `Path <- "v"` | A source-side condition `{when=Path:v}` | A literal assignment on the source record |
+| A reverse scope condition `{when=Attr:v}` | A literal line `Attr <- "v"` | The guard of the reverse scope |
+| A reverse scope over a named scope's instances | A scope with `name=` | A scope whose source handle is the one the named handle encodes |
+| A row scope `S <- …`, with its selector line | A scope with `into=` | Records of the update's source type, placed under the destination's source instance |
+| `Key <- key(Ref)`, and the asserted `when` value | `Ref <- ref(S, Key)` | The key of the referenced instance's source, and the line's test value |
+
+- **Presence.** Retracting a presence-selected instance writes its `present`
+  paths as absent.
+
 A reverse mapping is normally run with the reverse referential, so that keys
-read back give the handles the forward direction started from.
+read back give the handles the forward direction started from. Sessions take
+each instance's source instance from the instance correspondence of the reads
+that delivered it instead (spec-10).
 
 ### Writing documents
 
@@ -1263,6 +1338,11 @@ original therefore gives the value to write, as spec-04 requires, and its
 spelling survives: padding removed by `trim`, trailing zeros, a time of day,
 member order. Raw values never leave the host: they come from the host's own
 previous document and go into the new one.
+
+For an operation's request body ([spec-10](spec-10-operations.md)), the
+previous document is the response of the operation's preparatory read, read by
+that read's bindings. Originals are then matched by record handle and source
+slot rather than by field path.
 
 **Formats.** Otherwise the field's codec spells it:
 

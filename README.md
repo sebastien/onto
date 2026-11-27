@@ -31,6 +31,9 @@ Onto offers the following formats, each with a text and a JSON form:
   ([spec-04](docs/specs/spec-04-mapping.md))
 - `.ref` for identity referentials ([spec-05](docs/specs/spec-05-identities.md))
 
+Observation stores (`.store`, [spec-08](docs/specs/spec-08-store.md)) and their
+CLI commands are specified but not yet implemented.
+
 ## Get started
 
 *onto* needs Python 3.14 or later and has no runtime dependencies. The
