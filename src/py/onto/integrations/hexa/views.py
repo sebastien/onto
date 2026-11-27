@@ -669,7 +669,11 @@ class HexaViewOperator:
 			child = path.get("objectPopulation")
 			hopSuppliers = {h.key: route["supplier"] for h, route in zip(view.paths[child or alias], path["hops"], strict=True)}
 
-			def blocked(step: str | None, population: str, bindings: dict[str, str], other: str = "") -> str | None:
+			def blocked(step: str | list[str] | None, population: str, bindings: dict[str, str], other: str = "") -> str | None:
+				if isinstance(step, list):
+					# NOTE: A projection with a supplier in each holder (spec-09 "Keyed elements") is blocked when all are.
+					reasons = [blocked(item, population, bindings, other) for item in step]
+					return None if None in reasons else "unavailable" if "unavailable" in reasons else reasons[0]
 				if step is None:
 					return "notSupplied" if gaps.get(spelling) == "SelectionRequest.NotSupplied" else "unmapped"
 				cases = outcomes.get(step, ())

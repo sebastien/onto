@@ -25,12 +25,19 @@ from tests.store import EXCHANGE, EXTRA, SCOPE, USER, authorize, financeText
 # -----------------------------------------------------------------------------
 
 
-CRM = loadOntology([Source("crm.onto", specExample("spec-09-sessions", 0))])
+# NOTE: Beyond spec-09's example, the CRM fills a person's mobile phone, keyed by its use (spec-09 "Keyed elements"):
+# the store holds the others.
+CRM = loadOntology([Source("crm.onto", specExample("spec-09-sessions", 0).replace("  Id Text {key}", "  Id Text {key}\n  MobilePhone Text", 1))])
+PHONES = """
+@view ClientPhones(contactId: CRM/Contact.Id)   -- One client's phones
+  client: Person
+  client.Phones.Number
+"""
 # NOTE: Spec-09's views, after their `@ontology Finance` and `@use Crm as CRM` lines, added to Finance.
 VIEWS = specExample("spec-09-sessions", 3).split("\n", 2)[2]
-FINANCE = loadOntology([Source("finance.onto", financeText(EXTRA).replace("@use Dimensions as D\n", "@use Dimensions as D\n@use Crm as CRM\n", 1)
-	+ "\n" + VIEWS)], [CRM])
-MAPPING = loadMapping(CRM, FINANCE, Source("crm-finance.map", specExample("spec-09-sessions", 1)))
+FINANCE = loadOntology([Source("finance.onto", financeText(EXTRA).replace("@use Dimensions as D\n", "@use Dimensions as D\n@use Crm as CRM\n", 1) + "\n" + VIEWS + PHONES)], [CRM])
+MAPPING = loadMapping(CRM, FINANCE, Source("crm-finance.map", specExample("spec-09-sessions", 1)
+	.replace("  Name.Surname <- FamilyName", "  Name.Surname <- FamilyName\n  Phones[Mobile].Number <- MobilePhone", 1)))
 MARKETS = loadFunctions([FINANCE], [Source("markets.fn", specExample("spec-04-mapping", 3))])
 REFERENTIAL = loadReferential([FINANCE, EXCHANGE], [Source("market-ids.ref", specExample("spec-04-mapping", 4))])
 EXCHANGE_MAPPING = loadMapping(EXCHANGE, FINANCE, Source("exchange-finance.map", specExample("spec-04-mapping", 5)), libraries=[MARKETS],
@@ -44,8 +51,9 @@ Contact <- $ {id=id}
   BirthDate <- birthDate
   FamilyName <- familyName
   GivenNames <- givenNames
+  MobilePhone <- mobilePhone
 """))
-CONTACT = {"id": "c-21", "familyName": "Ngata", "givenNames": "Aroha", "birthDate": "1982-04-11"}
+CONTACT = {"id": "c-21", "familyName": "Ngata", "givenNames": "Aroha", "birthDate": "1982-04-11", "mobilePhone": "0215550101"}
 CLIENT = sourceQualifiedHandle("Finance/Person", "Crm", "Contact", "c-21")
 PARTITION = f"Client/{CLIENT}"
 SEED = {"contactId": "c-21"}

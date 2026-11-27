@@ -508,6 +508,9 @@ restricted to it:
 - **Selection.**
   - An entry names subjects (`s`) or populations of the kind, and optionally
     the slots to keep.
+  - A slot without keys keeps each of its keyed elements: `Phones.Number`
+    keeps `Phones[Mobile].Number` and `Phones[Home].Number`, while
+    `Phones[Home].Number` keeps only that element.
   - Without `select`, the read returns the whole partition.
 - **Pages.** A population entry may ask for a page:
   `{ "population": "checks", "page": { "size": 10, "after": "…" } }`.

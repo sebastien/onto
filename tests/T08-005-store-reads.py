@@ -88,6 +88,14 @@ def testSelectionsKeepTheirSubjectsAndSlots() -> None:
 	assert set(answer["observations"]["instances"]) == {"IdentityCheck_C41"}
 
 
+@pytest.mark.parametrize("slot, kept", [("Phones.Number", ["0215550101", "095550102"]), ("Phones[Home].Number", ["095550102"])])
+def testASlotWithoutKeysKeepsEachElement(slot: str, kept: list[str]) -> None:
+	store = appended({"requestId": "phones", "observations": batch("Person_U1.Phones[Mobile].Number 0215550101\nPerson_U1.Phones[Home].Number 095550102")})
+	answer = store.state(USER, PARTITION, {"select": [{"s": "Person_U1", "slots": [slot]}]})
+	assert sorted(value for _, member, value, _ in claims(answer) if member.startswith("Phones")) == kept
+	assert len([item for item in answer["versions"] if item.get("p", "").startswith("Phones")]) == len(kept)
+
+
 def testPopulationsComeAPageAtATimeNewestFirst() -> None:
 	store = checks(appended(CHECK), "IdentityCheck_C42", "IdentityCheck_C43")
 	first = store.state(USER, PARTITION, {"select": [{"population": "checks", "page": {"size": 2}}]})

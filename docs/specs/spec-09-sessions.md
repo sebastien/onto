@@ -278,6 +278,11 @@ suppliers:
 - **Both systems.** A hop whose link both a system and the store can state
   (CRM notes, and notes the store created) has a supplier in each, and its
   population is the union of their instances.
+- **Keyed elements.** A projection of an attribute with keyed elements, such
+  as `client.Phones.Number`, has a supplier in each holder when a system fills
+  some of its elements (`Phones[Mobile]`) and the store holds the others. Its
+  facts are the union of their elements, and the projection is blocked only
+  when every supplier is.
 - **Selections.** A store read selects, per population of the kind, only the
   slots the view's obligations need, with the selections of spec-08
   [state reads](spec-08-store.md#state).
@@ -307,9 +312,13 @@ suppliers:
 - **Plans.** A plan (`onto.view-plan/1`) gives each field its `holder` and
   `writable`. Store reads are steps with `kind: "store"`, their partition kind
   and selections.
-- **Reports.** A report (`onto.view-report/1`) gives each fact its `holder`;
-  for store-held facts, also its `partition` and its slot `version`. It lists
-  off-authority claims.
+  - A field with keyed elements gives the holder of the elements no mapping
+    names, and `keyedHolders` the elements a system holds, such as
+    `{"Phones[Mobile].Number": "AdviceLink"}`.
+  - A field with a supplier in each holder lists them, as its `fields` entry.
+- **Reports.** A report (`onto.view-report/1`) gives each fact its `holder`
+  and `writable`, from its own slot; for store-held facts, also its
+  `partition` and its slot `version`. It lists off-authority claims.
 
 ## List views
 

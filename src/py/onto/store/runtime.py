@@ -22,7 +22,7 @@ from ..observations.operations import observationsFromJson, reconcileObservation
 from ..observations.parser import parseObservations, readObservationsJson
 from ..ontology.model import Model, Ontology
 from ..text import FormatError, Source
-from .origins import isA, holds, originOf
+from .origins import RE_ELEMENT_KEY, elementPath, holds, isA, originOf
 
 # -----------------------------------------------------------------------------
 #
@@ -526,7 +526,10 @@ class ObservationStore:
 			if subject not in subjects:
 				return False
 			slots = subjects[subject]
-			return slots is None or item.get("exists") is True and "p" not in item or item.get("p") in slots or \
+			# NOTE: A slot without keys keeps each of its keyed elements (spec-08 "State").
+			member = item.get("p")
+			return slots is None or item.get("exists") is True and "p" not in item or member is not None and (member in slots
+				or elementPath(member) in slots or RE_ELEMENT_KEY.sub("", member) in slots) or \
 				f"[{item.get('facet')}]" in slots or item.get("rel") in slots
 
 		state = self.reconcile(partition, statements)

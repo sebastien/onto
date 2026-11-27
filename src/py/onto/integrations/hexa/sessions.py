@@ -17,7 +17,7 @@ from typing import Any
 from ...observations.model import Observations, claimSlot, referenceHandles
 from ...observations.rooted import Evidence
 from ...ontology.rooted import Field, RootedView
-from ...store.origins import ORIGIN_SHARED, ORIGIN_STORE, holds, isA, originOf
+from ...store.origins import ORIGIN_SHARED, ORIGIN_STORE, RE_ELEMENT_KEY, elementPath, holds, isA, originOf, related
 from ...store.runtime import StoreError
 from .views import HexaViewOperator, ReadOutcome, readWaves
 
@@ -68,6 +68,21 @@ class SessionViewOperator(HexaViewOperator):
 		"""Who holds a field of instances of `subjectType` (spec-09 "Holders")."""
 		claim = {"rel": field.relation} if field.relation else {"p": field.member}
 		return self.storeName if holds(self.bundle, self.typeOrigin(subjectType), subjectType, claim) else self.system
+
+	def keyedHolders(self, subjectType: str, field: Field) -> dict[str, str]:
+		"""The keyed elements of a field the system fills for its instances, such as `Phones[Mobile].Number`, when the
+		store holds the field's other elements (spec-09 "Keyed elements")."""
+		if field.relation or self.typeOrigin(subjectType) != self.system:
+			return {}
+		found: dict[str, str] = {}
+		for system in self.bundle["systems"]:
+			if system["name"] != self.system:
+				continue
+			for target, filled in system["types"].items():
+				if related(self.bundle, subjectType, target):
+					found.update({path: self.system for path in map(elementPath, filled["attrs"])
+						if "[" in path and RE_ELEMENT_KEY.sub("", path) == field.member})
+		return dict(sorted(found.items()))
 
 	def claimHolder(self, claim: Json, instances: dict) -> str | None:
 		"""Who holds the slot a claim states, by its subject's origin; None when the subject has no origin."""
@@ -141,7 +156,7 @@ class SessionViewOperator(HexaViewOperator):
 			selections[name, matched[alias][1]].add(member)
 			return name
 
-		holders, writable, unhomed = {}, {}, set()
+		holders, writable, unhomed, keyedHolders = {}, {}, set(), {}
 		for spelling, key in rooted.select(fields).items():
 			projection = rooted.selections[key]
 			alias, field = projection.population, projection.field
@@ -150,6 +165,8 @@ class SessionViewOperator(HexaViewOperator):
 			writable[spelling] = holder == self.storeName and not (attr is not None and attr.derived)
 			if holder != self.storeName:
 				continue
+			if keyed := self.keyedHolders(rooted.populations[alias].type, field):
+				keyedHolders[spelling] = keyed
 			supplier = select(alias, field.member)
 			path = result["paths"][spelling]
 			for hop, route in zip(rooted.paths[path.get("objectPopulation") or alias], path["hops"], strict=True):
@@ -161,10 +178,12 @@ class SessionViewOperator(HexaViewOperator):
 					route["supplier"] = select(owner, hop.field.member if not hop.field.relation else hop.field.relation)
 					if hop.population in matched:
 						select(hop.population, "exists")
-			result["fields"][spelling] = supplier
+			# NOTE: A field whose keyed elements a system fills keeps that system's supplier beside the store's.
+			systemSupplier = result["fields"][spelling] if spelling in keyedHolders else None
+			result["fields"][spelling] = ([systemSupplier, supplier] if supplier else systemSupplier) if systemSupplier else supplier
 			if supplier is None:
 				unhomed.add(spelling)
-		stored = {spelling for spelling, holder in holders.items() if holder == self.storeName}
+		stored = {spelling for spelling, holder in holders.items() if holder == self.storeName and spelling not in keyedHolders}
 		result["gaps"] = [gap for gap in result["gaps"] if gap.get("field") not in stored] + [
 			{"field": spelling, "reason": "Store.Unhomed", "stoppedAt": rooted.selections[rooted.select(fields)[spelling]].field.path} for spelling in sorted(unhomed)]
 		for (name, populationName), members in selections.items():
@@ -177,7 +196,7 @@ class SessionViewOperator(HexaViewOperator):
 				entry = {"population": populationName, "slots": slots, **({"page": {"size": rooted.pages[alias]}} if alias in rooted.pages else {})}
 			step.setdefault("select", []).append(entry)
 		result["storeSteps"] = list(steps.values())
-		result["holders"], result["writable"] = holders, writable
+		result["holders"], result["writable"], result["keyedHolders"] = holders, writable, keyedHolders
 		return result
 
 	async def plan(self, view: str, seed: dict, fields: list[str] | None = None) -> dict:
@@ -268,9 +287,13 @@ class SessionViewOperator(HexaViewOperator):
 		rooted = self.views[view]
 		store = result.pop("store")
 		for fact in result["facts"]:
-			fact["holder"] = result["holders"][fact["field"]]
+			field = rooted.selections[rooted.select([fact["field"]])[fact["field"]]].field
+			member = fact.get("member", field.member)
+			# NOTE: A fact's holder is its own slot's: a keyed field's elements may have different holders.
+			fact["holder"] = result["holders"][fact["field"]] if field.relation else \
+				self.claimHolder({"s": fact["subject"], "p": member}, state.instances) or result["holders"][fact["field"]]
+			fact["writable"] = fact["holder"] == self.storeName and result["writable"][fact["field"]]
 			if fact["holder"] == self.storeName:
-				member = fact.get("member", rooted.selections[rooted.select([fact["field"]])[fact["field"]]].field.member)
 				slot = {"s": fact["subject"], "p": member, **({"ctx": fact["ctx"]} if "ctx" in fact else {})}
 				fact["partition"] = store["homes"].get(fact["subject"])
 				fact["version"] = store["versions"].get(slotKey(slot), 0)

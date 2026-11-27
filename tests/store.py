@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -19,13 +20,21 @@ from tests.helpers import specExample
 
 
 def financeText(extra: str = "") -> str:
-	"""Spec-01's Finance with spec-08's additions, under spec-01's header."""
-	return specExample("spec-01-ontology") + "\n" + specExample("spec-08-store", 0).split("\n", 1)[1] + extra
+	"""Spec-01's Finance with spec-08's additions, under spec-01's header; a person has phones."""
+	text = specExample("spec-01-ontology") + "\n" + specExample("spec-08-store", 0).split("\n", 1)[1] + extra
+	return re.sub(r"(?m)^(Person < Party.*)$", r"\1\n  * Phones Phone", text, count=1) if "Phone =" in extra else text
 
 
 # NOTE: A member keeping a personal value about another kind's key entity (spec-08 "Personal facts stay home"),
-# and a facet of dividends that the exchange's mapping does not fill, which a store may hold.
+# a facet of dividends that the exchange's mapping does not fill, which a store may hold, and a person's phones,
+# keyed by their use (spec-01 Keyed structures).
 EXTRA = """
+PhoneUse = Mobile|Home|Work                     -- What a phone number is used for
+
+Phone =                                         -- A phone number for one use
+  1 Use PhoneUse {key}
+  1 Number Text
+
 Visit(Household, Visitor: Person) {kind=event}  -- A home visit
   VisitorAddress Text {privacy=Owner}
 
@@ -82,13 +91,13 @@ def newStore(bundle: dict = BUNDLE, clock=lambda: NOW) -> ObservationStore:
 	return ObservationStore(bundle, FINANCE, authorize, clock=clock)
 
 
-def batch(text: str, known: dict[str, str] | None = None, typed: dict[str, str] | None = None) -> dict:
+def batch(text: str, known: dict[str, str] | None = None, typed: dict[str, str] | None = None, ontology=None) -> dict:
 	"""The JSON form of statements, without the types of the handles the store already knows (`known`), with those
-	of handles new to it that the statements only mention (`typed`)."""
+	of handles new to it that the statements only mention (`typed`), read against `ontology` (default Finance)."""
 	known = {"Person_U1": "Person"} if known is None else known
 	header, _, body = text.partition("\n\n") if text.startswith("@obs") else (HEADER, "", text)
 	declared = "".join(f"@type {handle} {type}\n" for handle, type in (known | (typed or {})).items())
-	data = observationsToJson(loadObservations(FINANCE, Source("batch.obs", f"{header}\n{declared}\n{body}")))
+	data = observationsToJson(loadObservations(ontology or FINANCE, Source("batch.obs", f"{header}\n{declared}\n{body}")))
 	for handle in known:
 		data["instances"].pop(handle, None)
 	return data

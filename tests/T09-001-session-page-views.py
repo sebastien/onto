@@ -12,7 +12,7 @@ pytest.importorskip("hexa.shapes")
 
 from onto.store.runtime import ObservationStore  # noqa: E402
 
-from tests.sessions import CLIENT, PARTITION, SEED, newStore, operator, session  # noqa: E402
+from tests.sessions import CLIENT, FINANCE, PARTITION, SEED, newStore, operator, session  # noqa: E402
 from tests.store import USER, batch  # noqa: E402
 
 # -----------------------------------------------------------------------------
@@ -83,7 +83,7 @@ def testAReportGivesEachFactItsHolder() -> None:
 	report = run(operator(seeded()).report("ClientPage", SEED))
 	facts = {(fact["field"], fact["subject"]): fact for fact in report["facts"]}
 	surname = facts["Person.Name.Surname", CLIENT]
-	assert (surname["value"], surname["holder"], "partition" in surname) == ("Ngata", "Crm", False)
+	assert (surname["value"], surname["holder"], surname["writable"], "partition" in surname) == ("Ngata", "Crm", False, False)
 	risk = facts["Person.Investor.RiskTolerance", CLIENT]
 	assert (risk["value"], risk["holder"], risk["partition"], risk["version"]) == ("Medium", "AdviserApp", PARTITION, 1)
 	confirmed = facts["IdentityCheck.Confirmed", "IdentityCheck_C41"]
@@ -96,6 +96,30 @@ def testAClientTheStoreHoldsNothingAboutHasOnlyTheirCrmFacts() -> None:
 	assert {fact["field"] for fact in report["facts"]} == set(CRM_FIELDS)
 	assert {item["field"]: item["statuses"] for item in report["coverage"] if item["field"] == "Person.Investor.RiskTolerance"} == {
 		"Person.Investor.RiskTolerance": ["empty"]}
+
+
+def testAKeyedFieldHasASupplierInEachHolder() -> None:
+	plan = run(operator(newStore()).plan("ClientPhones", SEED))
+	field = "Person.Phones.Number"
+	assert (plan["holders"][field], plan["keyedHolders"], plan["writable"][field]) == ("AdviserApp", {field: {"Phones[Mobile].Number": "Crm"}}, True)
+	assert plan["fields"][field] == ["contact", "store:Client"]
+
+
+def testAKeyedFieldsFactsComeFromEachHolder() -> None:
+	store = seeded()
+	store.append(USER, PARTITION, {"requestId": "home", "observations": batch(f"{CLIENT}.Phones[Home].Number 095550102", {CLIENT: "Person"}, ontology=FINANCE)})
+	report = run(operator(store).report("ClientPhones", SEED))
+	facts = {fact["value"]: fact for fact in report["facts"]}
+	mobile, home = facts["0215550101"], facts["095550102"]
+	assert (mobile["holder"], mobile["writable"], "version" in mobile) == ("Crm", False, False)
+	assert (home["holder"], home["writable"], home["partition"], home["version"]) == ("AdviserApp", True, PARTITION, 6)
+	assert report["offAuthority"] == []
+
+
+def testAKeyedFieldTheStoreHoldsNothingOfStillHasTheSystemsElements() -> None:
+	report = run(operator(newStore()).report("ClientPhones", SEED))
+	assert [(fact["value"], fact["holder"]) for fact in report["facts"]] == [("0215550101", "Crm")]
+	assert [item["statuses"] for item in report["coverage"]] == [["supplied"]]
 
 
 def testStoreReadsPageTheirPopulations() -> None:
