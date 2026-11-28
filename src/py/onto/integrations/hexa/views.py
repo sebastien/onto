@@ -296,6 +296,8 @@ class HexaViewOperator:
 		for parameter, item in read.parameters.items():
 			if isinstance(item, ListSort):
 				table["sort"] = parameter
+				if item.default is not None:
+					table["sortDefault"] = item.spellings[item.default]
 			elif isinstance(item, ListDirection):
 				table["direction"] = parameter
 			elif isinstance(item, ListPage):
@@ -366,6 +368,10 @@ class HexaViewOperator:
 		sort = query.get("sort") or []
 		if not isinstance(sort, list) or len(sort) > 1:
 			raise ValueError(f"Session.Unsortable: {view} sorts by one field")
+		if not sort and "sortDefault" in table:
+			parameters[table["sort"]] = table["sortDefault"]
+			if "direction" in table:
+				parameters[table["direction"]] = self.reads[table["read"]].parameters[table["direction"]].asc
 		for item in sort:
 			spelling = table["sorts"].get(item.get("field")) if isinstance(item, dict) else None
 			direction = item.get("direction", "asc") if isinstance(item, dict) else None

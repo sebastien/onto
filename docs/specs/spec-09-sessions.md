@@ -356,7 +356,7 @@ has:
   | --- | --- |
   | Filter | A source attribute of the row type and an operator: `eq`, `in`, `exists`, or `contains` for text the system matches in part, as it does (DEC0038) |
   | Keys | The row type's key, to `include` or to `exclude`, with a maximum set size |
-  | Sort | The source attributes the endpoint sorts by, and their spellings |
+  | Sort | The source attributes the endpoint sorts by, and their spellings, with the one it sorts by, ascending, when a query gives none, for an endpoint that requires a sort (DEC0038) |
   | Direction | The values the endpoint takes for an ascending and a descending sort (DEC0038) |
   | Page | The page size, and the page number with the number of the first page (`0` by default) |
 

@@ -208,7 +208,7 @@ def listParameterJson(item) -> dict:
 	if isinstance(item, ListKeys):
 		return {"kind": "keys", "mode": item.mode, "limit": item.limit}
 	if isinstance(item, ListSort):
-		return {"kind": "sort", "spellings": dict(item.spellings)}
+		return {"kind": "sort", "spellings": dict(item.spellings), **({"default": item.default} if item.default is not None else {})}
 	if isinstance(item, ListDirection):
 		return {"kind": "direction", "asc": item.asc, "desc": item.desc}
 	return {"kind": "page", "part": item.part, **({"first": item.first} if item.part == "number" else {})}

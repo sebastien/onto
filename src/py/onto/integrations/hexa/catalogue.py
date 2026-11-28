@@ -63,9 +63,11 @@ class ListKeys:
 
 @dataclass(slots=True, frozen=True)
 class ListSort:
-	"""The source attributes the endpoint sorts by, with its spelling of each."""
+	"""The source attributes the endpoint sorts by, with its spelling of each; `default`, the attribute it sorts by,
+	ascending, when a query gives no sort, for an endpoint that requires one (DEC0038)."""
 
 	spellings: dict[str, str]
+	default: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -118,6 +120,8 @@ class ListRead:
 		for name, parameter in self.parameters.items():
 			kinds.setdefault(type(parameter), []).append(name)
 			attrs = [parameter.attr] if isinstance(parameter, ListFilter) else list(parameter.spellings) if isinstance(parameter, ListSort) else []
+			if isinstance(parameter, ListSort) and parameter.default is not None and parameter.default not in parameter.spellings:
+				raise ValueError(f"{name}: a list sort's default is one of its attributes")
 			if isinstance(parameter, ListFilter) and parameter.operator not in LIST_OPERATORS:
 				raise ValueError(f"{name}: a list filter's operator is one of {', '.join(LIST_OPERATORS)}")
 			if isinstance(parameter, ListPage) and parameter.part not in ("number", "size"):

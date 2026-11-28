@@ -539,6 +539,10 @@ export class ViewOperator {
 		}
 		const sort = query.sort ?? [];
 		if (!Array.isArray(sort) || sort.length > 1) throw new Error(`Session.Unsortable: ${view} sorts by one field`);
+		if (!sort.length && table.sortDefault !== undefined) {
+			parameters[table.sort] = table.sortDefault;
+			if (table.direction) parameters[table.direction] = this.reads[table.read].list.parameters[table.direction].asc;
+		}
 		for (const item of sort) {
 			const spelling = item && typeof item === "object" ? table.sorts[item.field] : undefined, direction = item?.direction ?? "asc";
 			if (spelling === undefined || !["asc", "desc"].includes(direction)) throw new Error(`Session.Unsortable: ${view} cannot sort by ${JSON.stringify(item)}`);

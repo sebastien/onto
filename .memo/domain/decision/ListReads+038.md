@@ -30,6 +30,8 @@ cannot reverse mapping lines.
 - A list read's `absent` says how a request carries a parameter a query leaves
   out: its member is left out (`omit`, the default) or `null` (`null`). UAT's
   `/group/list` answers HTTP 500 to a body missing a member of its filter.
+- A sort parameter may name a default attribute, which sorts a query that
+  gives no sort, ascending: the same endpoint answers HTTP 500 without one.
 - Python compiles each list view's queries once: its list read, each
   filterable field's parameter, operators and reversed values (a value map's
   inverse; a plain line's value unchanged), each sortable field's spelling,

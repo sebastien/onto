@@ -154,12 +154,15 @@ def testQueriesTheViewCannotRunAreRefused() -> None:
 
 
 def testAnEndpointRequiringEveryMemberGetsNullForAbsentParameters() -> None:
-	strict = ListRead(SEARCH.rows, SEARCH.bindings, SEARCH.request, SEARCH.parameters, SEARCH.total, absent="null")
+	# NOTE: The endpoint also requires a sort: without one in the query, the list read's default applies, ascending.
+	parameters = {**SEARCH.parameters, "sort": ListSort({"FamilyName": "familyName", "BirthDate": "birthDate"}, default="BirthDate")}
+	strict = ListRead(SEARCH.rows, SEARCH.bindings, SEARCH.request, parameters, SEARCH.total, absent="null")
 	operator, requests, _ = lister()
 	operator = SessionViewOperator(operator.mapper, operator.mapping, {name: read for name, read in operator.reads.items() if name != "search"},
 		operator.access, BUNDLE, SCOPE, operations=operator.operations, lists={"search": strict})
 	report(operator, {"filter": {"field": SURNAME, "eq": "Ngata"}})
-	assert requests[-1]["body"] == {"familyName": "Ngata", "familyNameLike": None, "sortBy": None, "order": None, "page": 0, "pageSize": 25}
+	assert requests[-1]["body"] == {"familyName": "Ngata", "familyNameLike": None, "sortBy": "birthDate", "order": "asc", "page": 0, "pageSize": 25}
+	assert operator.listQueries["ClientList"]["sortDefault"] == "birthDate"
 	assert sessionBundle(operator)["reads"]["search"]["list"]["absent"] == "null"
 	with pytest.raises(ValueError, match="absent"):
 		lister()[0].__class__(operator.mapper, operator.mapping, {}, operator.access, BUNDLE, SCOPE,
