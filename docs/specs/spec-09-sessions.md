@@ -423,8 +423,8 @@ are the parameter's source type:
     (`at`). The host answers as `RequestSend` does, or `{empty: true}` when an
     include matches no key, and the page has no rows.
   - `keyQuery(store, request, send, keyOf)` is such a host in Python and
-    JavaScript: `keyOf(anchor)` gives a partition anchor's key in the system,
-    null for another origin's.
+    JavaScript: `keyOf(anchor, read)` gives a partition anchor's key in the
+    system, for the list read named `read`, null for another origin's.
   - The bundle's query table names each store-held field an index covers,
     with its index and column, and the list read's keys parameters.
 

@@ -352,14 +352,14 @@ def templatePath(template: Json, parameter: str) -> list[str]:
 
 def keyQuery(store, request: Any, send, keyOf):
 	"""A host's `KeyQuery` (spec-09 "Key queries"): query the store's index as the server (`request`), keep the keys
-	`keyOf(anchor)` gives (None for an anchor of another origin), put them in the list read's request where its keys
+	`keyOf(anchor, read)` gives for the list read named `read` (None for an anchor of another origin), put them in the list read's request where its keys
 	parameter goes, and send it with `send`, a `RequestSend`. Only the list read's answer leaves the host. An include
 	no key matches reads nothing; more keys than the parameter takes fail the query."""
 	def KeyQuery(query: Json, context: Any = None):
 		keys, found, after = query["keys"], [], None
 		while True:
 			page = store.indexQuery(request, keys["index"], {"filter": keys["filter"], **({"after": after} if after else {})})
-			found += [key for row in page["partitions"] if (key := keyOf(row["anchor"])) is not None]
+			found += [key for row in page["partitions"] if (key := keyOf(row["anchor"], query["read"])) is not None]
 			if len(found) > keys["limit"]:
 				raise KeySetTooLarge(f"more than {keys['limit']} keys match the query")
 			if "next" not in page:

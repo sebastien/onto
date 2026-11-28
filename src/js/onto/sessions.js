@@ -490,7 +490,7 @@ export class Session {
 
 /**
  * A host's `KeyQuery` (spec-09 "Key queries"): query the store's index as the server (`request`), keep the keys
- * `keyOf(anchor)` gives (null for an anchor of another origin), put them in the list read's request where its keys
+ * `keyOf(anchor, read)` gives for the list read named `read` (null for an anchor of another origin), put them in the list read's request where its keys
  * parameter goes, and send it with `send`, a `RequestSend`. Only the list read's answer leaves the host. An include no
  * key matches reads nothing; more keys than the parameter takes fail the query, `ViewRead.KeySetTooLarge`.
  */
@@ -501,7 +501,7 @@ export function keyQuery(store, request, send, keyOf) {
 		for (;;) {
 			const page = await store.indexQuery(request, keys.index, { filter: keys.filter, ...(after ? { after } : {}) });
 			for (const row of page.partitions) {
-				const key = await keyOf(row.anchor);
+				const key = await keyOf(row.anchor, query.read);
 				if (key !== null && key !== undefined) found.push(key);
 			}
 			if (found.length > keys.limit) throw new ViewReadError(`more than ${keys.limit} keys match the query`, "KeySetTooLarge");

@@ -99,7 +99,7 @@ def keyed():
 	store = ObservationStore(BUNDLE, FINANCE, authorize, authorizeServer=lambda request: {"scope": SCOPE, "principal": "server:app"} if request is SERVER else None)
 	operator, requests, _ = lister(store)
 
-	def keyOf(anchor: str) -> str | None:
+	def keyOf(anchor: str, read: str) -> str | None:
 		parts = sourceParts(handleKey(anchor, "Finance/Person") or "")
 		return parts[2] if parts and parts[:2] == ("Crm", "Contact") else None
 	operator = SessionViewOperator(operator.mapper, operator.mapping, {name: read for name, read in operator.reads.items() if name != "search"},
