@@ -395,7 +395,7 @@ are the parameter's source type:
 | --- | --- |
 | A predicate on a system-held field | The list read's filter on the source attribute its mapping line reads, with the value reversed through the line (spec-04 Reversal). A line that does not reverse, or a missing filter, leaves the field unfilterable |
 | A predicate on a store-held field | A query of an index of the kind anchored at the root population, whose columns include the field. The matching anchors' keys fill the list read's `include` parameter, or `exclude` under `not`. Anchors of another origin are dropped, since they are no rows of that system |
-| `sort` | The list read's sort parameter. Sorting by store-held fields is deferred |
+| `sort` | The list read's sort parameter, on a field whose line reads the attribute unchanged: a value map's line does not sort, since the system orders its own values. Sorting by store-held fields is deferred |
 | `page` | The list read's page parameters, within the view's limits ([Limits and pages](#limits-and-pages)) |
 
 - **What pages may offer.** A plan reports which fields a view's queries can

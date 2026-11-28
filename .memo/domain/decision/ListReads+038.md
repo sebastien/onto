@@ -31,7 +31,9 @@ cannot reverse mapping lines.
   filterable field's parameter, operators and reversed values (a value map's
   inverse; a plain line's value unchanged), each sortable field's spelling,
   and the direction and page parameters. The bundle carries them, so every
-  runtime compiles a query from the same table.
+  runtime compiles a query from the same table. A field read through a value
+  map filters by its reversed values but does not sort: the system orders its
+  own values, not the target's.
 - A list view's seed is its query. The list read is the plan's first step and
   provides the view's key; the reads of each row take the keys it found, as
   reads take a provided key. Facts name their row.
