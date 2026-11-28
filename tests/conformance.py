@@ -247,8 +247,8 @@ def install() -> None:
 	originalView = HexaViewOperator.__init__
 	originalPlan, originalReport, originalRetrieve = HexaViewOperator.plan, HexaViewOperator.report, HexaViewOperator.retrieve
 
-	def viewInit(self, mapper, mapping, reads, access, operations=None):
-		originalView(self, mapper, mapping, reads, RecordingAccess(access) if access is not None else None, operations)
+	def viewInit(self, mapper, mapping, reads, access, operations=None, lists=None):
+		originalView(self, mapper, mapping, reads, RecordingAccess(access) if access is not None else None, operations, lists)
 
 	async def recordView(self, method: str, view, seed, fields, now, call, journal=None, policy=None):
 		item = exported(self, lambda: viewBundle(self))

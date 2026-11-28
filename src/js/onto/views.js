@@ -27,7 +27,7 @@ import { loadBindingProgram } from "./binding.js";
 import { loadMappingProgram } from "./mapping.js";
 import { Model, unkeyed } from "./model.js";
 import { observationsFromJson, reconcileObservations, sourceState, sourceToken } from "./observations.js";
-import { requestFor, requestSource, requestTemplate } from "./requests.js";
+import { listRequestFor, requestFor, requestSource, requestTemplate } from "./requests.js";
 import { RE_NAME, RE_PATH, activeHandles, intersectIntervals, jsonEqual, observationStatus, pyJson, referenceHandles, valueKey } from "./values.js";
 
 // -----------------------------------------------------------------------------
@@ -323,6 +323,12 @@ export class Evidence {
 }
 
 /** Plan, read, map and project the rooted views of a bundle. */
+/** The value at a dotted path of a response, or undefined. */
+function responseValue(data, path) {
+	for (const step of path.split(".")) data = data && typeof data === "object" && !Array.isArray(data) ? data[step] : undefined;
+	return data;
+}
+
 export class ViewOperator {
 	/**
 	 * `implementations`: the code of declared library functions, by `Namespace/Name`. `operations`: hexa host
@@ -377,10 +383,14 @@ export class ViewOperator {
 		if (!rooted) throw new Error(`unknown rooted view ${view}`);
 		const param = rooted.input;
 		if (valueKey(Object.keys(seed)) !== valueKey([param.name])) throw new Error(`${view} requires ${param.name}: ${param.key}`);
-		const value = seed[param.name];
-		this.checkValue(param, value);
+		let value = seed[param.name], handle = null;
 		const kind = rooted.populations[rooted.root].type;
-		const handle = this.access.rootHandle(param, value, rooted.rootTarget);
+		// NOTE: A list view's seed is its query; its roots are known once its list read answers (DEC0038).
+		if (param.many) value = this.compileQuery(view, value);
+		else {
+			this.checkValue(param, value);
+			handle = this.access.rootHandle(param, value, rooted.rootTarget);
+		}
 		const wanted = this.select(view, fields), steps = rooted.steps, matches = rooted.matches;
 		const supplier = Object.fromEntries(Object.entries(matches).map(([key, entries]) => [key, entries.length ? entries[0].supplier : null]));
 		const dependents = new Map(), paths = {}, outputs = {};
@@ -405,7 +415,7 @@ export class ViewOperator {
 		const reads = compiled.steps.map(({ step: name }) => {
 			const read = this.reads[name];
 			return { step: name, input: read.input.name, requires: steps[name].requires, bindings: read.bindingNames,
-				...this.describeRead(name, read.input.key === param.key ? value : `{${read.input.name}}`) };
+				...this.describeRead(name, read.list || read.input.key === param.key && !param.many ? value : `{${read.input.name}}`) };
 		});
 		const gaps = [];
 		for (const gap of compiled.gaps) {
@@ -415,7 +425,7 @@ export class ViewOperator {
 			}
 		}
 		return { format: "onto.view-plan/1", view, seed: { ...seed }, root: { role: rooted.root, type: kind.slice(this.targetModel.namespace.length + 1), handle },
-			fields: outputs, paths, steps: reads, gaps };
+			...(param.many ? { query: value } : {}), fields: outputs, paths, steps: reads, gaps };
 	}
 
 	/**
@@ -432,6 +442,7 @@ export class ViewOperator {
 	async runReads(view, seed, fields = null, { now = clockNow(), fetch = (step, value) => this.access.fetch(step, value), operations = {}, record, replay, signal, policy = {}, planned } = {}) {
 		const result = planned ?? await this.plan(view, seed, fields);
 		const param = this.views[view].input, steps = result.steps.map(item => item.step);
+		if (Object.hasOwn(result, "query")) seed = { [param.name]: result.query };
 		// The view's provider of each key, not any earlier read discovering it: the view may not take it from that one.
 		const providers = new Map(result.steps.map(item => [item.step, item.requires[0] ?? null])), waves = readWaves(steps, providers);
 		// A replayed journal may name host reasons this process has not declared yet.
@@ -477,6 +488,7 @@ export class ViewOperator {
 			}
 			values.get(name).forEach((value, index) => {
 				const output = outputs.get(name)[index], ok = output.status === "ok";
+				if (read.list) this.listRows(view, result, output);
 				const receipt = { step: name, input: { [read.input.name]: value }, ...this.describeRead(name, value), status: output.status };
 				calls.push(receipt);
 				result.gaps.push(...output.gaps);
@@ -484,7 +496,8 @@ export class ViewOperator {
 					for (const key of output.emptyInputs) emptyInputs.add(key);
 					if (read.provides) receipt.discovered = { [read.provides.name]: output.discovered };
 				} else result.gaps.push({ step: name, input: receipt.input, reason: output.reason, ...readDetail(output.failure) });
-				const handles = new Set(this.bundle.inputTargets[read.input.key].map(kind => this.access.rootHandle(read.input, value, kind)));
+				const keys = read.list ? output.discovered ?? [] : [value];
+				const handles = new Set(keys.flatMap(key => this.bundle.inputTargets[read.input.key].map(kind => this.access.rootHandle(read.input, key, kind))));
 				outcome(name, { handles, status: output.status, emptyTypes: ok ? output.emptyTypes : [], ...(ok ? {} : { failure: output.failure }) });
 			});
 		}
@@ -495,7 +508,60 @@ export class ViewOperator {
 			state = reconciled;
 		}
 		result.calls = calls;
+		if (Object.hasOwn(result, "query") && !Object.hasOwn(result, "rows")) Object.assign(result, { rows: [], total: null, page: result.query.page, next: null });
 		return [result, state, outcomes];
+	}
+
+	// -- List views ---------------------------------------------------------------
+
+	/** A list view's query as its list read's parameters, with the page it asks for, from the view's query table (spec-09 "Key queries"). */
+	compileQuery(view, query) {
+		const rooted = this.views[view], table = rooted.list;
+		if (!table) throw new Error(`${view}: no list read of ${rooted.input.path}`);
+		if (!query || typeof query !== "object" || Array.isArray(query) || Object.keys(query).some(key => !["filter", "sort", "page"].includes(key)))
+			throw new Error(`${view}: a query is {filter?, sort?, page?}`);
+		const parameters = {}, filter = query.filter;
+		const predicates = filter == null ? [] : filter && typeof filter === "object" && valueKey(Object.keys(filter)) === valueKey(["and"]) ? filter.and : [filter];
+		for (const predicate of predicates) {
+			const operators = predicate && typeof predicate === "object" ? Object.keys(predicate).filter(key => key !== "field") : [];
+			if (operators.length !== 1 || typeof predicate.field !== "string") throw new Error(`${view}: a predicate is {field, eq|in|exists|contains}`);
+			const [operator] = operators;
+			let value = predicate[operator];
+			const entry = table.filters[predicate.field]?.[operator];
+			if (!entry) throw new Error(`Session.Unfilterable: ${view} cannot filter ${predicate.field} by ${operator}`);
+			if (entry.values) {
+				const items = operator === "in" ? value : [value];
+				if (!Array.isArray(items) || items.some(item => typeof item !== "string" || !Object.hasOwn(entry.values, item)))
+					throw new Error(`Session.Unfilterable: ${predicate.field} has no source value for ${JSON.stringify(value)}`);
+				value = operator === "in" ? items.map(item => entry.values[item]) : entry.values[value];
+			}
+			parameters[entry.parameter] = value;
+		}
+		const sort = query.sort ?? [];
+		if (!Array.isArray(sort) || sort.length > 1) throw new Error(`Session.Unsortable: ${view} sorts by one field`);
+		for (const item of sort) {
+			const spelling = item && typeof item === "object" ? table.sorts[item.field] : undefined, direction = item?.direction ?? "asc";
+			if (spelling === undefined || !["asc", "desc"].includes(direction)) throw new Error(`Session.Unsortable: ${view} cannot sort by ${JSON.stringify(item)}`);
+			parameters[table.sort] = spelling;
+			if (table.direction) parameters[table.direction] = this.reads[table.read].list.parameters[table.direction][direction];
+		}
+		const page = query.page ?? {}, limit = rooted.max ?? 100;
+		const size = page.size ?? rooted.page ?? limit, number = page.number ?? 1;
+		if (!Number.isInteger(size) || !Number.isInteger(number) || size < 1 || number < 1) throw new Error(`${view}: a page has a number from 1 and a positive size`);
+		if (size > limit) throw new Error(`Session.PageTooLarge: ${view} reads at most ${limit} rows a page`);
+		if (table.page?.number !== undefined) parameters[table.page.number] = number - 1 + table.page.first;
+		if (table.page?.size !== undefined) parameters[table.page.size] = size;
+		return { parameters, page: { number, size } };
+	}
+
+	/** A list page's rows in the list read's order, each with its key and root handle; the total; and the next page while more rows remain. */
+	listRows(view, result, output) {
+		const page = result.query.page, keys = output.status === "ok" ? output.discovered : [];
+		const total = output.status === "ok" ? output.total ?? null : null;
+		const more = Number.isInteger(total) ? page.number * page.size < total : keys.length === page.size;
+		const rooted = this.views[view];
+		Object.assign(result, { rows: keys.map(key => ({ key, handle: this.access.rootHandle(rooted.input, key, rooted.rootTarget) })),
+			total, page, next: more ? { number: page.number + 1, size: page.size } : null });
 	}
 
 	/** The host's description of a read, else its request (its template while the value is the placeholder `{name}`). */
@@ -503,12 +569,13 @@ export class ViewOperator {
 		if (typeof this.access?.describe === "function") return this.access.describe(name, value);
 		const read = this.reads[name];
 		if (!read.request) return {};
+		if (read.list) return listRequestFor(read, value.parameters);
 		return value === `{${read.input.name}}` ? requestTemplate(read) : requestFor(read, value);
 	}
 
 	/** A read's input values: the seed, or what its `provider` (an earlier wave) discovered, in order. */
 	readValues(name, provider, param, seed, outputs) {
-		if (this.reads[name].input.key === param.key) return [seed[param.name]];
+		if (this.reads[name].input.key === param.key && !provider) return [seed[param.name]];
 		return [...new Set((provider ? outputs.get(provider) : []).flatMap(output => output.status === "ok" ? output.discovered : []))];
 	}
 
@@ -516,7 +583,7 @@ export class ViewOperator {
 	readEffect(name, value) {
 		const read = this.reads[name];
 		let effect;
-		try { effect = read.request ? ["RequestSend", requestFor(read, value)] : ["DocumentFetch", name, value]; }
+		try { effect = read.request ? ["RequestSend", read.list ? listRequestFor(read, value.parameters) : requestFor(read, value)] : ["DocumentFetch", name, value]; }
 		catch (error) {
 			if (error instanceof Failure) return { failure: error };
 			throw error;
@@ -558,9 +625,19 @@ export class ViewOperator {
 				gaps.push(...bound.gaps.map(gap => ({ step: name, target: gap.target, reason: gap.reason, src: gap.src ?? null, location: gap.location ?? null, handle: gap.handle ?? null, origin: gap.origin ?? null })));
 			}
 			const state = sourceState(this.sourceModel, logs);
-			const discovered = typeof this.access?.discover === "function" ? [...this.access.discover(state, read.provides ?? null)] : this.discoverKeys(state, read.provides);
-			if (read.provides) for (const key of discovered) this.checkValue(read.provides, key);
-			return { status: "ok", logs, gaps, discovered, emptyTypes: response.emptyTypes, emptyInputs: response.emptyInputs };
+			let discovered, total;
+			if (read.list) {
+				// NOTE: A list read's rows are the keys on the instances its bindings state, in their order (spec-09).
+				discovered = this.discoverKeys(state, read.input);
+				if (read.list.total) total = responseValue(sent.result.data, read.list.total);
+				if (!Object.values(read.list.parameters).some(item => item.kind === "page")) {
+					// NOTE: A list read without page parameters is read whole; the session keeps the page asked for.
+					discovered = discovered.slice((value.page.number - 1) * value.page.size).slice(0, value.page.size);
+				}
+			} else discovered = typeof this.access?.discover === "function" ? [...this.access.discover(state, read.provides ?? null)] : this.discoverKeys(state, read.provides);
+			for (const key of read.provides || read.list ? discovered : []) this.checkValue(read.provides ?? read.input, key);
+			return { status: "ok", logs, gaps, discovered, emptyTypes: response.emptyTypes, emptyInputs: response.emptyInputs,
+				...(Number.isInteger(total) ? { total } : {}) };
 		} catch (error) {
 			if (error instanceof Failure && error.kind === Failure.Defect) throw error;
 			return { status: "unavailable", gaps, reason: readReason(error), failure: error };
@@ -570,7 +647,9 @@ export class ViewOperator {
 	/** Only the leaves reached from this seed, with the claims that established each path. */
 	project(state, result, outcomes, selected = null) {
 		const facts = [], coverage = [], view = this.views[result.view];
-		const graph = new Evidence(this.targetModel, state), root = result.root.handle;
+		// NOTE: A list view's projection walks from each row's root, and its facts name their row (spec-09 "Rows").
+		const graph = new Evidence(this.targetModel, state), many = Object.hasOwn(result, "rows");
+		const roots = many ? result.rows.map(row => row.handle) : [result.root.handle];
 		const gaps = Object.fromEntries(result.gaps.filter(gap => Object.hasOwn(gap, "field")).map(gap => [gap.field, gap.reason]));
 		for (const [spelling, key] of Object.entries(this.select(result.view, Object.keys(result.fields)))) {
 			const { population: alias, field, contextPopulation } = view.selections[key];
@@ -593,38 +672,41 @@ export class ViewOperator {
 				if (cases.length && cases.every(item => item.status === "empty" || item.emptyTypes.includes(view.populations[population].type) || item.emptyTypes.includes(other))) return "empty";
 				return null;
 			};
-			const [reached, stops] = graph.walk(view, child ?? alias, root, (hop, bound) => blocked(hopSuppliers.get(hopKey(hop)), hop.population, bound));
-			if (selected === null) coverage.push(...stops.map(stop => ({ field: spelling, population: alias, ...stop, path: stop.path.map(witness => describeWitness(state, witness)) })));
-			const incoming = view.paths[alias].find(hop => hop.population === alias && hop.test === undefined);
-			const returnsToParent = field.relation && incoming && incoming.field.relation === field.relation
-				&& valueKey(field.roles) === valueKey(incoming.reverse ? incoming.field.roles : [...incoming.field.roles].reverse());
-			for (const [bindings, trail] of reached) {
-				const handle = bindings[alias], seen = new Set();
-				const reason = blocked(supplier, alias, bindings, field.other ?? "");
-				for (const [subject, value, claim, roleClaim] of reason === null ? graph.rows(field) : []) {
-					if (subject !== handle || !inContext(claim, contextPopulation, bindings)) continue; // Another subject's value, or one holding within another context.
-					if (returnsToParent && value?.ref !== bindings[incoming.parent]) continue; // Returning a filing/review link back to the root must preserve that root.
-					if (child) {
-						const edge = trail.at(-2); // The last witness is the object filter, immediately after its incoming edge.
-						if (value?.ref !== bindings[child] || edge.subjectRoleClaim !== roleClaim
-							|| (Object.hasOwn(edge.claim, "rel") || roleClaim) && edge.claim !== claim) continue;
+			for (const root of roots) {
+				const row = many ? { row: root } : {};
+				const [reached, stops] = graph.walk(view, child ?? alias, root, (hop, bound) => blocked(hopSuppliers.get(hopKey(hop)), hop.population, bound));
+				if (selected === null) coverage.push(...stops.map(stop => ({ field: spelling, population: alias, ...row, ...stop, path: stop.path.map(witness => describeWitness(state, witness)) })));
+				const incoming = view.paths[alias].find(hop => hop.population === alias && hop.test === undefined);
+				const returnsToParent = field.relation && incoming && incoming.field.relation === field.relation
+					&& valueKey(field.roles) === valueKey(incoming.reverse ? incoming.field.roles : [...incoming.field.roles].reverse());
+				for (const [bindings, trail] of reached) {
+					const handle = bindings[alias], seen = new Set();
+					const reason = blocked(supplier, alias, bindings, field.other ?? "");
+					for (const [subject, value, claim, roleClaim] of reason === null ? graph.rows(field) : []) {
+						if (subject !== handle || !inContext(claim, contextPopulation, bindings)) continue; // Another subject's value, or one holding within another context.
+						if (returnsToParent && value?.ref !== bindings[incoming.parent]) continue; // Returning a filing/review link back to the root must preserve that root.
+						if (child) {
+							const edge = trail.at(-2); // The last witness is the object filter, immediately after its incoming edge.
+							if (value?.ref !== bindings[child] || edge.subjectRoleClaim !== roleClaim
+								|| (Object.hasOwn(edge.claim, "rel") || roleClaim) && edge.claim !== claim) continue;
+						}
+						if (selected !== null) {
+							for (const item of [claim, roleClaim]) if (item) selected.add(item);
+							for (const witness of trail) for (const item of [witness.claim, witness.subjectRoleClaim]) if (item) selected.add(item);
+							continue;
+						}
+						// An association's role claim states a link, not a member of the field.
+						const member = roleClaim ? field.member : claim.p ?? field.member;
+						facts.push({ field: spelling, population: alias, subject: handle, value, ...row, source: sourceToken(state, claim) ?? null,
+							path: trail.map(witness => describeWitness(state, witness)), ...(member !== field.member ? { member } : {}),
+							...Object.fromEntries(["cur", "unit", "period", "scale", "valid", "at", "ctx", "conflict"].filter(name => Object.hasOwn(claim, name)).map(name => [name, claim[name]])),
+							...describeAssociation(claim, roleClaim), ...(conflicted(claim, roleClaim) ? { conflict: true } : {}) });
+						seen.add(conflicted(claim, roleClaim) ? "conflict" : value && typeof value === "object" && value.partial ? "partial" : observationStatus(value));
 					}
-					if (selected !== null) {
-						for (const item of [claim, roleClaim]) if (item) selected.add(item);
-						for (const witness of trail) for (const item of [witness.claim, witness.subjectRoleClaim]) if (item) selected.add(item);
-						continue;
+					if (selected === null) {
+						coverage.push({ field: spelling, population: alias, subject: handle, ...row, statuses: [...(seen.size ? seen : new Set([reason ?? "missing"]))].sort(),
+							...(seen.has("supplied") ? {} : { stoppedAt: field.path, path: trail.map(witness => describeWitness(state, witness)) }) });
 					}
-					// An association's role claim states a link, not a member of the field.
-					const member = roleClaim ? field.member : claim.p ?? field.member;
-					facts.push({ field: spelling, population: alias, subject: handle, value, source: sourceToken(state, claim) ?? null,
-						path: trail.map(witness => describeWitness(state, witness)), ...(member !== field.member ? { member } : {}),
-						...Object.fromEntries(["cur", "unit", "period", "scale", "valid", "at", "ctx", "conflict"].filter(name => Object.hasOwn(claim, name)).map(name => [name, claim[name]])),
-						...describeAssociation(claim, roleClaim), ...(conflicted(claim, roleClaim) ? { conflict: true } : {}) });
-					seen.add(conflicted(claim, roleClaim) ? "conflict" : value && typeof value === "object" && value.partial ? "partial" : observationStatus(value));
-				}
-				if (selected === null) {
-					coverage.push({ field: spelling, population: alias, subject: handle, statuses: [...(seen.size ? seen : new Set([reason ?? "missing"]))].sort(),
-						...(seen.has("supplied") ? {} : { stoppedAt: field.path, path: trail.map(witness => describeWitness(state, witness)) }) });
 				}
 			}
 		}

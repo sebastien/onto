@@ -344,7 +344,8 @@ A system's list endpoints are declared beside its reads (spec-06). A list read
 has:
 
 - **Rows.** `rows`: the source type of the rows, with the bindings that read
-  them.
+  them. The values of the type's key on the instances they bind are the rows'
+  keys, in the order the bindings state them.
 - **Request.** `request`: a request template, as for reads, with a `{name}`
   placeholder per parameter. A template member whose placeholders are all
   absent is left out of the request.
@@ -352,10 +353,11 @@ has:
 
   | Kind | Declares |
   | --- | --- |
-  | Filter | A source attribute of the row type and an operator: `eq`, `in` or `exists` |
+  | Filter | A source attribute of the row type and an operator: `eq`, `in`, `exists`, or `contains` for text the system matches in part, as it does (DEC0038) |
   | Keys | The row type's key, to `include` or to `exclude`, with a maximum set size |
   | Sort | The source attributes the endpoint sorts by, and their spellings |
-  | Page | The page size, and the page number |
+  | Direction | The values the endpoint takes for an ascending and a descending sort (DEC0038) |
+  | Page | The page size, and the page number with the number of the first page (`0` by default) |
 
 - **Total.** `total`, optional: where the response gives the number of
   matching rows.
@@ -375,9 +377,16 @@ A list view is retrieved with a query instead of a seed, over the view's
 fields:
 
 - **`filter`.** The index filters of spec-08 (`eq`, `in`, `exists`, `and`),
-  plus `not` around predicates on store-held fields.
-- **`sort`.** Fields with their directions.
-- **`page`.** A number and a size.
+  plus `not` around predicates on store-held fields, and `contains` on a
+  system-held field whose list read filter takes it.
+- **`sort`.** Fields with their directions (`asc` or `desc`). A list read takes
+  one sort field.
+- **`page`.** A number, from 1, and a size.
+
+```json
+{"filter": {"and": [{"field": "Client/Group.Name", "contains": "nemo"}, {"field": "Client/Group.Type", "eq": "Family"}]},
+ "sort": [{"field": "Client/Group.Name", "direction": "asc"}], "page": {"number": 1, "size": 25}}
+```
 
 A session compiles a query against the view's list read, the one whose rows
 are the parameter's source type:
@@ -390,7 +399,12 @@ are the parameter's source type:
 | `page` | The list read's page parameters, within the view's limits ([Limits and pages](#limits-and-pages)) |
 
 - **What pages may offer.** A plan reports which fields a view's queries can
-  filter and sort by.
+  filter and sort by. The bundle carries the same, compiled by Python: per
+  list view, its list read, each filterable field's parameter, operators and
+  reversed values, each sortable field's spelling, and the direction and page
+  parameters (DEC0038), so that runtimes compile queries alike.
+- **Refusals.** A predicate or sort on a field the view's queries cannot use
+  fails the query, `Session.Unfilterable` or `Session.Unsortable`.
 - **One index.** The store predicates of one query use one index.
 - **Size.** An index answer larger than the keys parameter's limit fails the
   query, `Session.KeySetTooLarge`.
@@ -408,9 +422,11 @@ are the parameter's source type:
   all rows of a page at once: one store read of every row's partition, and
   system reads per row, deduplicated. The view's `max` bounds how many rows a
   page has, and so how many reads per row a query makes.
-- **Result.** The rows in the list read's order, each with its root handle; the
-  merged observations; `total` when the list read gives it; and the next page,
-  while more rows remain.
+- **Result.** The rows in the list read's order, each with its key and root
+  handle; the merged observations, each fact naming its row; `total` when the
+  list read gives it; and the next page, while more rows remain.
+- **Query as seed.** A list view's seed is its parameter's name with the query
+  as its value, as `{"groupIds": {"page": {"number": 2}}}`.
 
 ## Limits and pages
 

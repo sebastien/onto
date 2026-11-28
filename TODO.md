@@ -22,8 +22,9 @@ including rooted views (spec-06); and the CLI (spec-07). The JavaScript runtime
 (`src/js/onto/`) executes bundles that Python compiles. The observation
 store's core (spec-08: store files, appends, reads) runs in Python and in
 JavaScript, with an HTTP handler, a client and a Cloudflare adapter; sessions
-(spec-09) plan and read page views and route changes, in Python and JavaScript. `make test`:
-2,274 passed on Python 3.15. Not started: overlays (spec-03), registry-backed
+(spec-09) plan and read page views and list views over a system's list reads,
+and route changes, in Python and JavaScript. `make test`: 2,283 passed on
+Python 3.15. Not started: overlays (spec-03), registry-backed
 identities (spec-05) and operations (spec-10).
 
 ## Open work
@@ -56,10 +57,12 @@ identities (spec-05) and operations (spec-10).
    indexes, in Python and JavaScript, with the Cloudflare adapter's scope
    objects; and the `Meta` checks in the JavaScript store's validation
    (`domain/decision:ObservationStore+026`).
-9. **Sessions** (spec-09), beyond page views and changes (done in Python and
-   JavaScript): list views and list reads, key queries, `more` for the next
-   page, notices, a population both a system and the store supply, and
-   journaling the store's operations as hexa effects
+9. **Sessions** (spec-09), beyond page views, list views over list reads and
+   changes (done in Python and JavaScript, `domain/decision:ListReads+038`):
+   key queries on store-held fields, with `not` and the host's `KeyQuery`
+   (they need store indexes); several sort fields; `more` for the next page
+   of a population; notices; a population both a system and the store supply;
+   and journaling the store's operations as hexa effects
    (`domain/decision:Sessions+028`).
 10. **Operations** (spec-10): the widened reversal, operations in the
     catalogue, writing system-held slots from sessions, and writing in

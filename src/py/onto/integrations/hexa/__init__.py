@@ -35,11 +35,12 @@ from .operations import (  # noqa: E402
 )
 from .vocabulary import BindingCodes, MappingCodes, vocabularyConformance  # noqa: E402
 from .writing import BindingWriteProgram  # noqa: E402
+from .catalogue import ListDirection, ListFilter, ListKeys, ListPage, ListRead, ListSort  # noqa: E402
 from .views import HexaViewOperator, ViewDocument, ViewRead, ViewReadError  # noqa: E402
 
 __all__ = [
 	"IntegrationUnavailable", "CompileError", "BindingCodes", "MappingCodes", "vocabularyConformance",
-	"HexaViewOperator", "ViewDocument", "ViewRead", "ViewReadError",
+	"HexaViewOperator", "ListDirection", "ListFilter", "ListKeys", "ListPage", "ListRead", "ListSort", "ViewDocument", "ViewRead", "ViewReadError",
 	"HexaBindingOperator", "HexaMappingOperator", "bindingCompile", "bindingResult", "bindingFormatsUpdate", "bindingApprove",
 	"mappingCompile", "mappingResult", "mappingApprove", "programEncoding",
 	"BindingProgram", "BindingWriteProgram", "MappingProgram", "BindingReport", "MappingReport", "WriteReport", "ReportGap", "Outcome", "StageNamespace",

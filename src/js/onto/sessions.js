@@ -226,13 +226,13 @@ export class SessionViewOperator extends ViewOperator {
 		const answers = reads.length ? [...(await this.access.storeRead({ reads })).results] : [];
 		let [result, state, outcomes] = await super.runReads(view, seed, fields, { ...options, planned });
 		result = this.storePlan(view, fields, result);
-		const root = result.root.handle;
+		// NOTE: A list view's rows each anchor their partitions, read once its list read gave them (spec-09 "Rows").
+		const roots = Object.hasOwn(result, "rows") ? result.rows.map(row => row.handle) : result.root.handle ? [result.root.handle] : [];
 		let graph = null;
 		const anchorsOf = step => {
-			if (step.anchor === rooted.root) return root ? [root] : [];
+			if (step.anchor === rooted.root) return roots;
 			graph ??= new Evidence(this.targetModel, state);
-			const [reached] = graph.walk(rooted, step.anchor, root, () => null);
-			return [...new Set(reached.map(([bindings]) => bindings[step.anchor]))];
+			return [...new Set(roots.flatMap(root => graph.walk(rooted, step.anchor, root, () => null)[0].map(([bindings]) => bindings[step.anchor])))];
 		};
 		const done = new Set(first.map(step => step.step));
 		const [later, laterOwners] = SessionViewOperator.storeRequests(result.storeSteps.filter(step => !done.has(step.step)), anchorsOf);

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ...binding.model import Binding
 from ...conditions import conditionFromJson, parseCondition, testValues
@@ -38,6 +38,98 @@ class ViewRead:
 	@property
 	def key(self) -> str:
 		return self.input.key
+
+
+# NOTE: A list read's parameters (spec-09 "List reads"), each filling one `{name}` placeholder of its request.
+
+LIST_OPERATORS = ("eq", "in", "exists", "contains")
+
+
+@dataclass(slots=True, frozen=True)
+class ListFilter:
+	"""A filter on a source attribute of the rows, with the operator the endpoint applies (`contains`: in part)."""
+
+	attr: str
+	operator: str
+
+
+@dataclass(slots=True, frozen=True)
+class ListKeys:
+	"""The rows' keys to `include` or to `exclude`, at most `limit` of them."""
+
+	mode: str
+	limit: int
+
+
+@dataclass(slots=True, frozen=True)
+class ListSort:
+	"""The source attributes the endpoint sorts by, with its spelling of each."""
+
+	spellings: dict[str, str]
+
+
+@dataclass(slots=True, frozen=True)
+class ListDirection:
+	"""The values the endpoint takes for an ascending and a descending sort (DEC0038)."""
+
+	asc: object
+	desc: object
+
+
+@dataclass(slots=True, frozen=True)
+class ListPage:
+	"""The page `size`, or the page `number`, counted from `first`."""
+
+	part: str
+	first: int = 0
+
+
+@dataclass(slots=True)
+class ListRead:
+	"""A system's list endpoint (spec-09 "List reads"): the source type of its rows, the bindings that read them, a
+	request template with a placeholder per parameter, and where the response gives the number of matching rows.
+
+	A view operator sets `input`, the rows' key, which a list view's parameter names."""
+
+	rows: str
+	bindings: list[Binding]
+	request: dict
+	parameters: dict[str, ListFilter | ListKeys | ListSort | ListDirection | ListPage]
+	total: str | None = None
+	input: ViewInput | None = field(default=None, init=False)
+	provides: ViewInput | None = field(default=None, init=False)
+	source: str | None = field(default=None, init=False)
+	selects: dict | None = field(default=None, init=False)
+	via: str | None = field(default=None, init=False)
+
+	@property
+	def key(self) -> str:
+		return self.input.key
+
+	def bound(self, model: Model) -> ListRead:
+		"""A copy whose `input` is the rows' key, after checking its parameters against the rows' type."""
+		keys = [name for name, attr in model.entityAttrs(self.rows).items() if annotation(attr.ann, "key") is True] if model.get(self.rows) else []
+		if len(keys) != 1:
+			raise ValueError(f"the rows of a list read are of a source type with one {{key}} attribute, not {self.rows}")
+		kinds: dict[type, list[str]] = {}
+		for name, parameter in self.parameters.items():
+			kinds.setdefault(type(parameter), []).append(name)
+			attrs = [parameter.attr] if isinstance(parameter, ListFilter) else list(parameter.spellings) if isinstance(parameter, ListSort) else []
+			if isinstance(parameter, ListFilter) and parameter.operator not in LIST_OPERATORS:
+				raise ValueError(f"{name}: a list filter's operator is one of {', '.join(LIST_OPERATORS)}")
+			if isinstance(parameter, ListPage) and parameter.part not in ("number", "size"):
+				raise ValueError(f"{name}: a list page parameter is its number or its size")
+			for attr in attrs:
+				if model.lookup(self.rows, attr) is None:
+					raise ValueError(f"{name}: no attribute {attr} on {self.rows}")
+		if len(kinds.get(ListSort, [])) > 1 or len(kinds.get(ListDirection, [])) > 1 or kinds.get(ListDirection) and not kinds.get(ListSort):
+			raise ValueError("a list read has at most one sort parameter, and a direction only with it")
+		parts = [parameter.part for parameter in self.parameters.values() if isinstance(parameter, ListPage)]
+		if len(parts) != len(set(parts)):
+			raise ValueError("a list read has at most one page number and one page size")
+		read = ListRead(self.rows, self.bindings, self.request, self.parameters, self.total)
+		read.input = ViewInput("query", self.rows, keys[0], many=True)
+		return read
 
 
 # -----------------------------------------------------------------------------
@@ -117,8 +209,13 @@ def planReadSteps(model: Model, view: RootedView, reads: dict[str, ViewRead], li
 			return link.association in followedRoles or (association, end, start) in followedRoles
 		return False
 
-	providers, steps = {seedKey: None}, {}
-	while ready := [(name, read) for name, read in reads.items() if name not in steps and read.key in providers]:
+	lists = {name for name, read in reads.items() if isinstance(read, ListRead)}
+	# NOTE: A list view's list read is its first read, and provides the keys its rows' reads take (DEC0038).
+	first = [name for name in lists if reads[name].key == seedKey] if view.many else []
+	if len(first) > 1:
+		raise ValueError(f"several list reads of {view.input.path}: {', '.join(sorted(first))}")
+	providers, steps = {seedKey: first[0] if first else None}, {name: {"requires": [], "capability": name} for name in first}
+	while ready := [(name, read) for name, read in reads.items() if name not in steps and name not in lists and read.key in providers]:
 		for name, read in ready:
 			parent = providers[read.key]
 			steps[name] = {"requires": [parent] if parent else [], "capability": name}
@@ -129,6 +226,7 @@ def planReadSteps(model: Model, view: RootedView, reads: dict[str, ViewRead], li
 	return steps
 
 
-__all__ = ["ViewRead", "readSelection", "readLink", "planReadSteps"]
+__all__ = ["LIST_OPERATORS", "ListDirection", "ListFilter", "ListKeys", "ListPage", "ListRead", "ListSort", "ViewRead", "planReadSteps", "readLink",
+	"readSelection"]
 
 # EOF

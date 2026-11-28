@@ -32,10 +32,11 @@ from ...observations.rooted import Evidence, Witness, conflicted, inContext, rol
 from ...ontology.model import Model, ViewInput, isSymmetric, unkeyed
 from ...ontology.rooted import Field, Hop, RootedView, fieldFor, memberMatches
 from ...text import FormatError, isName, isPath
-from .catalogue import ViewRead, planReadSteps, readLink, readSelection
+from ...mapping.reversal import Lossy, Reverser
+from .catalogue import ListDirection, ListFilter, ListPage, ListRead, ListSort, ViewRead, planReadSteps, readLink, readSelection
 from .compiler import SELF, MappingCompiler
 from .operations import HexaBindingOperator, HexaMappingOperator
-from .requests import checkRequest, requestFor, requestSource, requestTemplate
+from .requests import checkListRequest, checkRequest, listRequestFor, requestFor, requestSource, requestTemplate
 
 # -----------------------------------------------------------------------------
 #
@@ -167,6 +168,13 @@ def keyValue(value: object, builtin: str | None) -> object:
 	return value
 
 
+def responseValue(data: object, path: str) -> object:
+	"""The value at a dotted path of a response, or None."""
+	for step in path.split("."):
+		data = data.get(step) if isinstance(data, dict) else None
+	return data
+
+
 def readWaves(steps: list[str], providers: dict[str, str | None]) -> dict[str, int]:
 	"""Each planned read's wave: 0 without a provider, one more than its provider's otherwise."""
 	waves = {}
@@ -217,13 +225,26 @@ class HexaViewOperator:
 	`hexa.http.http`), and optionally `FailureClassify`.
 	"""
 
-	def __init__(self, mapper: HexaMappingOperator, mapping: Mapping, reads: dict[str, ViewRead], access, operations: dict | None = None):
+	def __init__(self, mapper: HexaMappingOperator, mapping: Mapping, reads: dict[str, ViewRead], access, operations: dict | None = None,
+		lists: dict[str, ListRead] | None = None):
 		self.source, self.target = mapper.fromOntology, mapper.toOntology
 		self.sourceModel, self.targetModel = Model(self.source), Model(self.target)
+		# NOTE: List reads join the catalogue, keyed by their rows' key, for the list views whose parameter names it.
+		bound = {}
+		for step, read in (lists or {}).items():
+			if step in reads:
+				raise ValueError(f"{step}: a list read and a read share the name")
+			try:
+				bound[step] = read.bound(self.sourceModel)
+				checkListRequest(step, bound[step])
+			except ValueError as error:
+				raise ValueError(f"{step}: {error}") from None
+		reads = {**reads, **bound}
 		self.mapper, self.mapping, self.reads, self.access, self.operations = mapper, mapping, reads, access, dict(operations or {})
 		self.rowValues = {}  # Per step, the values its request leaves the attributes it selects rows by.
 		for step, read in reads.items():
-			checkRequest(step, read)
+			if not isinstance(read, ListRead):
+				checkRequest(step, read)
 			if read.request is None and not callable(getattr(access, "fetch", None)):
 				raise ValueError(f"{step}: a read without a request template needs the host's fetch")
 			try:
@@ -258,6 +279,113 @@ class HexaViewOperator:
 				self.steps[name] = planReadSteps(self.targetModel, view, self.reads, links)
 			except ValueError as error:
 				raise ValueError(f"{name}: {error}") from None
+		# Each list view's list read, and the query table compiled from it (DEC0038).
+		self.listQueries = {name: self.listQuery(name, view, step) for name, view in self.views.items() if view.many
+			for step in self.steps[name] if isinstance(self.reads[step], ListRead)}
+
+	# -- List views ---------------------------------------------------------------
+
+	def listQuery(self, name: str, view: RootedView, step: str) -> dict:
+		"""What a list view's queries may use (spec-09 "Key queries"): its list read, each root field a filter of the list
+		read takes, by operator, with the values a value map's line reverses; the fields it sorts by, with its spellings;
+		and its sort, direction and page parameters."""
+		read = self.reads[step]
+		table = {"read": step, "filters": {}, "sorts": {}}
+		spellings = {key: spelling for spelling, key in view.defaults.items()}
+		page = {}
+		for parameter, item in read.parameters.items():
+			if isinstance(item, ListSort):
+				table["sort"] = parameter
+			elif isinstance(item, ListDirection):
+				table["direction"] = parameter
+			elif isinstance(item, ListPage):
+				page[item.part] = parameter
+				if item.part == "number":
+					page["first"] = item.first
+		if page:
+			table["page"] = page
+		reverser = Reverser(self.mapping, self.source, self.target, self.mapper.libraries)
+		scopes = [scope for scope in correspondenceScopes(self.sourceModel, self.mapping, read.rows)
+			if scope.target == self.rootTargets[name] or self.targetModel.isA(self.rootTargets[name], scope.target)]
+		for key, projection in view.selections.items():
+			field = projection.field
+			if projection.population != view.root or field.relation:
+				continue
+			line = next((line for scope in scopes for line in scope.lines if line.target and unkeyed(line.target) == field.member and line.when is None), None)
+			source, values = self.lineSource(reverser, line.expr if line else None)
+			if source is None:
+				continue
+			spelling = spellings.get(key, key)
+			for parameter, item in read.parameters.items():
+				if isinstance(item, ListFilter) and item.attr == source and not (values is not None and item.operator == "contains"):
+					table["filters"].setdefault(spelling, {})[item.operator] = {"parameter": parameter, **({"values": values} if values is not None else {})}
+				elif isinstance(item, ListSort) and source in item.spellings and values is None:
+					table["sorts"][spelling] = item.spellings[source]
+		return table
+
+	def lineSource(self, reverser: Reverser, expr: dict | None) -> tuple[str | None, dict | None]:
+		"""The source attribute a mapping line reads, and for a value map's line, each target value's source value; none
+		for a line that does not reverse so (spec-04 Reversal)."""
+		values = None
+		if expr is not None and "call" in expr and expr["call"] in reverser.maps and len(expr["args"]) == 1:
+			try:
+				reverser.reverseMap(expr["call"])
+			except Lossy:
+				return None, None
+			values = {line.toValue: line.fromValue for line in reverser.maps[expr["call"]].mapLines}
+			expr = expr["args"][0]
+		steps = expr.get("path") if isinstance(expr, dict) else None
+		if not steps or not all(isinstance(step, str) for step in steps):
+			return None, None
+		return ".".join(steps), values
+
+	def compileQuery(self, view: str, query: object) -> dict:
+		"""A list view's query as its list read's parameters, with the page it asks for (spec-09 "Key queries")."""
+		rooted, table = self.views[view], self.listQueries.get(view)
+		if table is None:
+			raise ValueError(f"{view}: no list read of {rooted.input.path}")
+		if not isinstance(query, dict) or set(query) - {"filter", "sort", "page"}:
+			raise ValueError(f"{view}: a query is {{filter?, sort?, page?}}")
+		parameters = {}
+		filter = query.get("filter")
+		predicates = [] if filter is None else filter["and"] if isinstance(filter, dict) and set(filter) == {"and"} else [filter]
+		for predicate in predicates:
+			operators = [key for key in predicate if key != "field"] if isinstance(predicate, dict) else []
+			if len(operators) != 1 or not isinstance(predicate.get("field"), str):
+				raise ValueError(f"{view}: a predicate is {{field, eq|in|exists|contains}}")
+			operator, value = operators[0], predicate[operators[0]]
+			entry = table["filters"].get(predicate["field"], {}).get(operator)
+			if entry is None:
+				raise ValueError(f"Session.Unfilterable: {view} cannot filter {predicate['field']} by {operator}")
+			if "values" in entry:
+				items = value if operator == "in" else [value]
+				if any(not isinstance(item, str) or item not in entry["values"] for item in items):
+					raise ValueError(f"Session.Unfilterable: {predicate['field']} has no source value for {value!r}")
+				value = [entry["values"][item] for item in items] if operator == "in" else entry["values"][value]
+			parameters[entry["parameter"]] = value
+		sort = query.get("sort") or []
+		if not isinstance(sort, list) or len(sort) > 1:
+			raise ValueError(f"Session.Unsortable: {view} sorts by one field")
+		for item in sort:
+			spelling = table["sorts"].get(item.get("field")) if isinstance(item, dict) else None
+			direction = item.get("direction", "asc") if isinstance(item, dict) else None
+			if spelling is None or direction not in ("asc", "desc"):
+				raise ValueError(f"Session.Unsortable: {view} cannot sort by {item!r}")
+			parameters[table["sort"]] = spelling
+			if "direction" in table:
+				parameters[table["direction"]] = getattr(self.reads[table["read"]].parameters[table["direction"]], direction)
+		page = query.get("page") or {}
+		limit = rooted.max or 100
+		size, number = page.get("size", rooted.page or limit), page.get("number", 1)
+		if type(size) is not int or type(number) is not int or size < 1 or number < 1:
+			raise ValueError(f"{view}: a page has a number from 1 and a positive size")
+		if size > limit:
+			raise ValueError(f"Session.PageTooLarge: {view} reads at most {limit} rows a page")
+		if "number" in table.get("page", {}):
+			parameters[table["page"]["number"]] = number - 1 + table["page"]["first"]
+		if "size" in table.get("page", {}):
+			parameters[table["page"]["size"]] = size
+		return {"parameters": parameters, "page": {"number": number, "size": size}}
 
 	@cached_property
 	def mapProgram(self):
@@ -424,9 +552,13 @@ class HexaViewOperator:
 		if set(seed) != {param.name}:
 			raise ValueError(f"{view} requires {param.name}: {param.key}")
 		value = seed[param.name]
-		self.checkValue(param, value)
 		kind = rooted.populations[rooted.root].type
-		handle = self.access.rootHandle(param, value, self.rootTargets[view])
+		if rooted.many:
+			# NOTE: A list view's seed is its query; its roots are known once its list read answers (DEC0038).
+			value, handle = self.compileQuery(view, value), None
+		else:
+			self.checkValue(param, value)
+			handle = self.access.rootHandle(param, value, self.rootTargets[view])
 		wanted = rooted.select(fields)
 		steps = self.steps[view]
 		matches = self.correspondences(rooted, steps)
@@ -458,8 +590,9 @@ class HexaViewOperator:
 		for item in compiled["steps"]:
 			name = item["step"]
 			read = self.reads[name]
+			own = isinstance(read, ListRead) or read.key == param.key and not rooted.many
 			description = {"step": name, "input": read.input.name, "requires": steps[name]["requires"], "bindings": [b.header.get("name", b.ontology) for b in read.bindings],
-				**self.describeRead(name, value if read.key == param.key else "{" + read.input.name + "}")}
+				**self.describeRead(name, value if own else "{" + read.input.name + "}")}
 			reads.append(description)
 		gaps = []
 		for gap in compiled["gaps"]:
@@ -469,7 +602,7 @@ class HexaViewOperator:
 				outputs[spelling] = None
 		return {"format": "onto.view-plan/1", "view": view, "seed": dict(seed),
 			"root": {"role": rooted.root, "type": kind.removeprefix(self.target.namespace + "/"), "handle": handle},
-			"fields": outputs, "paths": paths, "steps": reads, "gaps": gaps}
+			**({"query": value} if rooted.many else {}), "fields": outputs, "paths": paths, "steps": reads, "gaps": gaps}
 
 	async def report(self, view: str, seed: dict, fields: list[str] | None = None, now: str | None = None, **options) -> dict:
 		"""Explain the reads, proven answers and missing links as a diagnostic report; `options` as for `runReads`."""
@@ -506,6 +639,8 @@ class HexaViewOperator:
 		"""
 		result = planned if planned is not None else await self.plan(view, seed, fields)
 		param = self.views[view].input
+		if "query" in result:
+			seed = {param.name: result["query"]}
 		steps = [step["step"] for step in result["steps"]]
 		# NOTE: The view's provider of each key, not any earlier read discovering it: the view may not take it from that one.
 		providers = {step["step"]: step["requires"][0] if step["requires"] else None for step in result["steps"]}
@@ -561,6 +696,8 @@ class HexaViewOperator:
 				if read.key not in emptyInputs:
 					result["gaps"].append({"step": name, "reason": "MissingInput", "input": read.input.name})
 			for value, output in zip(values[name], outputs[name]):
+				if isinstance(read, ListRead):
+					self.listRows(view, result, read, output)
 				receipt = {"step": name, "input": {read.input.name: value}, **self.describeRead(name, value), "status": output["status"]}
 				calls.append(receipt)
 				result["gaps"].extend(output["gaps"])
@@ -570,7 +707,8 @@ class HexaViewOperator:
 						receipt["discovered"] = {read.provides.name: output["discovered"]}
 				else:
 					result["gaps"].append({"step": name, "input": receipt["input"], "reason": output["reason"], **readDetail(output["failure"])})
-				handles = {self.access.rootHandle(read.input, value, kind) for kind in self.inputTargets[read.key]}
+				keys = output.get("discovered", []) if isinstance(read, ListRead) else [value]
+				handles = {self.access.rootHandle(read.input, key, kind) for key in keys for kind in self.inputTargets[read.key]}
 				ok = output["status"] == "ok"
 				outcomes[name].append(ReadOutcome(handles, output["status"], tuple(output["emptyTypes"]) if ok else (), None if ok else output["failure"]))
 		state = Observations({"ontology": self.target.namespace, "scope": None}, {}, {}, [], [])
@@ -579,7 +717,19 @@ class HexaViewOperator:
 			result["gaps"].extend(asdict(g) for g in report.gaps)
 			state = reconcileObservations(self.target, log, mode=self.mapper.mode)
 		result["calls"] = calls
+		if "query" in result and "rows" not in result:
+			result.update(rows=[], total=None, page=result["query"]["page"], next=None)
 		return result, state, outcomes
+
+	def listRows(self, view: str, result: dict, read: ListRead, output: dict) -> None:
+		"""A list page's rows in the list read's order, each with its key and root handle; the total the response gives;
+		and the next page while more rows remain (spec-09 "Rows")."""
+		page = result["query"]["page"]
+		keys = output.get("discovered", []) if output["status"] == "ok" else []
+		total = output.get("total") if output["status"] == "ok" else None
+		more = page["number"] * page["size"] < total if isinstance(total, int) else len(keys) == page["size"]
+		result.update(rows=[{"key": key, "handle": self.access.rootHandle(self.views[view].input, key, self.rootTargets[view])} for key in keys],
+			total=total, page=page, next={"number": page["number"] + 1, "size": page["size"]} if more else None)
 
 	def describeRead(self, name: str, value: object) -> dict:
 		"""The host's description of a read, else its request (its template while the value is the placeholder `{name}`)."""
@@ -588,11 +738,13 @@ class HexaViewOperator:
 		read = self.reads[name]
 		if read.request is None:
 			return {}
+		if isinstance(read, ListRead):
+			return listRequestFor(read, value["parameters"])
 		return requestTemplate(read) if value == "{" + read.input.name + "}" else requestFor(read, value)
 
 	def readValues(self, name: str, provider: str | None, param: ViewInput, seed: dict, outputs: dict) -> list:
 		"""A read's input values: the seed, or what its `provider` (an earlier wave) discovered, in order."""
-		if self.reads[name].key == param.key:
+		if self.reads[name].key == param.key and provider is None:
 			return [seed[param.name]]
 		return list(dict.fromkeys(item for output in outputs.get(provider, ()) if output["status"] == "ok" for item in output["discovered"]))
 
@@ -600,7 +752,8 @@ class HexaViewOperator:
 		"""The effect a read needs, `[operation, ...arguments]`, keyed so that equal requests are sent once."""
 		read = self.reads[name]
 		try:
-			effect = ["DocumentFetch", name, value] if read.request is None else ["RequestSend", requestFor(read, value)]
+			effect = ["DocumentFetch", name, value] if read.request is None else ["RequestSend", listRequestFor(read, value["parameters"])
+				if isinstance(read, ListRead) else requestFor(read, value)]
 		except Failure as failure:
 			return {"failure": failure}
 		return {"effect": effect, "key": json.dumps(effect, sort_keys=True)}
@@ -647,15 +800,25 @@ class HexaViewOperator:
 				gaps.extend({"step": name, **asdict(g)} for g in report.gaps)
 			state = self.sourceState(logs)
 			discover = getattr(self.access, "discover", None)
-			discovered = list(discover(state, read.provides)) if callable(discover) else self.discoverKeys(state, read.provides)
-			if read.provides:
-				for key in discovered:
-					self.checkValue(read.provides, key)
+			total = None
+			if isinstance(read, ListRead):
+				# NOTE: A list read's rows are the keys on the instances its bindings state, in their order (spec-09).
+				discovered = self.discoverKeys(state, read.input)
+				total = responseValue(sent["result"].get("data"), read.total) if read.total else None
+				if not any(isinstance(item, ListPage) for item in read.parameters.values()):
+					# NOTE: A list read without page parameters is read whole; the session keeps the page asked for.
+					page = value["page"]
+					discovered = discovered[(page["number"] - 1) * page["size"]:][:page["size"]]
+			else:
+				discovered = list(discover(state, read.provides)) if callable(discover) else self.discoverKeys(state, read.provides)
+			for key in discovered if read.provides or isinstance(read, ListRead) else ():
+				self.checkValue(read.provides or read.input, key)
 		except (OSError, ValueError, KeyError, IndexError, TypeError, FormatError, Failure) as exc:
 			if isinstance(exc, Failure) and exc.kind is Failure.Defect:
 				raise
 			return {"status": "unavailable", "gaps": gaps, "reason": readReason(exc), "failure": exc}
-		return {"status": "ok", "logs": logs, "gaps": gaps, "discovered": discovered, "emptyTypes": response["emptyTypes"], "emptyInputs": response["emptyInputs"]}
+		return {"status": "ok", "logs": logs, "gaps": gaps, "discovered": discovered, "emptyTypes": response["emptyTypes"], "emptyInputs": response["emptyInputs"],
+			**({"total": total} if isinstance(total, int) and not isinstance(total, bool) else {})}
 
 	def sourceState(self, logs: list) -> dict:
 		"""Merge and reconcile bound source logs into a JSON state."""
@@ -668,7 +831,9 @@ class HexaViewOperator:
 		facts, coverage = [], []
 		view = self.views[result["view"]]
 		graph = Evidence(self.targetModel, state)
-		root = result["root"]["handle"]
+		# NOTE: A list view's projection walks from each row's root, and its facts name their row (spec-09 "Rows").
+		many = "rows" in result
+		roots = [item["handle"] for item in result["rows"]] if many else [result["root"]["handle"]]
 		gaps = {g["field"]: g["reason"] for g in result["gaps"] if "field" in g}
 		for spelling, key in view.select(list(result["fields"])).items():
 			projection = view.selections[key]
@@ -696,43 +861,45 @@ class HexaViewOperator:
 					return "empty"
 				return None
 
-			reached, stops = graph.walk(view, child or alias, root, lambda h, bound: blocked(hopSuppliers[h.key], h.population, bound))
-			if selected is None:
-				coverage.extend({"field": spelling, "population": alias, **stop,
-					"path": [describeWitness(state, w) for w in stop["path"]]} for stop in stops)
-			incoming = next((h for h in view.paths[alias] if h.population == alias and h.test is None), None)
-			returnsToParent = (f.relation and incoming and incoming.field.relation == f.relation
-				and f.roles == (incoming.field.roles if incoming.reverse else incoming.field.roles[::-1]))
-			for bindings, trail in reached:
-				h = bindings[alias]
-				seen = set()
-				reason = blocked(supplier, alias, bindings, f.other)
-				for subject, value, c, roleClaim in graph.rows(f) if reason is None else ():
-					if subject != h or not inContext(c, projection.contextPopulation, bindings):
-						continue  # Another subject's value, or one holding within another context.
-					if returnsToParent and value.get("ref") != bindings[incoming.parent]:
-						continue  # Returning a filing/review link back to the root must preserve that root.
-					if child:
-						edge = trail[-2]  # The last witness is the object filter, immediately after its incoming edge.
-						if value.get("ref") != bindings[child] or edge.subjectRoleClaim is not roleClaim \
-							or ("rel" in edge.claim or roleClaim is not None) and edge.claim is not c:
-							continue
-					if selected is not None:
-						selected.update(id(claim) for claim in (c, roleClaim) if claim is not None)
-						selected.update(id(claim) for w in trail for claim in (w.claim, w.subjectRoleClaim) if claim is not None)
-						continue
-					# An association's role claim states a link, not a member of the field.
-					member = f.member if roleClaim is not None else c.get("p", f.member)
-					facts.append({"field": spelling, "population": alias, "subject": h, "value": value,
-						"source": sourceToken(state, c), "path": [describeWitness(state, w) for w in trail],
-						**({"member": member} if member != f.member else {}),
-						**{k: c[k] for k in ("cur", "unit", "period", "scale", "valid", "at", "ctx", "conflict") if k in c},
-						**describeAssociation(c, roleClaim), **({"conflict": True} if conflicted(c, roleClaim) else {})})
-					seen.add("conflict" if conflicted(c, roleClaim) else "partial" if isinstance(value, dict) and value.get("partial") else observationStatus(value))
+			for root in roots:
+				row = {"row": root} if many else {}
+				reached, stops = graph.walk(view, child or alias, root, lambda h, bound: blocked(hopSuppliers[h.key], h.population, bound))
 				if selected is None:
-					coverage.append({"field": spelling, "population": alias, "subject": h,
-						"statuses": sorted(seen or {reason or "missing"}),
-						**({} if "supplied" in seen else {"stoppedAt": f.path, "path": [describeWitness(state, w) for w in trail]})})
+					coverage.extend({"field": spelling, "population": alias, **row, **stop,
+						"path": [describeWitness(state, w) for w in stop["path"]]} for stop in stops)
+				incoming = next((h for h in view.paths[alias] if h.population == alias and h.test is None), None)
+				returnsToParent = (f.relation and incoming and incoming.field.relation == f.relation
+					and f.roles == (incoming.field.roles if incoming.reverse else incoming.field.roles[::-1]))
+				for bindings, trail in reached:
+					h = bindings[alias]
+					seen = set()
+					reason = blocked(supplier, alias, bindings, f.other)
+					for subject, value, c, roleClaim in graph.rows(f) if reason is None else ():
+						if subject != h or not inContext(c, projection.contextPopulation, bindings):
+							continue  # Another subject's value, or one holding within another context.
+						if returnsToParent and value.get("ref") != bindings[incoming.parent]:
+							continue  # Returning a filing/review link back to the root must preserve that root.
+						if child:
+							edge = trail[-2]  # The last witness is the object filter, immediately after its incoming edge.
+							if value.get("ref") != bindings[child] or edge.subjectRoleClaim is not roleClaim \
+								or ("rel" in edge.claim or roleClaim is not None) and edge.claim is not c:
+								continue
+						if selected is not None:
+							selected.update(id(claim) for claim in (c, roleClaim) if claim is not None)
+							selected.update(id(claim) for w in trail for claim in (w.claim, w.subjectRoleClaim) if claim is not None)
+							continue
+						# An association's role claim states a link, not a member of the field.
+						member = f.member if roleClaim is not None else c.get("p", f.member)
+						facts.append({"field": spelling, "population": alias, "subject": h, "value": value, **row,
+							"source": sourceToken(state, c), "path": [describeWitness(state, w) for w in trail],
+							**({"member": member} if member != f.member else {}),
+							**{k: c[k] for k in ("cur", "unit", "period", "scale", "valid", "at", "ctx", "conflict") if k in c},
+							**describeAssociation(c, roleClaim), **({"conflict": True} if conflicted(c, roleClaim) else {})})
+						seen.add("conflict" if conflicted(c, roleClaim) else "partial" if isinstance(value, dict) and value.get("partial") else observationStatus(value))
+					if selected is None:
+						coverage.append({"field": spelling, "population": alias, "subject": h, **row,
+							"statuses": sorted(seen or {reason or "missing"}),
+							**({} if "supplied" in seen else {"stoppedAt": f.path, "path": [describeWitness(state, w) for w in trail]})})
 		return facts, coverage
 
 

@@ -16,6 +16,8 @@ import { p } from "hexa/runtime.js";
 // -----------------------------------------------------------------------------
 
 export const REQUEST_KEYS = ["method", "path", "api", "query", "headers", "body"];
+const RE_PLACEHOLDER = /\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+const ABSENT = Symbol("absent");
 
 // -----------------------------------------------------------------------------
 //
@@ -32,6 +34,28 @@ function templateFill(item, name, value) {
 	if (typeof item === "string") return item === token ? value : item.split(token).join(valueText(value));
 	if (Array.isArray(item)) return item.map(entry => templateFill(entry, name, value));
 	if (item && typeof item === "object") return Object.fromEntries(Object.entries(item).map(([key, entry]) => [key, templateFill(entry, name, value)]));
+	return item;
+}
+
+/**
+ * A list read's template part with its parameters' values (spec-09 "List reads"): `"{name}"` is the value, `{name}` in
+ * a longer string its text; a part whose placeholders are all absent is left out (`ABSENT`).
+ */
+function templateFillMany(item, values) {
+	if (typeof item === "string") {
+		const names = [...item.matchAll(RE_PLACEHOLDER)].map(match => match[1]);
+		if (names.length && !names.some(name => Object.hasOwn(values, name))) return ABSENT;
+		if (names.length === 1 && item === `{${names[0]}}`) return values[names[0]];
+		return item.replace(RE_PLACEHOLDER, (match, name) => Object.hasOwn(values, name) ? valueText(values[name]) : match);
+	}
+	if (Array.isArray(item)) {
+		const kept = item.map(entry => templateFillMany(entry, values)).filter(entry => entry !== ABSENT);
+		return item.length && !kept.length ? ABSENT : kept;
+	}
+	if (item && typeof item === "object") {
+		const kept = Object.entries(item).map(([key, entry]) => [key, templateFillMany(entry, values)]).filter(([, entry]) => entry !== ABSENT);
+		return Object.keys(item).length && !kept.length ? ABSENT : Object.fromEntries(kept);
+	}
 	return item;
 }
 
@@ -52,6 +76,16 @@ export function requestFor(read, value) {
 	const path = p(Object.assign([...literals], { raw: [...literals] }), ...literals.slice(1).map(() => value));
 	return Object.fromEntries(Object.entries(requestTemplate(read)).map(([key, item]) =>
 		[key, key === "path" ? path : ["method", "api"].includes(key) ? item : templateFill(item, read.input.name, value)]));
+}
+
+/** A list read's `RequestSend` request for its parameters' values, leaving out what no value fills. */
+export function listRequestFor(read, values) {
+	const request = {};
+	for (const [key, item] of Object.entries(requestTemplate(read))) {
+		const filled = ["method", "path", "api"].includes(key) ? item : templateFillMany(item, values);
+		if (filled !== ABSENT) request[key] = filled;
+	}
+	return request;
 }
 
 /** A response's provenance token: the read's `source` template, else the request's API and path. */

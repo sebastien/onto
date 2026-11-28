@@ -22,6 +22,7 @@ from ...ontology.facts import NUMERIC, attrJson, modelJson
 from ...ontology.model import Model, ResolvedType, TypeExpr, ViewInput, isSetValued
 from ...ontology.rooted import Field, Hop, RootedView
 from ...text import annotation
+from .catalogue import ListDirection, ListFilter, ListKeys, ListRead, ListSort
 from .compiler import BindingCompiler, MappingCompiler
 from .requests import requestTemplate
 
@@ -197,7 +198,20 @@ def mappingProgramJson(mapper: AnyValue, program: AnyValue, libraries: list | No
 
 
 def inputJson(item: ViewInput) -> dict:
-	return {"name": item.name, "path": item.path, "attr": item.attr, "key": item.key}
+	return {"name": item.name, "path": item.path, "attr": item.attr, "key": item.key, **({"many": True} if item.many else {})}
+
+
+def listParameterJson(item) -> dict:
+	"""A list read's parameter (spec-09 "List reads"), by its kind."""
+	if isinstance(item, ListFilter):
+		return {"kind": "filter", "attr": item.attr, "operator": item.operator}
+	if isinstance(item, ListKeys):
+		return {"kind": "keys", "mode": item.mode, "limit": item.limit}
+	if isinstance(item, ListSort):
+		return {"kind": "sort", "spellings": dict(item.spellings)}
+	if isinstance(item, ListDirection):
+		return {"kind": "direction", "asc": item.asc, "desc": item.desc}
+	return {"kind": "page", "part": item.part, **({"first": item.first} if item.part == "number" else {})}
 
 
 def fieldJson(item: Field) -> dict:
@@ -224,6 +238,8 @@ def viewJson(operator: AnyValue, name: str, view: RootedView) -> dict:
 		"selections": {key: [item.population, fieldJson(item.field)] for key, item in view.selections.items()},
 		"contexts": {key: item.contextPopulation for key, item in view.selections.items() if item.contextPopulation},
 		"typeSelections": view.typeSelections, "defaults": view.defaults, **({"pages": dict(view.pages)} if view.pages else {}), "steps": operator.steps[name],
+		**{key: value for key, value in (("page", view.page), ("max", view.max)) if value is not None},
+		**({"list": operator.listQueries[name]} if name in getattr(operator, "listQueries", {}) else {}),
 		"matches": operator.correspondences(view, operator.steps[name])}
 
 
@@ -241,7 +257,9 @@ def viewBundle(operator: AnyValue) -> dict:
 			keys.append(ids[text])
 		reads[step] = {"input": inputJson(read.input), **({"provides": inputJson(read.provides)} if read.provides else {}), "bindings": keys,
 			"bindingNames": [binding.header.get("name", binding.ontology) for binding in read.bindings],
-			**({"request": requestTemplate(read)} if read.request is not None else {}), **({"source": read.source} if read.source is not None else {})}
+			**({"request": requestTemplate(read)} if read.request is not None else {}), **({"source": read.source} if read.source is not None else {}),
+			**({"list": {"rows": read.rows, **({"total": read.total} if read.total else {}),
+				"parameters": {key: listParameterJson(item) for key, item in read.parameters.items()}}} if isinstance(read, ListRead) else {})}
 	return {"format": BUNDLE_FORMAT, "source": modelJson(operator.sourceModel), "target": modelJson(operator.targetModel),
 		"bindings": programs, "reads": reads, "mapping": mappingProgramJson(operator.mapper, operator.mapProgram),
 		"keyTypes": {key: typeJson(item) for key, item in operator.keyTypes.items()},

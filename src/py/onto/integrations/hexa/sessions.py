@@ -53,8 +53,8 @@ class SessionViewOperator(HexaViewOperator):
 	operator's: `storeRead(body)`, a batch read of partitions, and `storeAppend(partition, body)`, an append.
 	"""
 
-	def __init__(self, mapper, mapping, reads, access, bundle: Json, scope: str, operations: dict | None = None):
-		super().__init__(mapper, mapping, reads, access, operations)
+	def __init__(self, mapper, mapping, reads, access, bundle: Json, scope: str, operations: dict | None = None, lists: dict | None = None):
+		super().__init__(mapper, mapping, reads, access, operations, lists)
 		self.bundle, self.scope = bundle, scope
 		self.system = mapping.fromNamespace
 		self.storeName = bundle["store"]
@@ -232,16 +232,16 @@ class SessionViewOperator(HexaViewOperator):
 		answers = self.access.storeRead({"reads": reads})["results"] if reads else []
 		result, state, outcomes = await super().runReads(view, seed, fields, now, planned=planned, **options)
 		result = self.storePlan(view, fields, result)
-		root = result["root"]["handle"]
+		# NOTE: A list view's rows each anchor their partitions, read once its list read gave them (spec-09 "Rows").
+		roots = [row["handle"] for row in result["rows"]] if "rows" in result else [result["root"]["handle"]] if result["root"]["handle"] else []
 		graph: Evidence | None = None
 
 		def anchorsOf(step: Json) -> list[str]:
 			nonlocal graph
 			if step["anchor"] == rooted.root:
-				return [root] if root else []
+				return roots
 			graph = graph or Evidence(self.targetModel, state)
-			reached, _ = graph.walk(rooted, step["anchor"], root, lambda hop, bound: None)
-			return list(dict.fromkeys(bindings[step["anchor"]] for bindings, _ in reached))
+			return list(dict.fromkeys(bindings[step["anchor"]] for root in roots for bindings, _ in graph.walk(rooted, step["anchor"], root, lambda hop, bound: None)[0]))
 
 		done = {step["step"] for step in first}
 		later, laterOwners = self.storeRequests([step for step in result["storeSteps"] if step["step"] not in done], anchorsOf)

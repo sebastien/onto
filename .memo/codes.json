@@ -1,7 +1,7 @@
 {
   "series": {
     "DEC": {
-      "next": 38,
+      "next": 39,
       "reservations": {
         "1": {
           "identity": "onto:decision:run-semantics",
@@ -125,6 +125,10 @@
         },
         "37": {
           "identity": "onto:decision:filtered-reads",
+          "state": "assigned"
+        },
+        "38": {
+          "identity": "onto:decision:list-reads",
           "state": "assigned"
         },
         "4": {
