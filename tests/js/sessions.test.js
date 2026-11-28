@@ -2,7 +2,7 @@
  * JavaScript store, as tests/T09-002-session-home-links.py checks the Python session. */
 
 import { beforeAll, expect, test } from "bun:test";
-import { Session, SessionViewOperator } from "../../src/js/onto/sessions.js";
+import { Session, SessionViewOperator, keyQuery } from "../../src/js/onto/sessions.js";
 import { ObservationStore } from "../../src/js/onto/store/store.js";
 import { sqlite } from "./sqlite.js";
 
@@ -39,6 +39,25 @@ test("a batch carries only the links that home its subjects", async () => {
 	expect(bodies.map(body => body.links)).toEqual([[{ s: DIVIDENDS[0], p: "Payer", v: { ref: COMPANY } }]]);
 	const { entries } = await store.log({}, PARTITION);
 	expect(entries.filter(entry => entry.kind === "link").map(entry => entry.s)).toEqual([DIVIDENDS[0]]);
+});
+
+test("a host's key query sends the list read with the keys an index finds, and only its answer", async () => {
+	const script = "import json; from tests.store import BUNDLE, EXAMPLE_BATCH; print(json.dumps({'bundle': BUNDLE, 'batch': EXAMPLE_BATCH}))";
+	const run = Bun.spawnSync(["uv", "run", "--quiet", "python", "-c", script], { stderr: "pipe" });
+	const { bundle, batch } = JSON.parse(run.stdout.toString());
+	const server = { server: true };
+	const store = new ObservationStore(bundle, { storageFor: () => sqlite(), authorize: () => ({ scope: SCOPE, principal: "user:adviser" }),
+		authorizeServer: request => request === server ? { scope: SCOPE, principal: "server:app" } : null });
+	await store.append({}, "Client/Person_U1", { requestId: "r1", observations: batch });
+	const sent = [], send = async request => (sent.push(request), { status: 200, data: { rows: [] } });
+	const run2 = keyQuery(store, server, send, anchor => anchor.startsWith("Person_") ? anchor.slice("Person_".length) : null);
+	const request = { method: "POST", path: "/contacts/search", body: { page: 0, ids: null } };
+	const keys = { index: "ClientChecks", filter: { eq: ["checks.Confirmed", true] }, mode: "include", parameter: "ids", limit: 3, at: ["body", "ids"] };
+	expect(await run2({ read: "search", request, keys })).toEqual({ status: 200, data: { rows: [] } });
+	expect(sent).toEqual([{ method: "POST", path: "/contacts/search", body: { page: 0, ids: ["U1"] } }]);
+	expect(await run2({ read: "search", request, keys: { ...keys, filter: { eq: ["checks.Confirmed", false] } } })).toEqual({ status: 200, data: null, empty: true });
+	await expect(run2({ read: "search", request, keys: { ...keys, limit: 0 } })).rejects.toMatchObject({ reason: "KeySetTooLarge" });
+	expect(sent.length).toBe(1);
 });
 
 // EOF

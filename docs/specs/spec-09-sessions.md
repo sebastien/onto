@@ -417,6 +417,16 @@ are the parameter's source type:
   session sends the query to its host (`KeyQuery`), which runs the index query
   and the list read as the principal, and returns only the list read's
   response.
+  - The session's `KeyQuery` effect is `{read, request, keys}`: the list
+    read's request without its keys, and the index, its filter, `include` or
+    `exclude`, the keys parameter, its limit and where it goes in the request
+    (`at`). The host answers as `RequestSend` does, or `{empty: true}` when an
+    include matches no key, and the page has no rows.
+  - `keyQuery(store, request, send, keyOf)` is such a host in Python and
+    JavaScript: `keyOf(anchor)` gives a partition anchor's key in the system,
+    null for another origin's.
+  - The bundle's query table names each store-held field an index covers,
+    with its index and column, and the list read's keys parameters.
 
 ### Rows
 

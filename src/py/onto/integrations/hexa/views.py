@@ -350,7 +350,7 @@ class HexaViewOperator:
 			raise ValueError(f"{view}: no list read of {rooted.input.path}")
 		if not isinstance(query, dict) or set(query) - {"filter", "search", "sort", "page"}:
 			raise ValueError(f"{view}: a query is {{filter?, search?, sort?, page?}}")
-		parameters = {}
+		parameters, stored, modes = {}, [], set()
 		search = query.get("search")
 		if search is not None and not isinstance(search, str):
 			raise ValueError(f"{view}: a search is text")
@@ -361,6 +361,15 @@ class HexaViewOperator:
 		filter = query.get("filter")
 		predicates = [] if filter is None else filter["and"] if isinstance(filter, dict) and set(filter) == {"and"} else [filter]
 		for predicate in predicates:
+			if isinstance(predicate, dict) and set(predicate) == {"not"}:
+				# NOTE: A store-held predicate under `not` excludes the keys an index finds (spec-09 "Key queries").
+				stored.append(self.storePredicate(view, table, predicate["not"]))
+				modes.add("exclude")
+				continue
+			if isinstance(predicate, dict) and predicate.get("field") in table.get("stores", {}):
+				stored.append(self.storePredicate(view, table, predicate))
+				modes.add("include")
+				continue
 			operators = [key for key in predicate if key != "field"] if isinstance(predicate, dict) else []
 			if len(operators) != 1 or not isinstance(predicate.get("field"), str):
 				raise ValueError(f"{view}: a predicate is {{field, eq|in|exists|contains}}")
@@ -400,7 +409,26 @@ class HexaViewOperator:
 			parameters[table["page"]["number"]] = number - 1 + table["page"]["first"]
 		if "size" in table.get("page", {}):
 			parameters[table["page"]["size"]] = size
-		return {"parameters": parameters, "page": {"number": number, "size": size}}
+		compiled = {"parameters": parameters, "page": {"number": number, "size": size}}
+		if stored:
+			indexes = {index for index, _ in stored}
+			keys = table.get("keys", {}).get(next(iter(modes))) if len(modes) == 1 else None
+			if len(indexes) > 1 or keys is None:
+				raise ValueError(f"Session.Unfilterable: {view} filters its store-held fields with one index, all included or all excluded")
+			filters = [item for _, item in stored]
+			compiled["keys"] = {"index": next(iter(indexes)), "filter": filters[0] if len(filters) == 1 else {"and": filters},
+				"mode": next(iter(modes)), **keys}
+		return compiled
+
+	@staticmethod
+	def storePredicate(view: str, table: dict, predicate: object) -> tuple[str, dict]:
+		"""A predicate on a store-held field as its index's filter: `eq`, `in`, or `exists` (spec-08 "Indexes")."""
+		entry = table.get("stores", {}).get(predicate.get("field")) if isinstance(predicate, dict) else None
+		operators = [key for key in predicate if key != "field"] if isinstance(predicate, dict) else []
+		if entry is None or len(operators) != 1 or operators[0] not in ("eq", "in", "exists") or operators[0] == "exists" and predicate["exists"] is not True:
+			raise ValueError(f"Session.Unfilterable: {view} cannot filter {predicate!r} through an index")
+		operator = operators[0]
+		return entry["index"], {"exists": entry["column"]} if operator == "exists" else {operator: [entry["column"], predicate[operator]]}
 
 	@cached_property
 	def mapProgram(self):
@@ -767,8 +795,12 @@ class HexaViewOperator:
 		"""The effect a read needs, `[operation, ...arguments]`, keyed so that equal requests are sent once."""
 		read = self.reads[name]
 		try:
-			effect = ["DocumentFetch", name, value] if read.request is None else ["RequestSend", listRequestFor(read, value["parameters"])
-				if isinstance(read, ListRead) else requestFor(read, value)]
+			if isinstance(read, ListRead) and "keys" in value:
+				# NOTE: The host runs the index query and the list read, and answers only the list read (spec-09 "Key queries").
+				effect = ["KeyQuery", {"read": name, "request": listRequestFor(read, value["parameters"]), "keys": value["keys"]}]
+			else:
+				effect = ["DocumentFetch", name, value] if read.request is None else ["RequestSend", listRequestFor(read, value["parameters"])
+					if isinstance(read, ListRead) else requestFor(read, value)]
 		except Failure as failure:
 			return {"failure": failure}
 		return {"effect": effect, "key": json.dumps(effect, sort_keys=True)}
@@ -777,7 +809,7 @@ class HexaViewOperator:
 		"""The document of a read from its effect's result: a request's response, checked by the host's `check`."""
 		if effect[0] == "DocumentFetch":
 			return result
-		read, request = self.reads[name], effect[1]
+		read, request = self.reads[name], effect[1]["request"] if effect[0] == "KeyQuery" else effect[1]
 		source = requestSource(read, request, value)
 		if not callable(check := getattr(self.access, "check", None)):
 			return {"document": result["data"], "source": source, "emptyTypes": [], "emptyInputs": []}
@@ -803,6 +835,9 @@ class HexaViewOperator:
 			return {"status": "unavailable", "gaps": [], "reason": readReason(item["failure"]), "failure": item["failure"]}
 		if sent["status"] != "ok":
 			return {"status": "unavailable", "gaps": [], "reason": sent["reason"], "failure": sent["failure"]}
+		if isinstance(read, ListRead) and sent["result"].get("empty"):
+			# NOTE: An include no key matched: the host read nothing, and the page has no rows.
+			return {"status": "ok", "logs": [], "gaps": [], "discovered": [], "emptyTypes": [], "emptyInputs": [], "total": 0}
 		try:
 			response = self.readDocument(name, value, item["effect"], sent["result"])
 			for index, binding in enumerate(read.bindings):

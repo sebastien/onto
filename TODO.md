@@ -58,10 +58,9 @@ identities (spec-05) and operations (spec-10).
    objects (the feed's `purged` and lifecycle states wait for them); and the
    `Meta` checks in the JavaScript store's validation
    (`domain/decision:ObservationStore+026`).
-9. **Sessions** (spec-09), beyond page views, list views over list reads and
-   changes (done in Python and JavaScript, `domain/decision:ListReads+038`):
-   key queries on store-held fields, with `not` and the host's `KeyQuery`
-   (they need store indexes); several sort fields; `more` for the next page
+9. **Sessions** (spec-09), beyond page views, list views over list reads with
+   key queries on store-held fields, and changes (done in Python and
+   JavaScript, `domain/decision:ListReads+038`): several sort fields; `more` for the next page
    of a population; notices; a population both a system and the store supply;
    and journaling the store's operations as hexa effects
    (`domain/decision:Sessions+028`).

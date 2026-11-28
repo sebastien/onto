@@ -520,7 +520,7 @@ export class ViewOperator {
 		if (!table) throw new Error(`${view}: no list read of ${rooted.input.path}`);
 		if (!query || typeof query !== "object" || Array.isArray(query) || Object.keys(query).some(key => !["filter", "search", "sort", "page"].includes(key)))
 			throw new Error(`${view}: a query is {filter?, search?, sort?, page?}`);
-		const parameters = {}, filter = query.filter, search = query.search;
+		const parameters = {}, filter = query.filter, search = query.search, stored = [], modes = new Set();
 		if (search != null && typeof search !== "string") throw new Error(`${view}: a search is text`);
 		if (search) {
 			if (table.search === undefined) throw new Error(`Session.Unsearchable: ${view}'s list read takes no search`);
@@ -528,6 +528,17 @@ export class ViewOperator {
 		}
 		const predicates = filter == null ? [] : filter && typeof filter === "object" && valueKey(Object.keys(filter)) === valueKey(["and"]) ? filter.and : [filter];
 		for (const predicate of predicates) {
+			if (predicate && typeof predicate === "object" && valueKey(Object.keys(predicate)) === valueKey(["not"])) {
+				// NOTE: A store-held predicate under `not` excludes the keys an index finds (spec-09 "Key queries").
+				stored.push(ViewOperator.storePredicate(view, table, predicate.not));
+				modes.add("exclude");
+				continue;
+			}
+			if (predicate && typeof predicate === "object" && Object.hasOwn(table.stores ?? {}, predicate.field)) {
+				stored.push(ViewOperator.storePredicate(view, table, predicate));
+				modes.add("include");
+				continue;
+			}
 			const operators = predicate && typeof predicate === "object" ? Object.keys(predicate).filter(key => key !== "field") : [];
 			if (operators.length !== 1 || typeof predicate.field !== "string") throw new Error(`${view}: a predicate is {field, eq|in|exists|contains}`);
 			const [operator] = operators;
@@ -560,7 +571,24 @@ export class ViewOperator {
 		if (size > limit) throw new Error(`Session.PageTooLarge: ${view} reads at most ${limit} rows a page`);
 		if (table.page?.number !== undefined) parameters[table.page.number] = number - 1 + table.page.first;
 		if (table.page?.size !== undefined) parameters[table.page.size] = size;
-		return { parameters, page: { number, size } };
+		const compiled = { parameters, page: { number, size } };
+		if (stored.length) {
+			const indexes = new Set(stored.map(([index]) => index)), keys = modes.size === 1 ? table.keys?.[[...modes][0]] : undefined;
+			if (indexes.size > 1 || !keys) throw new Error(`Session.Unfilterable: ${view} filters its store-held fields with one index, all included or all excluded`);
+			const filters = stored.map(([, item]) => item);
+			compiled.keys = { index: [...indexes][0], filter: filters.length === 1 ? filters[0] : { and: filters }, mode: [...modes][0], ...keys };
+		}
+		return compiled;
+	}
+
+	/** A predicate on a store-held field as its index's filter: `eq`, `in`, or `exists` (spec-08 "Indexes"). */
+	static storePredicate(view, table, predicate) {
+		const entry = predicate && typeof predicate === "object" ? table.stores?.[predicate.field] : undefined;
+		const operators = predicate && typeof predicate === "object" ? Object.keys(predicate).filter(key => key !== "field") : [];
+		if (!entry || operators.length !== 1 || !["eq", "in", "exists"].includes(operators[0]) || operators[0] === "exists" && predicate.exists !== true)
+			throw new Error(`Session.Unfilterable: ${view} cannot filter ${JSON.stringify(predicate)} through an index`);
+		const [operator] = operators;
+		return [entry.index, operator === "exists" ? { exists: entry.column } : { [operator]: [entry.column, predicate[operator]] }];
 	}
 
 	/** A list page's rows in the list read's order, each with its key and root handle; the total; and the next page while more rows remain. */
@@ -592,7 +620,11 @@ export class ViewOperator {
 	readEffect(name, value) {
 		const read = this.reads[name];
 		let effect;
-		try { effect = read.request ? ["RequestSend", read.list ? listRequestFor(read, value.parameters) : requestFor(read, value)] : ["DocumentFetch", name, value]; }
+		try {
+			// NOTE: The host runs the index query and the list read, and answers only the list read (spec-09 "Key queries").
+			if (read.list && value.keys) effect = ["KeyQuery", { read: name, request: listRequestFor(read, value.parameters), keys: value.keys }];
+			else effect = read.request ? ["RequestSend", read.list ? listRequestFor(read, value.parameters) : requestFor(read, value)] : ["DocumentFetch", name, value];
+		}
 		catch (error) {
 			if (error instanceof Failure) return { failure: error };
 			throw error;
@@ -603,7 +635,7 @@ export class ViewOperator {
 	/** The document of a read from its effect's result: a request's response, checked by the host's `check`. */
 	readDocument(name, value, effect, result) {
 		if (effect[0] === "DocumentFetch") return result;
-		const read = this.reads[name], request = effect[1], source = requestSource(read, request, value);
+		const read = this.reads[name], request = effect[0] === "KeyQuery" ? effect[1].request : effect[1], source = requestSource(read, request, value);
 		if (typeof this.access?.check !== "function") return { document: result.data, source, emptyTypes: [], emptyInputs: [] };
 		// Reads sharing a request share its response; each checks a copy of its own.
 		return documentData(this.access.check(name, value, { request, status: result.status, data: structuredClone(result.data), source }));
@@ -626,6 +658,8 @@ export class ViewOperator {
 		const read = this.reads[name], gaps = [], logs = [];
 		if (item.failure) return { status: "unavailable", gaps: [], reason: readReason(item.failure), failure: item.failure };
 		if (sent.status !== "ok") return { status: "unavailable", gaps: [], reason: sent.reason, failure: sent.failure };
+		// NOTE: An include no key matched: the host read nothing, and the page has no rows.
+		if (read.list && sent.result?.empty) return { status: "ok", logs: [], gaps: [], discovered: [], emptyTypes: [], emptyInputs: [], total: 0 };
 		try {
 			const response = this.readDocument(name, value, item.effect, sent.result);
 			for (const key of read.bindings) {

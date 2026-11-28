@@ -15,7 +15,7 @@ import { claimSlot } from "./observations.js";
 import { StoreError } from "./store/errors.js";
 import { ORIGIN_SHARED, ORIGIN_STORE, elementPath, holds, isA, originOf, related, unkeyedPath } from "./store/origins.js";
 import { encodeKey, referenceHandles, valueKey } from "./values.js";
-import { Evidence, SESSION_BUNDLE_FORMAT, ViewOperator, readWaves } from "./views.js";
+import { Evidence, SESSION_BUNDLE_FORMAT, ViewOperator, ViewReadError, readWaves } from "./views.js";
 
 // -----------------------------------------------------------------------------
 //
@@ -486,6 +486,35 @@ export class Session {
 		}
 		return { statements: statements.map((statement, index) => ({ ...pick(statement, SLOT_KEYS), ...results[index] })) };
 	}
+}
+
+/**
+ * A host's `KeyQuery` (spec-09 "Key queries"): query the store's index as the server (`request`), keep the keys
+ * `keyOf(anchor)` gives (null for an anchor of another origin), put them in the list read's request where its keys
+ * parameter goes, and send it with `send`, a `RequestSend`. Only the list read's answer leaves the host. An include no
+ * key matches reads nothing; more keys than the parameter takes fail the query, `ViewRead.KeySetTooLarge`.
+ */
+export function keyQuery(store, request, send, keyOf) {
+	return async (query, context) => {
+		const keys = query.keys, found = [];
+		let after = null;
+		for (;;) {
+			const page = await store.indexQuery(request, keys.index, { filter: keys.filter, ...(after ? { after } : {}) });
+			for (const row of page.partitions) {
+				const key = await keyOf(row.anchor);
+				if (key !== null && key !== undefined) found.push(key);
+			}
+			if (found.length > keys.limit) throw new ViewReadError(`more than ${keys.limit} keys match the query`, "KeySetTooLarge");
+			if (!page.next) break;
+			after = page.next;
+		}
+		if (keys.mode === "include" && !found.length) return { status: 200, data: null, empty: true };
+		const sent = structuredClone(query.request);
+		let target = sent;
+		for (const step of keys.at.slice(0, -1)) target = target[step] ??= {};
+		target[keys.at.at(-1)] = found;
+		return await send(sent, context);
+	};
 }
 
 // EOF

@@ -3,7 +3,7 @@
  */
 
 export { BUNDLE_FORMAT, SESSION_BUNDLE_FORMAT, ViewOperator, ViewReadError, clockNow, describeHop } from "./views.js";
-export { Session, SessionViewOperator, uuid7 } from "./sessions.js";
+export { Session, SessionViewOperator, keyQuery, uuid7 } from "./sessions.js";
 export { Model } from "./model.js";
 export { loadBindingProgram } from "./binding.js";
 export { loadMappingProgram } from "./mapping.js";

@@ -46,9 +46,10 @@ cannot reverse mapping lines.
   provides the view's key; the reads of each row take the keys it found, as
   reads take a provided key. Facts name their row.
 
-**Not done**: store-held predicates, `KeyQuery` on the server, and `not`,
-which need store indexes (O3); several sort fields; `more` for population
-pages within rows.
+**Not done**: several sort fields; `more` for population pages within rows.
+Store-held predicates followed with store indexes: they compile to an index
+filter and the list read's keys parameter, which the host's `KeyQuery` fills
+on the server.
 
 **Alternatives**:
 - reversing lines in JavaScript: a second implementation of spec-04 Reversal;

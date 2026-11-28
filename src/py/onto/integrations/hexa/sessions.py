@@ -9,6 +9,7 @@ routes a change set: the store's slots to their home partitions, the system's to
 from __future__ import annotations
 
 import copy
+from copy import deepcopy
 import json
 import uuid
 from collections import defaultdict
@@ -21,7 +22,8 @@ from ...ontology.rooted import Field, RootedView
 from ...store.origins import ORIGIN_SHARED, ORIGIN_STORE, RE_ELEMENT_KEY, elementPath, holds, isA, originOf, related
 from ...store.runtime import StoreError
 from .bundle import viewBundle
-from .views import HexaViewOperator, ReadOutcome, readWaves
+from .catalogue import ListKeys
+from .views import HexaViewOperator, ReadOutcome, ViewReadError, readWaves
 
 # -----------------------------------------------------------------------------
 #
@@ -54,11 +56,12 @@ class SessionViewOperator(HexaViewOperator):
 	"""
 
 	def __init__(self, mapper, mapping, reads, access, bundle: Json, scope: str, operations: dict | None = None, lists: dict | None = None):
-		super().__init__(mapper, mapping, reads, access, operations, lists)
+		# NOTE: The store comes first: compiling list views' queries asks which fields it holds and indexes.
 		self.bundle, self.scope = bundle, scope
 		self.system = mapping.fromNamespace
 		self.storeName = bundle["store"]
 		self.kinds = {kind["kind"]: kind for kind in bundle["kinds"]}
+		super().__init__(mapper, mapping, reads, access, operations, lists)
 
 	# -- Holders -----------------------------------------------------------------
 
@@ -207,6 +210,31 @@ class SessionViewOperator(HexaViewOperator):
 		result["steps"] = result["steps"] + result.pop("storeSteps")
 		return result
 
+	# -- List views ---------------------------------------------------------------
+
+	def listQuery(self, name: str, view: RootedView, step: str) -> Json:
+		"""A list view's query table, with the store-held root fields an index of the root's partitions covers, and the
+		list read's key parameters with where they go in its request (spec-09 "Key queries")."""
+		table = super().listQuery(name, view, step)
+		read = self.reads[step]
+		keys = {item.mode: {"parameter": parameter, "limit": item.limit, "at": templatePath(read.request, parameter)}
+			for parameter, item in read.parameters.items() if isinstance(item, ListKeys)}
+		matched, stores = self.matched(view), {}
+		spellings = {key: spelling for spelling, key in view.defaults.items()}
+		for key, projection in view.selections.items():
+			alias, field = projection.population, projection.field
+			if alias not in matched or field.relation or matched[alias][2] != view.root:
+				continue
+			if self.fieldHolder(view.populations[alias].type, field) != self.storeName:
+				continue
+			column = f"{matched[alias][1]}.{field.member}"
+			index = next((item for item in self.bundle["indexes"] if item["kind"] == matched[alias][0] and any(c["name"] == column for c in item["columns"])), None)
+			if index is not None:
+				stores[spellings.get(key, key)] = {"index": index["name"], "column": column}
+		if keys and stores:
+			table["keys"], table["stores"] = keys, stores
+		return table
+
 	# -- Retrieval ---------------------------------------------------------------
 
 	@staticmethod
@@ -304,6 +332,54 @@ class SessionViewOperator(HexaViewOperator):
 	async def report(self, view: str, seed: dict, fields: list[str] | None = None, now: str | None = None, **options) -> dict:
 		"""Explain the reads and facts of a view, each fact with its holder, and the store's with partition and version."""
 		return (await self.open(view, seed, fields, now, **options))[0]
+
+
+def templatePath(template: Json, parameter: str) -> list[str]:
+	"""Where a request template takes a parameter's value whole (`"{name}"`), as the keys from its root."""
+	token = "{" + parameter + "}"
+
+	def find(item, path):
+		if item == token:
+			return path
+		if isinstance(item, dict):
+			return next((found for key, entry in item.items() if (found := find(entry, [*path, key])) is not None), None)
+		return None
+	found = find(template, [])
+	if found is None:
+		raise ValueError(f"a list read's keys parameter {parameter} is a whole member of its request")
+	return found
+
+
+def keyQuery(store, request: Any, send, keyOf):
+	"""A host's `KeyQuery` (spec-09 "Key queries"): query the store's index as the server (`request`), keep the keys
+	`keyOf(anchor)` gives (None for an anchor of another origin), put them in the list read's request where its keys
+	parameter goes, and send it with `send`, a `RequestSend`. Only the list read's answer leaves the host. An include
+	no key matches reads nothing; more keys than the parameter takes fail the query."""
+	def KeyQuery(query: Json, context: Any = None):
+		keys, found, after = query["keys"], [], None
+		while True:
+			page = store.indexQuery(request, keys["index"], {"filter": keys["filter"], **({"after": after} if after else {})})
+			found += [key for row in page["partitions"] if (key := keyOf(row["anchor"])) is not None]
+			if len(found) > keys["limit"]:
+				raise KeySetTooLarge(f"more than {keys['limit']} keys match the query")
+			if "next" not in page:
+				break
+			after = page["next"]
+		if keys["mode"] == "include" and not found:
+			return {"status": 200, "data": None, "empty": True}
+		sent = deepcopy(query["request"])
+		target = sent
+		for step in keys["at"][:-1]:
+			target = target.setdefault(step, {})
+		target[keys["at"][-1]] = found
+		return send(sent, context)
+	return KeyQuery
+
+
+class KeySetTooLarge(ViewReadError):
+	"""An index answer with more keys than the list read's keys parameter takes (spec-09 "Key queries")."""
+
+	reason = "KeySetTooLarge"
 
 
 SESSION_BUNDLE_FORMAT = "onto.view-bundle/3"
@@ -483,6 +559,6 @@ class Session:
 		return {"statements": [{key: statement[key] for key in SLOT_KEYS if key in statement} | result for statement, result in zip(statements, results)]}
 
 
-__all__ = ["SESSION_BUNDLE_FORMAT", "Session", "SessionViewOperator", "sessionBundle"]
+__all__ = ["SESSION_BUNDLE_FORMAT", "KeySetTooLarge", "Session", "SessionViewOperator", "keyQuery", "sessionBundle"]
 
 # EOF

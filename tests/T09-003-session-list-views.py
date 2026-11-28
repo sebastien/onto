@@ -13,13 +13,15 @@ pytest.importorskip("hexa.shapes")
 
 from onto import Source, loadBinding  # noqa: E402
 from onto.handles import sourceQualifiedHandle  # noqa: E402
-from onto.integrations.hexa import ListDirection, ListFilter, ListPage, ListRead, ListSearch, ListSort, ViewDocument, ViewRead  # noqa: E402
+from onto.handles import handleKey, sourceParts  # noqa: E402
+from onto.integrations.hexa import ListDirection, ListFilter, ListKeys, ListPage, ListRead, ListSearch, ListSort, ViewDocument, ViewRead  # noqa: E402
 from onto.integrations.hexa.operations import HexaMappingOperator  # noqa: E402
-from onto.integrations.hexa.sessions import SessionViewOperator, sessionBundle  # noqa: E402
+from onto.integrations.hexa.sessions import SessionViewOperator, keyQuery, sessionBundle  # noqa: E402
+from onto.store.runtime import ObservationStore  # noqa: E402
 from onto.ontology import ViewInput  # noqa: E402
 
 from tests.sessions import BUNDLE, CRM, FINANCE, MAPPING, newStore  # noqa: E402
-from tests.store import SCOPE, USER  # noqa: E402
+from tests.store import SCOPE, USER, authorize, batch  # noqa: E402
 
 # -----------------------------------------------------------------------------
 #
@@ -61,7 +63,8 @@ def searched(body: dict) -> dict:
 	"""The CRM's answer to a contact search: matching contacts, sorted, one page of them, and how many matched."""
 	rows = [row for row in CONTACTS if body.get("familyName") in (None, row["familyName"])
 		and body.get("familyNameLike", "").lower() in row["familyName"].lower()
-		and body.get("q", "").lower() in f"{row['givenNames']} {row['familyName']}".lower()]
+		and body.get("q", "").lower() in f"{row['givenNames']} {row['familyName']}".lower()
+		and row["id"] in body.get("ids", [row["id"]]) and row["id"] not in body.get("exceptIds", [])]
 	if "sortBy" in body:
 		rows.sort(key=lambda row: (row[body["sortBy"]], row["id"]), reverse=body.get("order") == "desc")
 	size = body.get("pageSize", 100)
@@ -83,6 +86,33 @@ def lister(store=None):
 		{"contact": ViewRead(ViewInput("contactId", "Crm/Contact", "Id"), [CONTACT_BINDING])}, access, BUNDLE, SCOPE,
 		operations={"RequestSend": send}, lists={"search": SEARCH})
 	return operator, requests, store
+
+
+# NOTE: The same search, taking the contacts to include or to exclude, at most three of either (spec-09 "Key queries").
+KEYED = ListRead(SEARCH.rows, SEARCH.bindings, {**SEARCH.request, "body": {**SEARCH.request["body"], "ids": "{ids}", "exceptIds": "{except}"}},
+	{**SEARCH.parameters, "ids": ListKeys("include", limit=3), "except": ListKeys("exclude", limit=3)}, total="count")
+SERVER = {"server": True}
+
+
+def keyed():
+	"""A session operator over the keyed search, whose host runs key queries over a store with an index of checks."""
+	store = ObservationStore(BUNDLE, FINANCE, authorize, authorizeServer=lambda request: {"scope": SCOPE, "principal": "server:app"} if request is SERVER else None)
+	operator, requests, _ = lister(store)
+
+	def keyOf(anchor: str) -> str | None:
+		parts = sourceParts(handleKey(anchor, "Finance/Person") or "")
+		return parts[2] if parts and parts[:2] == ("Crm", "Contact") else None
+	operator = SessionViewOperator(operator.mapper, operator.mapping, {name: read for name, read in operator.reads.items() if name != "search"},
+		operator.access, BUNDLE, SCOPE, lists={"search": KEYED},
+		operations={"RequestSend": operator.operations["RequestSend"], "KeyQuery": keyQuery(store, SERVER, operator.operations["RequestSend"], keyOf)})
+	return operator, requests, store
+
+
+def confirm(store, key: str, confirmed: bool = True, request: str = "r1") -> None:
+	"""Record an identity check of contact `key` in its partition."""
+	check = sourceQualifiedHandle("Finance/IdentityCheck", SCOPE, "IdentityCheck", f"k-{key}-{request}")
+	store.append(USER, f"Client/{handle(key)}", {"requestId": request, "observations": batch(
+		f"{check}:IdentityCheck\n  Person {handle(key)}\n  Confirmed {'true' if confirmed else 'false'}\n", known={handle(key): "Person"})})
 
 
 def report(operator, query: dict, fields: list[str] | None = None) -> dict:
@@ -146,6 +176,50 @@ def testASearchIsTheTextTheEndpointMatchesAsItDoes() -> None:
 	result = report(operator, {"search": "mere"})
 	assert [row["key"] for row in result["rows"]] == ["c-22"]
 	assert requests[-1]["body"] == {"q": "mere", "page": 0, "pageSize": 25}
+
+
+def testAStoreHeldPredicateIncludesTheKeysAnIndexFinds() -> None:
+	operator, requests, store = keyed()
+	confirm(store, "c-22")
+	confirm(store, "c-23", confirmed=False, request="r2")
+	result = report(operator, {"filter": {"field": CONFIRMED, "eq": True}})
+	assert [row["key"] for row in result["rows"]] == ["c-22"]
+	assert requests[-1]["body"]["ids"] == ["c-22"]
+	confirmed, = (fact for fact in result["facts"] if fact["field"] == CONFIRMED)
+	assert (confirmed["row"], confirmed["value"]) == (handle("c-22"), True)
+	# NOTE: The CRM's own filters apply with the keys: a family name the confirmed client does not have.
+	assert report(operator, {"filter": {"and": [{"field": CONFIRMED, "eq": True}, {"field": SURNAME, "eq": "Smith"}]}})["rows"] == []
+
+
+def testANegatedPredicateExcludesThem() -> None:
+	operator, requests, store = keyed()
+	confirm(store, "c-22")
+	result = report(operator, {"filter": {"not": {"field": CONFIRMED, "eq": True}}, "sort": [{"field": SURNAME, "direction": "asc"}]})
+	assert [row["key"] for row in result["rows"]] == ["c-21", "c-24", "c-23"]
+	assert requests[-1]["body"]["exceptIds"] == ["c-22"]
+
+
+def testAnIncludeWithoutKeysReadsNoRows() -> None:
+	operator, requests, _ = keyed()
+	result = report(operator, {"filter": {"field": CONFIRMED, "eq": True}})
+	assert (result["rows"], result["total"], requests) == ([], 0, [])
+
+
+def testMoreKeysThanTheParameterTakesFailTheQuery() -> None:
+	operator, requests, store = keyed()
+	for index, key in enumerate(["c-21", "c-22", "c-23", "c-24"]):
+		confirm(store, key, request=f"r{index}")
+	result = report(operator, {"filter": {"field": CONFIRMED, "eq": True}})
+	assert (result["rows"], requests) == ([], [])
+	assert [gap["reason"] for gap in result["gaps"] if gap.get("step") == "search"] == ["KeySetTooLarge"]
+
+
+def testTheBundleCarriesTheStoreHeldFieldsAQueryFilters() -> None:
+	operator, _, _ = keyed()
+	table = sessionBundle(operator)["views"]["ClientList"]["list"]
+	assert table["stores"] == {CONFIRMED: {"index": "ClientChecks", "column": "checks.Confirmed"}}
+	assert table["keys"] == {"include": {"parameter": "ids", "limit": 3, "at": ["body", "ids"]},
+		"exclude": {"parameter": "except", "limit": 3, "at": ["body", "exceptIds"]}}
 
 
 def testQueriesTheViewCannotRunAreRefused() -> None:
