@@ -613,7 +613,10 @@ all.
   - The Python store and the JavaScript store in one process update a
     partition's feed entry and rows with its append. On Cloudflare, a
     partition's alarm reports its change, with its rows, to its scope's
-    object after each append, again until the report succeeds.
+    object after each append, and Cloudflare retries a failed report. The
+    partition keeps what it last reported: any later call to a partition
+    with more to report sets its alarm again, such as when its retries ran
+    out or its kind's index declarations changed.
 - **Queries.** A query takes a filter over the columns, with the shape of
   Storelight's filters and a column name in place of a path. Only `eq`, `in`,
   `exists` and `and` are allowed:

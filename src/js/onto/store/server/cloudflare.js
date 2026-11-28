@@ -6,8 +6,9 @@
  * application's: the Worker asks its callback for each request, and never trusts a scope a request names.
  *
  * Each scope has an object for its change feed and indexes (spec-08 "Changes", "Indexes"): after an append, a
- * partition's alarm reports its change to it, again until the report succeeds, so that the scope learns of every
- * change at least once. The reference index, erasures and lifecycle alarms come with the store's administration (O2).
+ * partition's alarm reports its change to it, and Cloudflare retries a failed report. The partition keeps what it last
+ * reported: a call to a partition that has more to report, such as one whose retries ran out or whose kind's indexes
+ * changed, sets the alarm again, so that the scope learns of every change at least once. The reference index, erasures and lifecycle alarms come with the store's administration (O2).
  *
  *	const store = cloudflareStore({ bundle });
  *	export const { PartitionObject, ScopeObject } = store;
@@ -19,7 +20,7 @@
  */
 
 import { DurableObject } from "cloudflare:workers";
-import { StoreError } from "../errors.js";
+import { StoreError, canonical } from "../errors.js";
 import { storeHandler } from "../http.js";
 import { PartitionStore } from "../partition.js";
 import { ScopeStore } from "../scope.js";
@@ -97,26 +98,54 @@ export function cloudflareStore({ bundle }) {
 
 		async append(identity, principal, body, digest) {
 			const result = outcome(() => this.engine(identity).append(principal, body, digest));
-			// NOTE: The alarm reports the partition's change to its scope, and runs again until the report succeeds.
-			if (result.status === 200) await this.ctx.storage.setAlarm(Date.now());
+			await this.report();
 			return result;
+		}
+
+		/**
+		 * What the partition reports to its scope, as text: its generation, head and state, and its kind's index
+		 * declarations, which a new bundle may change. Null for a partition never appended to.
+		 */
+		reportable() {
+			const [row] = this.ctx.storage.sql.exec("SELECT kind, generation, head, state FROM partition WHERE id = 1").toArray();
+			return row ? canonical([row.generation, row.head, row.state, (bundle.indexes ?? []).filter(index => index.kind === row.kind)]) : null;
+		}
+
+		/** What the partition last reported (`reportable`), or sets it to `marker`. */
+		reported(marker = undefined) {
+			const exec = (query, ...bindings) => this.ctx.storage.sql.exec(query, ...bindings);
+			exec("CREATE TABLE IF NOT EXISTS reported (id INTEGER PRIMARY KEY CHECK(id = 1), marker TEXT NOT NULL)");
+			if (marker !== undefined) exec("INSERT OR REPLACE INTO reported VALUES (1, ?)", marker);
+			return exec("SELECT marker FROM reported WHERE id = 1").toArray()[0]?.marker ?? null;
+		}
+
+		/** Set the alarm when the partition has more to report than it reported, unless it is set. */
+		async report() {
+			const marker = this.reportable();
+			if (marker !== null && marker !== this.reported() && (await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(Date.now());
 		}
 
 		/** Report the partition's change to its scope's object; a failure throws, and Cloudflare retries the alarm. */
 		async alarm() {
 			const [row] = this.ctx.storage.sql.exec("SELECT scope, partition FROM partition WHERE id = 1").toArray();
 			if (!row) return;
-			const change = this.engine([row.scope, row.partition]).change();
+			const marker = this.reportable(), change = this.engine([row.scope, row.partition]).change();
 			const { status, body } = await this.env.SCOPES.getByName(row.scope).record(row.scope, change);
 			if (status !== 200) throw new Error(`the scope refused the change of ${row.partition}: ${body?.error}`);
+			// NOTE: A change appended while the report was on its way sets the alarm again: this marker is older.
+			this.reported(marker);
 		}
 
-		state(identity, principal, body) {
-			return outcome(() => this.engine(identity).state(principal, body));
+		async state(identity, principal, body) {
+			const result = outcome(() => this.engine(identity).state(principal, body));
+			await this.report();
+			return result;
 		}
 
-		log(identity, principal, after, limit) {
-			return outcome(() => this.engine(identity).log(principal, after, limit));
+		async log(identity, principal, after, limit) {
+			const result = outcome(() => this.engine(identity).log(principal, after, limit));
+			await this.report();
+			return result;
 		}
 	}
 
