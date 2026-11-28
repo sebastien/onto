@@ -141,7 +141,11 @@ export function cloudflareStore({ bundle }) {
 		}
 	}
 
-	/** The store as a Worker reaches it: a remote object per partition and per scope (`store.js`). */
+	/**
+	 * The store as a Worker reaches it: a remote object per partition and per scope (`store.js`).
+	 * @param {object} env
+	 * @param {{authorize: Function, authorizeServer?: Function | null}} options
+	 */
 	function storeFor(env, { authorize, authorizeServer = null }) {
 		return new ObservationStore(bundle, {
 			authorize: (incoming, partition, access) => authorize(incoming, partition, access, env),
@@ -156,6 +160,7 @@ export function cloudflareStore({ bundle }) {
 	 * unauthenticated request, or throws `Forbidden`; `authorizeServer(request, env)` does so for the change feed and
 	 * indexes, and without it they refuse. `origins` lists the browser origins allowed to call it, and `prefix` the
 	 * path it serves the protocol under.
+	 * @param {{authorize: Function, authorizeServer?: Function | null, origins?: string[], prefix?: string}} options
 	 */
 	function worker({ authorize, authorizeServer = null, origins = [], prefix = "" }) {
 		return {
