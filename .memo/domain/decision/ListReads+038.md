@@ -27,6 +27,9 @@ cannot reverse mapping lines.
   descending sorts. A list read takes one sort field.
 - A page parameter names the first page's number (`0` by default); a query's
   pages count from 1.
+- A list read's `absent` says how a request carries a parameter a query leaves
+  out: its member is left out (`omit`, the default) or `null` (`null`). UAT's
+  `/group/list` answers HTTP 500 to a body missing a member of its filter.
 - Python compiles each list view's queries once: its list read, each
   filterable field's parameter, operators and reversed values (a value map's
   inverse; a plain line's value unchanged), each sortable field's spelling,

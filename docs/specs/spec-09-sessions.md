@@ -348,7 +348,8 @@ has:
   keys, in the order the bindings state them.
 - **Request.** `request`: a request template, as for reads, with a `{name}`
   placeholder per parameter. A template member whose placeholders are all
-  absent is left out of the request.
+  absent is left out of the request, or is `null` when the list read's
+  `absent` is `null`, for an endpoint that requires every member (DEC0038).
 - **Parameters**, each one of:
 
   | Kind | Declares |

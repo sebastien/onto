@@ -58,22 +58,22 @@ def templateFill(item: object, name: str, value: object) -> object:
 	return item
 
 
-def templateFillMany(item: object, values: dict) -> object:
+def templateFillMany(item: object, values: dict, absent: str = "omit") -> object:
 	"""A list read's template part with its parameters' values (spec-09 "List reads"): `"{name}"` is the value, `{name}`
-	in a longer string its text; a part whose placeholders are all absent is left out (`ABSENT`)."""
+	in a longer string its text; a part whose placeholders are all absent is left out (`ABSENT`), or null."""
 	if isinstance(item, str):
 		names = RE_PLACEHOLDER.findall(item)
 		if names and not any(name in values for name in names):
-			return ABSENT
+			return None if absent == "null" else ABSENT
 		if len(names) == 1 and item == "{" + names[0] + "}":
 			return values[names[0]]
 		return RE_PLACEHOLDER.sub(lambda match: valueText(values[match[1]]) if match[1] in values else match[0], item)
 	if isinstance(item, dict):
-		filled = {key: templateFillMany(entry, values) for key, entry in item.items()}
+		filled = {key: templateFillMany(entry, values, absent) for key, entry in item.items()}
 		kept = {key: entry for key, entry in filled.items() if entry is not ABSENT}
 		return ABSENT if item and not kept else kept
 	if isinstance(item, list):
-		kept = [entry for entry in (templateFillMany(entry, values) for entry in item) if entry is not ABSENT]
+		kept = [entry for entry in (templateFillMany(entry, values, absent) for entry in item) if entry is not ABSENT]
 		return ABSENT if item and not kept else kept
 	return item
 
@@ -89,7 +89,7 @@ def listRequestFor(read, values: dict) -> dict:
 	"""A list read's `RequestSend` request for its parameters' values, leaving out what no value fills."""
 	request = {}
 	for key, item in requestTemplate(read).items():
-		filled = item if key in ("method", "path", "api") else templateFillMany(item, values)
+		filled = item if key in ("method", "path", "api") else templateFillMany(item, values, read.absent)
 		if filled is not ABSENT:
 			request[key] = filled
 	return request

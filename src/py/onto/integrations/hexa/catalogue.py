@@ -88,6 +88,8 @@ class ListPage:
 class ListRead:
 	"""A system's list endpoint (spec-09 "List reads"): the source type of its rows, the bindings that read them, a
 	request template with a placeholder per parameter, and where the response gives the number of matching rows.
+	`absent` is how a request carries a parameter a query leaves out: its members are left out (`omit`), or are `null`
+	(`null`) for an endpoint that requires every member (DEC0038).
 
 	A view operator sets `input`, the rows' key, which a list view's parameter names."""
 
@@ -96,6 +98,7 @@ class ListRead:
 	request: dict
 	parameters: dict[str, ListFilter | ListKeys | ListSort | ListDirection | ListPage]
 	total: str | None = None
+	absent: str = "omit"
 	input: ViewInput | None = field(default=None, init=False)
 	provides: ViewInput | None = field(default=None, init=False)
 	source: str | None = field(default=None, init=False)
@@ -124,10 +127,12 @@ class ListRead:
 					raise ValueError(f"{name}: no attribute {attr} on {self.rows}")
 		if len(kinds.get(ListSort, [])) > 1 or len(kinds.get(ListDirection, [])) > 1 or kinds.get(ListDirection) and not kinds.get(ListSort):
 			raise ValueError("a list read has at most one sort parameter, and a direction only with it")
+		if self.absent not in ("omit", "null"):
+			raise ValueError("a list read's absent parameters are left out (omit) or null")
 		parts = [parameter.part for parameter in self.parameters.values() if isinstance(parameter, ListPage)]
 		if len(parts) != len(set(parts)):
 			raise ValueError("a list read has at most one page number and one page size")
-		read = ListRead(self.rows, self.bindings, self.request, self.parameters, self.total)
+		read = ListRead(self.rows, self.bindings, self.request, self.parameters, self.total, self.absent)
 		read.input = ViewInput("query", self.rows, keys[0], many=True)
 		return read
 

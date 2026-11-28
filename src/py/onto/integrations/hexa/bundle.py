@@ -258,7 +258,7 @@ def viewBundle(operator: AnyValue) -> dict:
 		reads[step] = {"input": inputJson(read.input), **({"provides": inputJson(read.provides)} if read.provides else {}), "bindings": keys,
 			"bindingNames": [binding.header.get("name", binding.ontology) for binding in read.bindings],
 			**({"request": requestTemplate(read)} if read.request is not None else {}), **({"source": read.source} if read.source is not None else {}),
-			**({"list": {"rows": read.rows, **({"total": read.total} if read.total else {}),
+			**({"list": {"rows": read.rows, **({"total": read.total} if read.total else {}), **({"absent": read.absent} if read.absent != "omit" else {}),
 				"parameters": {key: listParameterJson(item) for key, item in read.parameters.items()}}} if isinstance(read, ListRead) else {})}
 	return {"format": BUNDLE_FORMAT, "source": modelJson(operator.sourceModel), "target": modelJson(operator.targetModel),
 		"bindings": programs, "reads": reads, "mapping": mappingProgramJson(operator.mapper, operator.mapProgram),

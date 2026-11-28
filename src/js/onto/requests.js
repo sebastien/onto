@@ -39,21 +39,21 @@ function templateFill(item, name, value) {
 
 /**
  * A list read's template part with its parameters' values (spec-09 "List reads"): `"{name}"` is the value, `{name}` in
- * a longer string its text; a part whose placeholders are all absent is left out (`ABSENT`).
+ * a longer string its text; a part whose placeholders are all absent is left out (`ABSENT`), or null.
  */
-function templateFillMany(item, values) {
+function templateFillMany(item, values, absent = "omit") {
 	if (typeof item === "string") {
 		const names = [...item.matchAll(RE_PLACEHOLDER)].map(match => match[1]);
-		if (names.length && !names.some(name => Object.hasOwn(values, name))) return ABSENT;
+		if (names.length && !names.some(name => Object.hasOwn(values, name))) return absent === "null" ? null : ABSENT;
 		if (names.length === 1 && item === `{${names[0]}}`) return values[names[0]];
 		return item.replace(RE_PLACEHOLDER, (match, name) => Object.hasOwn(values, name) ? valueText(values[name]) : match);
 	}
 	if (Array.isArray(item)) {
-		const kept = item.map(entry => templateFillMany(entry, values)).filter(entry => entry !== ABSENT);
+		const kept = item.map(entry => templateFillMany(entry, values, absent)).filter(entry => entry !== ABSENT);
 		return item.length && !kept.length ? ABSENT : kept;
 	}
 	if (item && typeof item === "object") {
-		const kept = Object.entries(item).map(([key, entry]) => [key, templateFillMany(entry, values)]).filter(([, entry]) => entry !== ABSENT);
+		const kept = Object.entries(item).map(([key, entry]) => [key, templateFillMany(entry, values, absent)]).filter(([, entry]) => entry !== ABSENT);
 		return Object.keys(item).length && !kept.length ? ABSENT : Object.fromEntries(kept);
 	}
 	return item;
@@ -82,7 +82,7 @@ export function requestFor(read, value) {
 export function listRequestFor(read, values) {
 	const request = {};
 	for (const [key, item] of Object.entries(requestTemplate(read))) {
-		const filled = ["method", "path", "api"].includes(key) ? item : templateFillMany(item, values);
+		const filled = ["method", "path", "api"].includes(key) ? item : templateFillMany(item, values, read.list?.absent);
 		if (filled !== ABSENT) request[key] = filled;
 	}
 	return request;
