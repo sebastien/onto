@@ -22,7 +22,7 @@ from ...ontology.facts import NUMERIC, attrJson, modelJson
 from ...ontology.model import Model, ResolvedType, TypeExpr, ViewInput, isSetValued
 from ...ontology.rooted import Field, Hop, RootedView
 from ...text import annotation
-from .catalogue import ListDirection, ListFilter, ListKeys, ListRead, ListSort
+from .catalogue import ListDirection, ListFilter, ListKeys, ListRead, ListSearch, ListSort
 from .compiler import BindingCompiler, MappingCompiler
 from .requests import requestTemplate
 
@@ -211,6 +211,8 @@ def listParameterJson(item) -> dict:
 		return {"kind": "sort", "spellings": dict(item.spellings), **({"default": item.default} if item.default is not None else {})}
 	if isinstance(item, ListDirection):
 		return {"kind": "direction", "asc": item.asc, "desc": item.desc}
+	if isinstance(item, ListSearch):
+		return {"kind": "search"}
 	return {"kind": "page", "part": item.part, **({"first": item.first} if item.part == "number" else {})}
 
 

@@ -33,7 +33,7 @@ from ...ontology.model import Model, ViewInput, isSymmetric, unkeyed
 from ...ontology.rooted import Field, Hop, RootedView, fieldFor, memberMatches
 from ...text import FormatError, isName, isPath
 from ...mapping.reversal import Lossy, Reverser
-from .catalogue import ListDirection, ListFilter, ListPage, ListRead, ListSort, ViewRead, planReadSteps, readLink, readSelection
+from .catalogue import ListDirection, ListFilter, ListPage, ListRead, ListSearch, ListSort, ViewRead, planReadSteps, readLink, readSelection
 from .compiler import SELF, MappingCompiler
 from .operations import HexaBindingOperator, HexaMappingOperator
 from .requests import checkListRequest, checkRequest, listRequestFor, requestFor, requestSource, requestTemplate
@@ -300,6 +300,8 @@ class HexaViewOperator:
 					table["sortDefault"] = item.spellings[item.default]
 			elif isinstance(item, ListDirection):
 				table["direction"] = parameter
+			elif isinstance(item, ListSearch):
+				table["search"] = parameter
 			elif isinstance(item, ListPage):
 				page[item.part] = parameter
 				if item.part == "number":
@@ -346,9 +348,16 @@ class HexaViewOperator:
 		rooted, table = self.views[view], self.listQueries.get(view)
 		if table is None:
 			raise ValueError(f"{view}: no list read of {rooted.input.path}")
-		if not isinstance(query, dict) or set(query) - {"filter", "sort", "page"}:
-			raise ValueError(f"{view}: a query is {{filter?, sort?, page?}}")
+		if not isinstance(query, dict) or set(query) - {"filter", "search", "sort", "page"}:
+			raise ValueError(f"{view}: a query is {{filter?, search?, sort?, page?}}")
 		parameters = {}
+		search = query.get("search")
+		if search is not None and not isinstance(search, str):
+			raise ValueError(f"{view}: a search is text")
+		if search:
+			if "search" not in table:
+				raise ValueError(f"Session.Unsearchable: {view}'s list read takes no search")
+			parameters[table["search"]] = search
 		filter = query.get("filter")
 		predicates = [] if filter is None else filter["and"] if isinstance(filter, dict) and set(filter) == {"and"} else [filter]
 		for predicate in predicates:

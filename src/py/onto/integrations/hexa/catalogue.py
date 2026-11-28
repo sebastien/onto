@@ -79,6 +79,11 @@ class ListDirection:
 
 
 @dataclass(slots=True, frozen=True)
+class ListSearch:
+	"""A text the endpoint matches across its rows, as it does: their names, numbers or any field (DEC0038)."""
+
+
+@dataclass(slots=True, frozen=True)
 class ListPage:
 	"""The page `size`, or the page `number`, counted from `first`."""
 
@@ -98,7 +103,7 @@ class ListRead:
 	rows: str
 	bindings: list[Binding]
 	request: dict
-	parameters: dict[str, ListFilter | ListKeys | ListSort | ListDirection | ListPage]
+	parameters: dict[str, ListFilter | ListKeys | ListSort | ListDirection | ListPage | ListSearch]
 	total: str | None = None
 	absent: str = "omit"
 	input: ViewInput | None = field(default=None, init=False)
@@ -131,6 +136,8 @@ class ListRead:
 					raise ValueError(f"{name}: no attribute {attr} on {self.rows}")
 		if len(kinds.get(ListSort, [])) > 1 or len(kinds.get(ListDirection, [])) > 1 or kinds.get(ListDirection) and not kinds.get(ListSort):
 			raise ValueError("a list read has at most one sort parameter, and a direction only with it")
+		if len(kinds.get(ListSearch, [])) > 1:
+			raise ValueError("a list read has at most one search parameter")
 		if self.absent not in ("omit", "null"):
 			raise ValueError("a list read's absent parameters are left out (omit) or null")
 		parts = [parameter.part for parameter in self.parameters.values() if isinstance(parameter, ListPage)]
@@ -235,7 +242,7 @@ def planReadSteps(model: Model, view: RootedView, reads: dict[str, ViewRead], li
 	return steps
 
 
-__all__ = ["LIST_OPERATORS", "ListDirection", "ListFilter", "ListKeys", "ListPage", "ListRead", "ListSort", "ViewRead", "planReadSteps", "readLink",
+__all__ = ["LIST_OPERATORS", "ListDirection", "ListFilter", "ListKeys", "ListPage", "ListRead", "ListSearch", "ListSort", "ViewRead", "planReadSteps", "readLink",
 	"readSelection"]
 
 # EOF

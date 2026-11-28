@@ -32,6 +32,9 @@ cannot reverse mapping lines.
   `/group/list` answers HTTP 500 to a body missing a member of its filter.
 - A sort parameter may name a default attribute, which sorts a query that
   gives no sort, ascending: the same endpoint answers HTTP 500 without one.
+- A `Search` parameter takes a query's `search`, a text the endpoint matches
+  across its rows as it does: the CRM's client list searches names, phones
+  and emails at once, which no field's predicate states.
 - Python compiles each list view's queries once: its list read, each
   filterable field's parameter, operators and reversed values (a value map's
   inverse; a plain line's value unchanged), each sortable field's spelling,

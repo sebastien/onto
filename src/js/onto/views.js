@@ -518,9 +518,14 @@ export class ViewOperator {
 	compileQuery(view, query) {
 		const rooted = this.views[view], table = rooted.list;
 		if (!table) throw new Error(`${view}: no list read of ${rooted.input.path}`);
-		if (!query || typeof query !== "object" || Array.isArray(query) || Object.keys(query).some(key => !["filter", "sort", "page"].includes(key)))
-			throw new Error(`${view}: a query is {filter?, sort?, page?}`);
-		const parameters = {}, filter = query.filter;
+		if (!query || typeof query !== "object" || Array.isArray(query) || Object.keys(query).some(key => !["filter", "search", "sort", "page"].includes(key)))
+			throw new Error(`${view}: a query is {filter?, search?, sort?, page?}`);
+		const parameters = {}, filter = query.filter, search = query.search;
+		if (search != null && typeof search !== "string") throw new Error(`${view}: a search is text`);
+		if (search) {
+			if (table.search === undefined) throw new Error(`Session.Unsearchable: ${view}'s list read takes no search`);
+			parameters[table.search] = search;
+		}
 		const predicates = filter == null ? [] : filter && typeof filter === "object" && valueKey(Object.keys(filter)) === valueKey(["and"]) ? filter.and : [filter];
 		for (const predicate of predicates) {
 			const operators = predicate && typeof predicate === "object" ? Object.keys(predicate).filter(key => key !== "field") : [];

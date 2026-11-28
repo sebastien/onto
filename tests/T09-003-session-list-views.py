@@ -13,7 +13,7 @@ pytest.importorskip("hexa.shapes")
 
 from onto import Source, loadBinding  # noqa: E402
 from onto.handles import sourceQualifiedHandle  # noqa: E402
-from onto.integrations.hexa import ListDirection, ListFilter, ListPage, ListRead, ListSort, ViewDocument, ViewRead  # noqa: E402
+from onto.integrations.hexa import ListDirection, ListFilter, ListPage, ListRead, ListSearch, ListSort, ViewDocument, ViewRead  # noqa: E402
 from onto.integrations.hexa.operations import HexaMappingOperator  # noqa: E402
 from onto.integrations.hexa.sessions import SessionViewOperator, sessionBundle  # noqa: E402
 from onto.ontology import ViewInput  # noqa: E402
@@ -45,10 +45,10 @@ CONTACT_BINDING = loadBinding(CRM, Source("contact.bind", "@binding Crm format=j
 # NOTE: The CRM's contact search, as spec-09's example declares it, with a partial match on the family name too.
 SEARCH = ListRead("Crm/Contact", [LIST_BINDING],
 	request={"method": "POST", "path": "/contacts/search", "body": {"familyName": "{surname}", "familyNameLike": "{surnameLike}",
-		"sortBy": "{sort}", "order": "{order}", "page": "{page}", "pageSize": "{size}"}},
+		"sortBy": "{sort}", "order": "{order}", "page": "{page}", "pageSize": "{size}", "q": "{text}"}},
 	parameters={"surname": ListFilter("FamilyName", "eq"), "surnameLike": ListFilter("FamilyName", "contains"),
 		"sort": ListSort({"FamilyName": "familyName", "BirthDate": "birthDate"}), "order": ListDirection("asc", "desc"),
-		"page": ListPage("number"), "size": ListPage("size")},
+		"page": ListPage("number"), "size": ListPage("size"), "text": ListSearch()},
 	total="count")
 SURNAME, CONFIRMED = "Person.Name.Surname", "IdentityCheck.Confirmed"
 
@@ -60,7 +60,8 @@ def handle(key: str) -> str:
 def searched(body: dict) -> dict:
 	"""The CRM's answer to a contact search: matching contacts, sorted, one page of them, and how many matched."""
 	rows = [row for row in CONTACTS if body.get("familyName") in (None, row["familyName"])
-		and body.get("familyNameLike", "").lower() in row["familyName"].lower()]
+		and body.get("familyNameLike", "").lower() in row["familyName"].lower()
+		and body.get("q", "").lower() in f"{row['givenNames']} {row['familyName']}".lower()]
 	if "sortBy" in body:
 		rows.sort(key=lambda row: (row[body["sortBy"]], row["id"]), reverse=body.get("order") == "desc")
 	size = body.get("pageSize", 100)
@@ -140,6 +141,13 @@ def testEachRowsStoreFactsAreReadFromItsPartition() -> None:
 	assert sorted(call["partition"] for call in result["calls"] if "partition" in call) == [f"Client/{handle('c-21')}", f"Client/{handle('c-22')}"]
 
 
+def testASearchIsTheTextTheEndpointMatchesAsItDoes() -> None:
+	operator, requests, _ = lister()
+	result = report(operator, {"search": "mere"})
+	assert [row["key"] for row in result["rows"]] == ["c-22"]
+	assert requests[-1]["body"] == {"q": "mere", "page": 0, "pageSize": 25}
+
+
 def testQueriesTheViewCannotRunAreRefused() -> None:
 	operator, requests, _ = lister()
 	with pytest.raises(ValueError, match="Session.PageTooLarge"):
@@ -150,6 +158,8 @@ def testQueriesTheViewCannotRunAreRefused() -> None:
 		report(operator, {"filter": {"field": SURNAME, "in": ["Ngata"]}})
 	with pytest.raises(ValueError, match="Session.Unsortable"):
 		report(operator, {"sort": [{"field": CONFIRMED, "direction": "asc"}]})
+	with pytest.raises(ValueError, match="a search is text"):
+		report(operator, {"search": 42})
 	assert requests == []
 
 
@@ -161,7 +171,7 @@ def testAnEndpointRequiringEveryMemberGetsNullForAbsentParameters() -> None:
 	operator = SessionViewOperator(operator.mapper, operator.mapping, {name: read for name, read in operator.reads.items() if name != "search"},
 		operator.access, BUNDLE, SCOPE, operations=operator.operations, lists={"search": strict})
 	report(operator, {"filter": {"field": SURNAME, "eq": "Ngata"}})
-	assert requests[-1]["body"] == {"familyName": "Ngata", "familyNameLike": None, "sortBy": "birthDate", "order": "asc", "page": 0, "pageSize": 25}
+	assert requests[-1]["body"] == {"familyName": "Ngata", "familyNameLike": None, "sortBy": "birthDate", "order": "asc", "page": 0, "pageSize": 25, "q": None}
 	assert operator.listQueries["ClientList"]["sortDefault"] == "birthDate"
 	assert sessionBundle(operator)["reads"]["search"]["list"]["absent"] == "null"
 	with pytest.raises(ValueError, match="absent"):
@@ -183,12 +193,12 @@ def testTheBundleCarriesTheListReadAndTheViewsQueryTable() -> None:
 		"surnameLike": {"kind": "filter", "attr": "FamilyName", "operator": "contains"},
 		"sort": {"kind": "sort", "spellings": {"FamilyName": "familyName", "BirthDate": "birthDate"}},
 		"order": {"kind": "direction", "asc": "asc", "desc": "desc"},
-		"page": {"kind": "page", "part": "number", "first": 0}, "size": {"kind": "page", "part": "size"}}}
+		"page": {"kind": "page", "part": "number", "first": 0}, "size": {"kind": "page", "part": "size"}, "text": {"kind": "search"}}}
 	view = bundle["views"]["ClientList"]
 	assert (view["input"]["many"], view["page"], view["max"]) == (True, 25, 100)
 	assert view["list"] == {"read": "search",
 		"filters": {SURNAME: {"eq": {"parameter": "surname"}, "contains": {"parameter": "surnameLike"}}},
-		"sorts": {SURNAME: "familyName"}, "sort": "sort", "direction": "order", "page": {"number": "page", "size": "size", "first": 0}}
+		"sorts": {SURNAME: "familyName"}, "sort": "sort", "direction": "order", "search": "text", "page": {"number": "page", "size": "size", "first": 0}}
 	assert "list" not in bundle["views"]["ClientPage"]
 
 

@@ -358,6 +358,7 @@ has:
   | Keys | The row type's key, to `include` or to `exclude`, with a maximum set size |
   | Sort | The source attributes the endpoint sorts by, and their spellings, with the one it sorts by, ascending, when a query gives none, for an endpoint that requires a sort (DEC0038) |
   | Direction | The values the endpoint takes for an ascending and a descending sort (DEC0038) |
+  | Search | A text the endpoint matches across its rows as it does, such as names and numbers (DEC0038) |
   | Page | The page size, and the page number with the number of the first page (`0` by default) |
 
 - **Total.** `total`, optional: where the response gives the number of
@@ -380,6 +381,8 @@ fields:
 - **`filter`.** The index filters of spec-08 (`eq`, `in`, `exists`, `and`),
   plus `not` around predicates on store-held fields, and `contains` on a
   system-held field whose list read filter takes it.
+- **`search`.** A text the list read's search parameter takes, matched as the
+  system matches it, not a predicate on a field.
 - **`sort`.** Fields with their directions (`asc` or `desc`). A list read takes
   one sort field.
 - **`page`.** A number, from 1, and a size.
