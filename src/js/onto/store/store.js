@@ -5,10 +5,15 @@
  * A partition is reached through `partitionFor(scope, id)`, an object with the engine's `append`, `state` and `log`,
  * synchronous or not: a Durable Object's stub in a Worker (`server/cloudflare.js`). Without it, `storageFor(scope, id)`
  * gives each partition's SQLite storage (Cloudflare's shape) for an engine in this process: Bun, Node or tests.
+ *
+ * A scope's change feed and indexes (spec-08 "Changes", "Indexes") are reached through `scopeFor(scope)` with a remote
+ * partition, which reports its changes itself; otherwise they live in this process, in `storageFor(scope, null)`, and
+ * the store reports each append's change. Servers read them, as `authorizeServer(request)` allows.
  */
 
 import { Forbidden, StoreError, canonical, invalid } from "./errors.js";
 import { PartitionStore } from "./partition.js";
+import { ScopeStore } from "./scope.js";
 import { BatchValidator } from "./validate.js";
 
 // -----------------------------------------------------------------------------
@@ -42,12 +47,16 @@ export async function sha256(text) {
 export class ObservationStore {
 	/**
 	 * `authorize(request, partition, access)` answers `{scope, principal}`, null for an unauthenticated request, or
-	 * throws `Forbidden`; it may be asynchronous. `clock()` gives epoch milliseconds.
+	 * throws `Forbidden`; it may be asynchronous. `authorizeServer(request)` does so for a server's request. `clock()`
+	 * gives epoch milliseconds.
 	 */
-	constructor(bundle, { authorize, storageFor, partitionFor, clock = Date.now }) {
+	constructor(bundle, { authorize, authorizeServer = null, storageFor, partitionFor, scopeFor, clock = Date.now }) {
 		if (!storageFor === !partitionFor) throw new TypeError("expected storageFor or partitionFor");
 		this.bundle = bundle;
 		this.authorizeCallback = authorize;
+		this.authorizeServerCallback = authorizeServer;
+		this.scopeFor = scopeFor;
+		this.scopes = new Map();
 		this.storageFor = storageFor;
 		this.partitionFor = partitionFor;
 		this.clock = clock;
@@ -69,6 +78,27 @@ export class ObservationStore {
 		return [grant.scope, grant.principal];
 	}
 
+	/** A server request's scope, for the change feed and indexes; `403` without a server callback. */
+	async authorizeServer(request) {
+		if (!this.authorizeServerCallback) throw new StoreError(403, "forbidden", "The store answers no server requests");
+		let grant;
+		try {
+			grant = await this.authorizeServerCallback(request);
+		} catch (error) {
+			if (error instanceof Forbidden) throw new StoreError(403, "forbidden", error.message || "servers only");
+			throw error;
+		}
+		if (grant === null || grant === undefined) throw new StoreError(401, "unauthorized", "The request is not authenticated");
+		return grant.scope;
+	}
+
+	/** A scope's change feed and indexes: its engine in this process, or `scopeFor(scope)`. */
+	scope(scope) {
+		if (this.scopeFor) return this.scopeFor(scope);
+		if (!this.scopes.has(scope)) this.scopes.set(scope, new ScopeStore(this.storageFor(scope, null), { bundle: this.bundle, scope }));
+		return this.scopes.get(scope);
+	}
+
 	/** A partition by ID, `<Kind>/<anchor handle>` of a declared kind: its engine or its Durable Object. */
 	partition(scope, id) {
 		checkPartitionId(this.bundle, id);
@@ -87,7 +117,20 @@ export class ObservationStore {
 		if (bytes(canonical(body)) > this.limits.requestBytes) throw new StoreError(413, "too_large", "The request is larger than the store accepts");
 		const partition = this.partition(scope, partitionId);
 		const digest = await sha256(canonical({ observations: body.observations ?? null, expect: body.expect ?? [], links: body.links ?? [] }));
-		return await partition.append(principal, body, digest);
+		const answer = await partition.append(principal, body, digest);
+		// NOTE: A partition in this process reports its change at once; a remote one does, from its own alarm.
+		if (!this.partitionFor) await this.scope(scope).record(partition.change());
+		return answer;
+	}
+
+	/** The scope's change feed after a cursor (spec-08 "Changes"), for servers only. */
+	async changes(request, after = 0, epoch = null, limit = null) {
+		return await this.scope(await this.authorizeServer(request)).changes(after, epoch, limit);
+	}
+
+	/** The partitions an index's rows match a filter, paged (spec-08 "Indexes"), for servers only. */
+	async indexQuery(request, name, body) {
+		return await this.scope(await this.authorizeServer(request)).indexQuery(name, body);
 	}
 
 	/** The reconciled state of a selection of a partition (spec-08 "State"). */

@@ -610,6 +610,10 @@ all.
   least once and eventually, as it updates the reference index. An index can
   be rebuilt from its partitions at any time, and a new or changed declaration
   builds a new index.
+  - The Python store and the JavaScript store in one process update a
+    partition's feed entry and rows with its append. On Cloudflare, a
+    partition's alarm reports its change, with its rows, to its scope's
+    object after each append, again until the report succeeds.
 - **Queries.** A query takes a filter over the columns, with the shape of
   Storelight's filters and a column name in place of a path. Only `eq`, `in`,
   `exists` and `and` are allowed:

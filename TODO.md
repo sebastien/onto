@@ -20,11 +20,11 @@ semantic diff; observations (spec-02); bindings, mappings and function
 libraries (spec-04); referential policies (spec-05); the hexa integration,
 including rooted views (spec-06); and the CLI (spec-07). The JavaScript runtime
 (`src/js/onto/`) executes bundles that Python compiles. The observation
-store's core (spec-08: store files, appends, reads) runs in Python and in
-JavaScript, with an HTTP handler, a client and a Cloudflare adapter; sessions
-(spec-09) plan and read page views and list views over a system's list reads,
-and route changes, in Python and JavaScript. `make test`: 2,283 passed on
-Python 3.15. Not started: overlays (spec-03), registry-backed
+store's core (spec-08: store files, appends, reads, the change feed and
+indexes) runs in Python and in JavaScript, with an HTTP handler, a client and
+a Cloudflare adapter; sessions (spec-09) plan and read page views and list
+views over a system's list reads, and route changes, in Python and
+JavaScript. `make test`: 2,291 passed on Python 3.15. Not started: overlays (spec-03), registry-backed
 identities (spec-05) and operations (spec-10).
 
 ## Open work
@@ -52,10 +52,11 @@ identities (spec-05) and operations (spec-10).
      (`Binding.PathUnsupported`).
 7. **Python 3.14**: run the suite on the minimum supported version; only 3.15
    is installed locally.
-8. **Observation store** (spec-08), beyond its core: lifecycle, redaction,
-   purge, merges, the reference index, erasure and the change feed, then
-   indexes, in Python and JavaScript, with the Cloudflare adapter's scope
-   objects; and the `Meta` checks in the JavaScript store's validation
+8. **Observation store** (spec-08), beyond its core, the change feed and
+   indexes: lifecycle, redaction, purge, merges, the reference index and
+   erasure, in Python and JavaScript, with the Cloudflare adapter's scope
+   objects (the feed's `purged` and lifecycle states wait for them); and the
+   `Meta` checks in the JavaScript store's validation
    (`domain/decision:ObservationStore+026`).
 9. **Sessions** (spec-09), beyond page views, list views over list reads and
    changes (done in Python and JavaScript, `domain/decision:ListReads+038`):

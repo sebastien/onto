@@ -59,6 +59,16 @@ export function handlesOf(statement) {
 
 const rows = (storage, query, ...bindings) => storage.sql.exec(query, ...bindings).toArray();
 
+/**
+ * A value as index columns hold it: its spec-02 JSON encoding, a number as its canonical decimal text, each member of a
+ * set on its own (spec-08 "Indexes"), as `indexValue` in `store/runtime.py`.
+ */
+export function indexValue(value) {
+	if (isObject(value) && Array.isArray(value.set)) return value.set.flatMap(indexValue);
+	if (typeof value === "number") return [canonical(String(value))];
+	return [canonical(value)];
+}
+
 // -----------------------------------------------------------------------------
 //
 // OPERATIONS
@@ -322,6 +332,31 @@ export class PartitionStore {
 			exec("INSERT INTO retries VALUES (?, ?, ?, ?)", stamps.requestId, digest, canonical(answer), stamps.recorded);
 			return answer;
 		});
+	}
+
+	// -- Changes -----------------------------------------------------------------
+
+	/**
+	 * The partition's change for its scope's feed and indexes (spec-08 "Changes", "Indexes"): its generation, head and
+	 * state, and its row in each index of its kind, each column the values its population's subjects hold at its slot.
+	 */
+	change() {
+		const partition = this.existing(), rows = {};
+		const indexes = (this.bundle.indexes ?? []).filter(index => index.kind === this.kind.kind);
+		const state = indexes.length ? this.reconcile(partition, this.statements(partition)) : null;
+		for (const index of indexes) {
+			const row = Object.fromEntries(index.columns.map(column => [column.name, new Set()]));
+			const members = Object.fromEntries(index.columns.map(column => [column.name, new Set([
+				...Object.entries(partition.members).filter(([, population]) => population === column.population).map(([handle]) => handle),
+				...(column.population === this.root.name ? [this.anchor] : [])])]));
+			for (const claim of state.claims) {
+				if (typeof claim.p !== "string") continue;
+				for (const column of index.columns)
+					if (members[column.name].has(claim.s) && unkeyedPath(claim.p) === column.path) for (const value of indexValue(claim.v)) row[column.name].add(value);
+			}
+			rows[index.name] = Object.fromEntries(Object.entries(row).map(([name, values]) => [name, [...values].sort()]));
+		}
+		return { partition: this.id, anchor: this.anchor, generation: partition.generation, head: partition.head, state: partition.state, rows };
 	}
 
 	// -- Reads -------------------------------------------------------------------

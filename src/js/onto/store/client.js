@@ -42,6 +42,11 @@ export function storeClient({ base, fetch = globalThis.fetch, init = {} } = {}) 
 			call("GET", partitionPath(partition, "log") + `?after=${after}` + (limit === null ? "" : `&limit=${limit}`)),
 		/** Selections of several partitions (`{reads: [{partition, select?, ...}]}`), each answered on its own. */
 		stateMany: body => call("POST", `${root}/v1/state`, body),
+		/** A server's read of the scope's change feed after a cursor (`{after, epoch, limit}`). */
+		changes: ({ after = 0, epoch = null, limit = null } = {}) => call("GET", `${root}/v1/changes?after=${after}`
+			+ (epoch === null ? "" : `&epoch=${encodeURIComponent(epoch)}`) + (limit === null ? "" : `&limit=${limit}`)),
+		/** A server's query of an index (`{filter, include?, after?, limit?}`). */
+		indexQuery: (name, body) => call("POST", `${root}/v1/indexes/${encodeURIComponent(name)}/query`, body),
 	};
 }
 

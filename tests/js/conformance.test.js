@@ -191,13 +191,15 @@ const instant = text => Date.parse(text.replace(/(\.\d{3})\d+/, "$1"));
 /** Replay a store's calls on a JavaScript store: each with Python's grants and clock, each answered as Python answered. */
 async function replayStore(item) {
 	let grants = [], clocks = [];
+	const granted = () => {
+		if (!grants.length) throw new Error("an authorization Python did not make");
+		const grant = grants.shift();
+		if (grant && Object.hasOwn(grant, "forbidden")) throw new Forbidden(grant.forbidden);
+		return grant;
+	};
 	const store = new ObservationStore(get(item.bundle), {
-		authorize: () => {
-			if (!grants.length) throw new Error("an authorization Python did not make");
-			const grant = grants.shift();
-			if (grant && Object.hasOwn(grant, "forbidden")) throw new Forbidden(grant.forbidden);
-			return grant;
-		},
+		authorize: granted,
+		authorizeServer: item.server ? granted : null,
 		storageFor: () => sqlite(),
 		clock: () => {
 			if (!clocks.length) throw new Error("a clock reading Python did not make");
@@ -208,6 +210,7 @@ async function replayStore(item) {
 		grants = [...call.grants];
 		clocks = [...call.clocks];
 		const args = call.method === "log" ? [call.args[0], call.args[1] ?? call.kwargs.after ?? 0, call.args[2] ?? call.kwargs.limit ?? null]
+			: call.method === "changes" ? [call.args[0] ?? call.kwargs.after ?? 0, call.args[1] ?? call.kwargs.epoch ?? null, call.args[2] ?? call.kwargs.limit ?? null]
 			: [...call.args, ...Object.values(call.kwargs)];
 		let answer, failure;
 		try { answer = await store[call.method]({}, ...structuredClone(args)); }

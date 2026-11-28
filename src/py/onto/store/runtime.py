@@ -46,10 +46,19 @@ CREATE TABLE IF NOT EXISTS retries (scope TEXT NOT NULL, partition TEXT NOT NULL
 	answer TEXT NOT NULL, recorded TEXT NOT NULL, PRIMARY KEY (scope, partition, request));
 CREATE TABLE IF NOT EXISTS reads (scope TEXT NOT NULL, partition TEXT NOT NULL, principal TEXT NOT NULL, selection TEXT NOT NULL,
 	recorded TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS feeds (scope TEXT NOT NULL PRIMARY KEY, epoch TEXT NOT NULL, seq INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS changes (scope TEXT NOT NULL, partition TEXT NOT NULL, seq INTEGER NOT NULL, generation INTEGER NOT NULL,
+	head INTEGER NOT NULL, state TEXT NOT NULL, purged INTEGER NOT NULL, PRIMARY KEY (scope, partition));
+CREATE TABLE IF NOT EXISTS indexed (scope TEXT NOT NULL, name TEXT NOT NULL, partition TEXT NOT NULL, anchor TEXT NOT NULL, state TEXT NOT NULL,
+	columns TEXT NOT NULL, PRIMARY KEY (scope, name, partition));
 """
+# NOTE: An index query's operators (spec-08 "Indexes"); negation, ranges and sorting are deferred.
+FILTERS = ("eq", "in", "exists", "and")
+EPOCH = "1"
 
 type Json = dict[str, Any]
 type Authorize = Callable[[Any, str | None, str], Json | None]
+type AuthorizeServer = Callable[[Any], Json | None]
 
 
 class StoreError(Exception):
@@ -92,6 +101,17 @@ def slotKey(statement: Json) -> str:
 	return canonical(list(claimSlot(statement)))
 
 
+def indexValue(value: Any) -> list[str]:
+	"""A value as index columns hold it: its spec-02 JSON encoding, a number as its canonical decimal text, each member
+	of a set on its own (spec-08 "Indexes")."""
+	if isinstance(value, dict) and isinstance(value.get("set"), list):
+		return [item for member in value["set"] for item in indexValue(member)]
+	if isinstance(value, (int, float)) and not isinstance(value, bool):
+		text = format(value, "f") if isinstance(value, float) else str(value)
+		return [canonical(text.rstrip("0").rstrip(".") if "." in text else text)]
+	return [canonical(value)]
+
+
 def handlesOf(statement: Json) -> list[str]:
 	"""The handles a statement mentions: subject, context, roles, references and identity links."""
 	found = [statement.get("s"), statement.get("ctx"), *statement.get("roles", {}).values(), *referenceHandles(statement.get("v"))]
@@ -130,11 +150,14 @@ class Partition:
 class ObservationStore:
 	"""Partitions of observations in SQLite: appends with homes, origins, held slots and preconditions; state and log reads."""
 
-	def __init__(self, bundle: Json, ontology: Ontology, authorize: Authorize, *, path: str = ":memory:", clock: Callable[[], datetime] | None = None):
+	def __init__(self, bundle: Json, ontology: Ontology, authorize: Authorize, *, path: str = ":memory:", clock: Callable[[], datetime] | None = None,
+		authorizeServer: AuthorizeServer | None = None):
 		self.bundle = bundle
 		self.ontology = ontology
 		self.model = Model(ontology)
 		self.authorizeCallback = authorize
+		self.authorizeServerCallback = authorizeServer
+		self.indexes = {item["name"]: item for item in bundle.get("indexes", [])}
 		self.clock = clock or (lambda: datetime.now(UTC))
 		self.kinds = {item["kind"]: item for item in bundle["kinds"]}
 		self.limits = bundle["limits"]
@@ -162,6 +185,18 @@ class ObservationStore:
 		if grant is None:
 			raise StoreError(401, "unauthorized", "The request is not authenticated")
 		return grant["scope"], grant["principal"]
+
+	def authorizeServer(self, request: Any) -> str:
+		"""The scope of a server's request, for the change feed and indexes; `403` without a server callback."""
+		if self.authorizeServerCallback is None:
+			raise StoreError(403, "forbidden", "The store answers no server requests")
+		try:
+			grant = self.authorizeServerCallback(request)
+		except Forbidden as error:
+			raise StoreError(403, "forbidden", str(error) or "servers only") from error
+		if grant is None:
+			raise StoreError(401, "unauthorized", "The request is not authenticated")
+		return grant["scope"]
 
 	def partition(self, scope: str, id: str, *, create: bool = False) -> Partition:
 		"""A partition by ID: `<Kind>/<anchor handle>`; `404` when it was never appended to, unless creating it."""
@@ -448,9 +483,106 @@ class ObservationStore:
 					(partition.scope, partition.id, partition.generation, slot, seq))
 			head = first + len(batch) - 1
 			self.db.execute("UPDATE partitions SET head = ? WHERE scope = ? AND id = ?", (head, partition.scope, partition.id))
+			self.changed(partition.scope, partition.id)
 			answer = {"partition": partition.id, "generation": partition.generation, "from": start, "through": head, "head": head, "recorded": stamps["recorded"]}
 			self.db.execute("INSERT INTO retries VALUES (?, ?, ?, ?, ?, ?)", (partition.scope, partition.id, stamps["requestId"], digest, canonical(answer), stamps["recorded"]))
 		return answer
+
+	# -- Changes and indexes ------------------------------------------------------
+
+	def changed(self, scope: str, id: str) -> None:
+		"""Move a partition to its scope's next feed position, and rewrite its rows in the indexes of its kind (spec-08
+		"Changes", "Indexes"). Within the caller's transaction: the Python store keeps them at once, as eventually allows."""
+		partition = self.partition(scope, id)
+		self.db.execute("INSERT INTO feeds VALUES (?, ?, 1) ON CONFLICT DO UPDATE SET seq = seq + 1", (scope, EPOCH))
+		(seq,) = self.db.execute("SELECT seq FROM feeds WHERE scope = ?", (scope,)).fetchone()
+		self.db.execute("INSERT OR REPLACE INTO changes VALUES (?, ?, ?, ?, ?, ?, 0)", (scope, id, seq, partition.generation, partition.head, partition.state))
+		indexes = [item for item in self.indexes.values() if item["kind"] == partition.kind["kind"]]
+		if not indexes:
+			return
+		state = self.reconcile(partition, self.statements(partition))
+		for index in indexes:
+			self.db.execute("INSERT OR REPLACE INTO indexed VALUES (?, ?, ?, ?, ?, ?)", (scope, index["name"], id, partition.anchor, partition.state,
+				canonical(self.indexRow(partition, state, index))))
+
+	def indexRow(self, partition: Partition, state: Observations, index: Json) -> Json:
+		"""Each column's values: what the column population's subjects hold at its slot, each value once, sorted."""
+		row: dict[str, set[str]] = {column["name"]: set() for column in index["columns"]}
+		members = {column["name"]: {handle for handle, population in partition.members.items() if population == column["population"]}
+			| ({partition.anchor} if column["population"] == partition.root["name"] else set()) for column in index["columns"]}
+		for claim in state.claims:
+			member = claim.get("p")
+			for column in index["columns"]:
+				if claim.get("s") in members[column["name"]] and member is not None and RE_ELEMENT_KEY.sub("", member) == column["path"]:
+					row[column["name"]].update(indexValue(claim.get("v")))
+		return {name: sorted(values) for name, values in row.items()}
+
+	def changes(self, request: Any, after: int = 0, epoch: str | None = None, limit: int | None = None) -> Json:
+		"""The scope's change feed after a cursor: each partition once, at its latest position (spec-08 "Changes")."""
+		scope = self.authorizeServer(request)
+		if epoch not in (None, EPOCH) or not isinstance(after, int) or after < 0:
+			after = 0
+		size = min(limit or self.limits["logPage"], self.limits["logPage"])
+		rows = self.db.execute("SELECT partition, seq, generation, head, state, purged FROM changes WHERE scope = ? AND seq > ? ORDER BY seq LIMIT ?",
+			(scope, after, size)).fetchall()
+		(position,) = self.db.execute("SELECT seq FROM feeds WHERE scope = ?", (scope,)).fetchone() or (0,)
+		through = rows[-1][1] if rows else position
+		return {"epoch": EPOCH, "after": after, "through": through, "hasMore": through < position,
+			"entries": [{"partition": partition, "seq": seq, "generation": generation, "head": head, "state": state, "purged": bool(purged)}
+				for partition, seq, generation, head, state, purged in rows]}
+
+	def matches(self, filter: Any, row: Json, columns: set[str]) -> bool:
+		"""Whether an index row passes a filter (spec-08 "Indexes"), after checking the filter's shape."""
+		if not isinstance(filter, dict) or len(filter) != 1 or next(iter(filter)) not in FILTERS:
+			raise invalid("filter", f"An index filter is one of {', '.join(FILTERS)}")
+		(op, args), = filter.items()
+		if op == "and":
+			if not isinstance(args, list) or not args:
+				raise invalid("filter", "and lists filters")
+			return all([self.matches(item, row, columns) for item in args])
+		column = args if op == "exists" else args[0] if isinstance(args, list) and len(args) == 2 else None
+		if not isinstance(column, str) or op == "in" and not isinstance(args[1], list):
+			raise invalid("filter", f"{op} takes {'a column' if op == 'exists' else 'a column and ' + ('values' if op == 'in' else 'a value')}")
+		if column not in columns:
+			raise invalid("column", f"No column '{column}' in this index")
+		values = set(row.get(column, []))
+		if op == "exists":
+			return bool(values)
+		wanted = [item for value in (args[1] if op == "in" else [args[1]]) for item in indexValue(value)]
+		if op == "in" and len(args[1]) > self.limits["inValues"]:
+			raise invalid("filter", f"in takes at most {self.limits['inValues']} values")
+		return any(item in values for item in wanted)
+
+	def indexQuery(self, request: Any, name: str, body: Json) -> Json:
+		"""The partitions whose index rows pass a filter, by partition ID and paged, with the feed position the index
+		reached (spec-08 "Indexes"). For servers only."""
+		scope = self.authorizeServer(request)
+		index = self.indexes.get(name)
+		if index is None:
+			raise StoreError(404, "not_found", f"No index '{name}'")
+		body = body if isinstance(body, dict) else {}
+		include = body.get("include", [])
+		if not isinstance(include, list) or set(include) - {"orphaned", "archived", "deletion"}:
+			raise invalid("include", "include names lifecycle states: orphaned, archived or deletion")
+		limit, after = body.get("limit", self.limits["indexPage"]), body.get("after")
+		if not isinstance(limit, int) or not 0 < limit <= self.limits["indexPage"]:
+			raise invalid("limit", f"limit is from 1 to {self.limits['indexPage']}")
+		if after is not None and not isinstance(after, str):
+			raise invalid("after", "after is a partition ID")
+		columns = {column["name"] for column in index["columns"]}
+		filter = body.get("filter")
+		self.matches(filter, {}, columns)
+		states = {"active", *include}
+		found = []
+		for partition, anchor, state, row in self.db.execute("SELECT partition, anchor, state, columns FROM indexed WHERE scope = ? AND name = ? "
+			"AND (? IS NULL OR partition > ?) ORDER BY partition", (scope, name, after, after)):
+			if state in states and self.matches(filter, json.loads(row), columns):
+				found.append({"partition": partition, "anchor": anchor, "state": state})
+				if len(found) > limit:
+					break
+		(position,) = self.db.execute("SELECT seq FROM feeds WHERE scope = ?", (scope,)).fetchone() or (0,)
+		page = found[:limit]
+		return {"index": name, "partitions": page, "through": position, **({"next": page[-1]["partition"]} if len(found) > limit else {})}
 
 	# -- Reads -------------------------------------------------------------------
 

@@ -23,6 +23,7 @@ function served({ origins = [], prefix, base = "http://localhost/", headers = { 
 	const store = new ObservationStore(BUNDLE, {
 		storageFor: () => sqlite(),
 		clock: () => Date.parse("2026-11-26T09:30:00Z"),
+		authorizeServer: request => request.headers.get("authorization") === "Bearer server:app" ? { scope: "adviser-app", principal: "server:app" } : null,
 		authorize: request => {
 			const principal = request.headers.get("authorization")?.replace(/^Bearer /, "");
 			if (!principal) return null;
@@ -92,6 +93,21 @@ test("a store served under a path prefix answers there, and only there", async (
 	expect((await client.log(PARTITION)).entries).toHaveLength(8);
 	const status = async url => (await handler.fetch(new Request(url, { method: "POST" }))).status;
 	expect([await status("http://localhost/v1/state"), await status("http://localhost/api/storev1/state")]).toEqual([404, 404]);
+});
+
+test("servers read the change feed and query indexes; others may not", async () => {
+	const { client } = served();
+	await append(client);
+	const server = served({ headers: { Authorization: "Bearer server:app" } });
+	await expect(client.changes()).rejects.toMatchObject({ status: 401 });
+	await expect(client.indexQuery("ClientChecks", { filter: { exists: "checks.Method" } })).rejects.toMatchObject({ status: 401 });
+	// NOTE: Each served store is its own: append through the server's client, then read it back.
+	await append(server.client);
+	const feed = await server.client.changes();
+	expect(feed.entries.map(entry => [entry.partition, entry.head])).toEqual([[PARTITION, 8]]);
+	const found = await server.client.indexQuery("ClientChecks", { filter: { eq: ["checks.Confirmed", true] } });
+	expect([found.partitions, found.through]).toEqual([[{ partition: PARTITION, anchor: "Person_U1", state: "active" }], feed.through]);
+	await expect(server.client.indexQuery("Nowhere", { filter: { exists: "checks.Method" } })).rejects.toMatchObject({ status: 404 });
 });
 
 test("browsers of listed origins may call it, others may not", async () => {

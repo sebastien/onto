@@ -15,6 +15,7 @@ import { StoreError } from "./errors.js";
 // -----------------------------------------------------------------------------
 
 const RE_PARTITION = /^\/v1\/partitions\/([^/]+)\/(statements|state|log)$/;
+const RE_INDEX = /^\/v1\/indexes\/([^/]+)\/query$/;
 const RE_CURSOR = /^(0|[1-9][0-9]*)$/;
 const LOCAL = ["localhost", "127.0.0.1", "[::1]"];
 
@@ -81,13 +82,20 @@ export function storeHandler(store, { origins = [], prefix = "" } = {}) {
 					headers = { "Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true", Vary: "Origin" };
 				}
 				const path = url.pathname.startsWith(`${root}/`) ? url.pathname.slice(root.length) : null;
-				const match = path && RE_PARTITION.exec(path), many = path === "/v1/state";
-				if (!match && !many) fail(404, "not_found", "Unknown endpoint");
+				const match = path && RE_PARTITION.exec(path), many = path === "/v1/state", changes = path === "/v1/changes", index = path && RE_INDEX.exec(path);
+				if (!match && !many && !changes && !index) fail(404, "not_found", "Unknown endpoint");
 				if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: { ...headers,
 					"Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type, Authorization", "Cache-Control": "no-store" } });
-				const expected = match?.[2] === "log" ? "GET" : "POST";
+				const expected = match?.[2] === "log" || changes ? "GET" : "POST";
 				if (request.method !== expected) fail(405, "method_not_allowed", "Method is not supported");
 				if (many) return answer(await store.stateMany(request, await readJson(request, limit)), 200, headers);
+				// NOTE: The change feed and indexes are for servers: the store asks the host's server callback.
+				if (changes) return answer(await store.changes(request, integer(url, "after", 0), url.searchParams.get("epoch"), integer(url, "limit", null)), 200, headers);
+				if (index) {
+					let name;
+					try { name = decodeURIComponent(index[1]); } catch { fail(400, "invalid", "Malformed index name encoding", { check: "index" }); }
+					return answer(await store.indexQuery(request, name, await readJson(request, limit)), 200, headers);
+				}
 				let partition;
 				try { partition = decodeURIComponent(match[1]); } catch { fail(400, "invalid", "Malformed partition ID encoding", { check: "partition" }); }
 				if (match[2] === "log") return answer(await store.log(request, partition, integer(url, "after", 0), integer(url, "limit", null)), 200, headers);

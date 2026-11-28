@@ -1,6 +1,7 @@
 /**
- * Module: workers-smoke — the observation store in the Workers runtime: SQLite Durable Objects, one per partition,
- * behind the Worker, read through the store's client (spec-08 "Implementations").
+ * Module: workers-smoke — the observation store in the Workers runtime: SQLite Durable Objects, one per partition and
+ * one per scope for its change feed and indexes, behind the Worker, read through the store's client (spec-08
+ * "Implementations").
  *
  * Optional: it needs Miniflare 4 and esbuild, installed outside the repository, on NODE_PATH:
  *
@@ -38,19 +39,19 @@ try {
 			import { cloudflareStore } from ${JSON.stringify(ADAPTER)};
 			import { Forbidden } from ${JSON.stringify(join(dirname(ADAPTER), "../errors.js"))};
 			const store = cloudflareStore({ bundle: ${JSON.stringify(bundle)} });
-			export const { PartitionObject } = store;
+			export const { PartitionObject, ScopeObject } = store;
 			export default store.worker({ authorize: (request) => {
 				const principal = request.headers.get("authorization");
 				if (!principal) return null;
 				if (principal === "user:other") throw new Forbidden("not your client");
 				return { scope: "adviser-app", principal };
-			} });
+			}, authorizeServer: (request) => request.headers.get("authorization") === "server:app" ? { scope: "adviser-app", principal: "server:app" } : null });
 		`, resolveDir: ROOT },
 		outfile: join(directory, "worker.mjs"), bundle: true, format: "esm", platform: "browser", external: ["cloudflare:workers"],
 	});
 	runtime = new Miniflare({
 		modules: true, modulesRoot: directory, scriptPath: join(directory, "worker.mjs"), compatibilityDate: "2026-06-01",
-		durableObjects: { PARTITIONS: { className: "PartitionObject", useSQLite: true } },
+		durableObjects: { PARTITIONS: { className: "PartitionObject", useSQLite: true }, SCOPES: { className: "ScopeObject", useSQLite: true } },
 	});
 	const client = (principal = "user:adviser") => storeClient({
 		base: "https://store.example", fetch: (url, init) => runtime.dispatchFetch(url, init), init: { headers: { authorization: principal } },
@@ -69,7 +70,18 @@ try {
 		error => error.status === 409 && error.error === "precondition" && error.details.versions[0].version === 4);
 	await assert.rejects(client("user:other").state(PARTITION), error => error.status === 403);
 	await assert.rejects(client("").state(PARTITION), error => error.status === 401);
-	console.log("Workers smoke passed: appends, retries, state, log and batch reads, preconditions and refusals over SQLite Durable Objects");
+	// NOTE: The partition's alarm reports its change to the scope's object, after the append answered.
+	const server = client("server:app");
+	let feed;
+	for (let attempt = 0; attempt < 50 && !feed?.entries.length; attempt++) {
+		await new Promise(resolve => setTimeout(resolve, 100));
+		feed = await server.changes();
+	}
+	assert.deepEqual(feed.entries.map(entry => [entry.partition, entry.head]), [[PARTITION, 8]]);
+	const found = await server.indexQuery("ClientChecks", { filter: { eq: ["checks.Confirmed", true] } });
+	assert.deepEqual(found.partitions, [{ partition: PARTITION, anchor: "Person_U1", state: "active" }]);
+	await assert.rejects(store.indexQuery("ClientChecks", { filter: { exists: "checks.Method" } }), error => error.status === 401);
+	console.log("Workers smoke passed: appends, retries, state, log and batch reads, preconditions, refusals, and the change feed and indexes over SQLite Durable Objects");
 } finally {
 	await runtime?.dispose();
 	rmSync(directory, { recursive: true });

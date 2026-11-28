@@ -3,7 +3,8 @@
 
 export { Forbidden, StoreError, canonical, invalid } from "./errors.js";
 export { ORIGIN_SHARED, ORIGIN_STORE, holds, originOf } from "./origins.js";
-export { PartitionStore, timeText } from "./partition.js";
+export { PartitionStore, indexValue, timeText } from "./partition.js";
+export { ScopeStore } from "./scope.js";
 export { ObservationStore, checkPartitionId, sha256 } from "./store.js";
 export { storeHandler } from "./http.js";
 export { storeClient } from "./client.js";

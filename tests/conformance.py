@@ -328,7 +328,7 @@ def install() -> None:
 
 	originalStore = ObservationStore.__init__
 
-	def storeInit(self, bundle, ontology, authorize, *, path=":memory:", clock=None):
+	def storeInit(self, bundle, ontology, authorize, *, path=":memory:", clock=None, authorizeServer=None):
 		case = {"kind": "store", "test": CURRENT["test"], "bundle": exported(bundle, lambda: bundle)["key"], "calls": []}
 		CASES.append(case)
 		self.conformance = {"case": case, "call": None}
@@ -352,7 +352,21 @@ def install() -> None:
 				call["clocks"].append(value.isoformat())
 			return value
 
-		originalStore(self, bundle, ontology, recordedAuthorize, path=path, clock=recordedClock)
+		def recordedServer(request):
+			call = self.conformance["call"]
+			try:
+				grant = authorizeServer(request)
+			except Forbidden as error:
+				if call is not None:
+					call["grants"].append({"forbidden": str(error)})
+				raise
+			if call is not None:
+				call["grants"].append(None if grant is None else {"scope": grant["scope"], "principal": grant["principal"]})
+			return grant
+
+		case["server"] = authorizeServer is not None
+		originalStore(self, bundle, ontology, recordedAuthorize, path=path, clock=recordedClock,
+			authorizeServer=recordedServer if authorizeServer is not None else None)
 
 	def recordedCall(name):
 		original = getattr(ObservationStore, name)
@@ -379,7 +393,7 @@ def install() -> None:
 		return method
 
 	ObservationStore.__init__ = storeInit
-	for name in ("append", "state", "log", "stateMany"):
+	for name in ("append", "state", "log", "stateMany", "changes", "indexQuery"):
 		setattr(ObservationStore, name, recordedCall(name))
 
 	# NOTE: Sessions (spec-09): an operator's plans and reports, and each session's opens and changes in order, with the
