@@ -306,6 +306,8 @@ class HexaViewOperator:
 				page[item.part] = parameter
 				if item.part == "number":
 					page["first"] = item.first
+				elif item.max is not None:
+					page["max"] = item.max
 		if page:
 			table["page"] = page
 		reverser = Reverser(self.mapping, self.source, self.target, self.mapper.libraries)
@@ -399,7 +401,9 @@ class HexaViewOperator:
 			if "direction" in table:
 				parameters[table["direction"]] = getattr(self.reads[table["read"]].parameters[table["direction"]], direction)
 		page = query.get("page") or {}
+		# NOTE: A page is no larger than the view's limit hint nor than the system's list answers (spec-09 "List reads").
 		limit = rooted.max or 100
+		limit = min(limit, table.get("page", {}).get("max", limit))
 		size, number = page.get("size", rooted.page or limit), page.get("number", 1)
 		if type(size) is not int or type(number) is not int or size < 1 or number < 1:
 			raise ValueError(f"{view}: a page has a number from 1 and a positive size")

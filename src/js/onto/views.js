@@ -565,7 +565,8 @@ export class ViewOperator {
 			parameters[table.sort] = spelling;
 			if (table.direction) parameters[table.direction] = this.reads[table.read].list.parameters[table.direction][direction];
 		}
-		const page = query.page ?? {}, limit = rooted.max ?? 100;
+		// NOTE: A page is no larger than the view's limit hint nor than the system's list answers (spec-09 "List reads").
+		const page = query.page ?? {}, limit = Math.min(rooted.max ?? 100, table.page?.max ?? rooted.max ?? 100);
 		const size = page.size ?? rooted.page ?? limit, number = page.number ?? 1;
 		if (!Number.isInteger(size) || !Number.isInteger(number) || size < 1 || number < 1) throw new Error(`${view}: a page has a number from 1 and a positive size`);
 		if (size > limit) throw new Error(`Session.PageTooLarge: ${view} reads at most ${limit} rows a page`);

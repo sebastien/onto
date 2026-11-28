@@ -359,7 +359,7 @@ has:
   | Sort | The source attributes the endpoint sorts by, and their spellings, with the one it sorts by, ascending, when a query gives none, for an endpoint that requires a sort (DEC0038) |
   | Direction | The values the endpoint takes for an ascending and a descending sort (DEC0038) |
   | Search | A text the endpoint matches across its rows as it does, such as names and numbers (DEC0038) |
-  | Page | The page size, and the page number with the number of the first page (`0` by default) |
+  | Page | The page size, with the most rows the endpoint answers a page when it bounds them, and the page number with the number of the first page (`0` by default). A list view's page is no larger than either its limit hint or the endpoint's maximum |
 
 - **Total.** `total`, optional: where the response gives the number of
   matching rows.
@@ -370,7 +370,7 @@ lists = {"contacts": ListRead("Crm/Contact", [contactRows],
 		"ids": "{include}", "exceptIds": "{exclude}", "sortBy": "{sort}", "page": "{page}", "pageSize": "{size}"}},
 	parameters={"surname": ListFilter("FamilyName", "eq"), "include": ListKeys("include", limit=20000),
 		"exclude": ListKeys("exclude", limit=20000), "sort": ListSort({"FamilyName": "familyName"}),
-		"page": ListPage("number"), "size": ListPage("size")})}
+		"page": ListPage("number"), "size": ListPage("size", max=100)})}
 ```
 
 ### Key queries

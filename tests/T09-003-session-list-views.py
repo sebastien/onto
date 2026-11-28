@@ -88,9 +88,10 @@ def lister(store=None):
 	return operator, requests, store
 
 
-# NOTE: The same search, taking the contacts to include or to exclude, at most three of either (spec-09 "Key queries").
+# NOTE: The same search, taking the contacts to include or to exclude, at most three of either (spec-09 "Key queries"),
+# and answering at most 50 contacts a page.
 KEYED = ListRead(SEARCH.rows, SEARCH.bindings, {**SEARCH.request, "body": {**SEARCH.request["body"], "ids": "{ids}", "exceptIds": "{except}"}},
-	{**SEARCH.parameters, "ids": ListKeys("include", limit=3), "except": ListKeys("exclude", limit=3)}, total="count")
+	{**SEARCH.parameters, "ids": ListKeys("include", limit=3), "except": ListKeys("exclude", limit=3), "size": ListPage("size", max=50)}, total="count")
 SERVER = {"server": True}
 
 
@@ -220,6 +221,17 @@ def testTheBundleCarriesTheStoreHeldFieldsAQueryFilters() -> None:
 	assert table["stores"] == {CONFIRMED: {"index": "ClientChecks", "column": "checks.Confirmed"}}
 	assert table["keys"] == {"include": {"parameter": "ids", "limit": 3, "at": ["body", "ids"]},
 		"exclude": {"parameter": "except", "limit": 3, "at": ["body", "exceptIds"]}}
+
+
+def testAListReadsPageSizeBoundsTheViewsPages() -> None:
+	operator, requests, _ = keyed()
+	assert sessionBundle(operator)["views"]["ClientList"]["list"]["page"] == {"number": "page", "first": 0, "size": "size", "max": 50}
+	assert sessionBundle(operator)["reads"]["search"]["list"]["parameters"]["size"] == {"kind": "page", "part": "size", "max": 50}
+	assert report(operator, {"page": {"size": 50}})["page"] == {"number": 1, "size": 50}
+	with pytest.raises(ValueError, match="Session.PageTooLarge: ClientList reads at most 50 rows a page"):
+		report(operator, {"page": {"size": 51}})
+	with pytest.raises(ValueError, match="a page's number"):
+		ListPage("number", max=10)
 
 
 def testQueriesTheViewCannotRunAreRefused() -> None:

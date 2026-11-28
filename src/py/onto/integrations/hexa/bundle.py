@@ -213,7 +213,8 @@ def listParameterJson(item) -> dict:
 		return {"kind": "direction", "asc": item.asc, "desc": item.desc}
 	if isinstance(item, ListSearch):
 		return {"kind": "search"}
-	return {"kind": "page", "part": item.part, **({"first": item.first} if item.part == "number" else {})}
+	return {"kind": "page", "part": item.part, **({"first": item.first} if item.part == "number" else {}),
+		**({"max": item.max} if item.max is not None else {})}
 
 
 def fieldJson(item: Field) -> dict:

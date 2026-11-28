@@ -85,10 +85,15 @@ class ListSearch:
 
 @dataclass(slots=True, frozen=True)
 class ListPage:
-	"""The page `size`, or the page `number`, counted from `first`."""
+	"""The page `size`, at most `max` rows when the system bounds it, or the page `number`, counted from `first`."""
 
 	part: str
 	first: int = 0
+	max: int | None = None
+
+	def __post_init__(self):
+		if self.max is not None and (self.part != "size" or type(self.max) is not int or self.max < 1):
+			raise ValueError("a page's number takes no max; a page's size takes a positive one")
 
 
 @dataclass(slots=True)
